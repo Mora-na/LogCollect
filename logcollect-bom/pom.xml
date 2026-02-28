@@ -4,45 +4,15 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.logcollect</groupId>
-    <artifactId>logcollect-parent</artifactId>
-    <version>1.0.0</version>
+    <parent>
+        <groupId>com.logcollect</groupId>
+        <artifactId>logcollect-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>logcollect-bom</artifactId>
     <packaging>pom</packaging>
-    <name>logcollect-parent</name>
-    <description>LogCollect parent</description>
-
-    <properties>
-        <java.version>1.8</java.version>
-        <maven.compiler.source>${java.version}</maven.compiler.source>
-        <maven.compiler.target>${java.version}</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-
-        <context-propagation.version>1.0.6</context-propagation.version>
-        <micrometer.version>1.10.13</micrometer.version>
-        <slf4j.version>1.7.36</slf4j.version>
-        <spring-boot.min.version>2.7.0</spring-boot.min.version>
-        <spring-boot.version>2.7.18</spring-boot.version>
-        <logback.version>1.2.13</logback.version>
-        <log4j2.version>2.20.0</log4j2.version>
-        <junit.version>5.9.3</junit.version>
-        <mockito.version>4.11.0</mockito.version>
-    </properties>
-
-    <modules>
-        <module>logcollect-bom</module>
-        <module>logcollect-api</module>
-        <module>logcollect-core</module>
-        <module>logcollect-logback-adapter</module>
-        <module>logcollect-log4j2-adapter</module>
-        <module>logcollect-spring-boot-autoconfigure</module>
-        <module>logcollect-spring-boot-starter</module>
-        <module>logcollect-config-nacos</module>
-        <module>logcollect-config-apollo</module>
-        <module>logcollect-config-spring-cloud</module>
-        <module>logcollect-test-support</module>
-        <module>logcollect-samples</module>
-    </modules>
+    <name>logcollect-bom</name>
 
     <dependencyManagement>
         <dependencies>
@@ -144,11 +114,6 @@
             </dependency>
             <dependency>
                 <groupId>org.springframework</groupId>
-                <artifactId>spring-aop</artifactId>
-                <version>5.3.31</version>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework</groupId>
                 <artifactId>spring-jdbc</artifactId>
                 <version>5.3.31</version>
             </dependency>
@@ -162,52 +127,17 @@
                 <artifactId>spring-webflux</artifactId>
                 <version>5.3.31</version>
             </dependency>
+
             <dependency>
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter</artifactId>
                 <version>${junit.version}</version>
             </dependency>
+            <dependency>
+                <groupId>org.mockito</groupId>
+                <artifactId>mockito-core</artifactId>
+                <version>${mockito.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
-
-    <build>
-        <pluginManagement>
-            <plugins>
-                <plugin>
-                    <groupId>org.apache.maven.plugins</groupId>
-                    <artifactId>maven-compiler-plugin</artifactId>
-                    <version>3.11.0</version>
-                    <configuration>
-                        <source>${maven.compiler.source}</source>
-                        <target>${maven.compiler.target}</target>
-                    </configuration>
-                </plugin>
-                <plugin>
-                    <groupId>org.apache.maven.plugins</groupId>
-                    <artifactId>maven-enforcer-plugin</artifactId>
-                    <version>3.4.1</version>
-                    <executions>
-                        <execution>
-                            <id>enforce</id>
-                            <goals>
-                                <goal>enforce</goal>
-                            </goals>
-                            <configuration>
-                                <rules>
-                                    <requireJavaVersion>
-                                        <version>[1.8,)</version>
-                                    </requireJavaVersion>
-                                    <bannedDependencies>
-                                        <excludes>
-                                            <exclude>commons-logging:commons-logging</exclude>
-                                        </excludes>
-                                    </bannedDependencies>
-                                </rules>
-                            </configuration>
-                        </execution>
-                    </executions>
-                </plugin>
-            </plugins>
-        </pluginManagement>
-    </build>
 </project>

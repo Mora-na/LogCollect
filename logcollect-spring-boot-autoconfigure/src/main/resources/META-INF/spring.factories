@@ -1,0 +1,12 @@
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+com.logcollect.autoconfigure.LogCollectAutoConfiguration,\
+com.logcollect.autoconfigure.LogCollectAopAutoConfiguration,\
+com.logcollect.autoconfigure.LogCollectLogbackAppenderAutoConfiguration,\
+com.logcollect.autoconfigure.LogCollectLog4j2AppenderAutoConfiguration,\
+com.logcollect.autoconfigure.LogCollectAsyncAutoConfiguration,\
+com.logcollect.autoconfigure.LogCollectContextPropagationAutoConfiguration,\
+com.logcollect.autoconfigure.LogCollectReactorAutoConfiguration,\
+com.logcollect.autoconfigure.LogCollectMetricsAutoConfiguration,\
+com.logcollect.autoconfigure.LogCollectHealthAutoConfiguration,\
+com.logcollect.autoconfigure.LogCollectManagementAutoConfiguration,\
+com.logcollect.autoconfigure.LogCollectTransactionAutoConfiguration

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.logcollect</groupId>
+        <artifactId>logcollect-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>logcollect-samples</artifactId>
+    <packaging>pom</packaging>
+    <name>logcollect-samples</name>
+
+    <modules>
+        <module>logcollect-sample-boot27-logback</module>
+        <module>logcollect-sample-boot27-log4j2</module>
+        <module>logcollect-sample-boot3</module>
+        <module>logcollect-sample-webflux</module>
+        <module>logcollect-sample-all-async</module>
+        <module>logcollect-sample-nacos</module>
+    </modules>
+</project>
