@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
 /**
  * Spring 线程池后置处理器。
  *
- * <p>在 Bean 初始化后自动为线程池注入 {@link LogCollectTaskDecorator}，
+ * <p>在 Bean 初始化前自动为线程池注入 {@link LogCollectTaskDecorator}，
  * 使 Spring 管理的线程池天然具备 LogCollect 上下文传播能力。
  */
 @Component
@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component;
 public class LogCollectThreadPoolBPP implements BeanPostProcessor {
 
     /**
-     * 扫描线程池 Bean 并附加 TaskDecorator。
+     * 扫描线程池 Bean 并在初始化前附加 TaskDecorator。
      *
      * @param bean     当前 Bean
      * @param beanName Bean 名称
@@ -29,7 +29,7 @@ public class LogCollectThreadPoolBPP implements BeanPostProcessor {
      * @throws BeansException Bean 处理异常
      */
     @Override
-    public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
+    public Object postProcessBeforeInitialization(Object bean, String beanName) throws BeansException {
         if (bean instanceof ThreadPoolTaskExecutor) {
             wrapTaskDecorator((ThreadPoolTaskExecutor) bean, beanName);
         }
@@ -95,8 +95,18 @@ public class LogCollectThreadPoolBPP implements BeanPostProcessor {
             Object val = getter.invoke(target);
             return (TaskDecorator) val;
         } catch (Throwable ignore) {
-            return null;
+            // fall through
         }
+        try {
+            java.lang.reflect.Field field = findField(target.getClass(), "taskDecorator");
+            if (field != null) {
+                field.setAccessible(true);
+                return (TaskDecorator) field.get(target);
+            }
+        } catch (Throwable ignore) {
+            // ignore
+        }
+        return null;
     }
 
     /**
