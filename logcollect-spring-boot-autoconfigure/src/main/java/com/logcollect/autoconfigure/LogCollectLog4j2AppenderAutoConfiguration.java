@@ -2,8 +2,10 @@ package com.logcollect.autoconfigure;
 
 import com.logcollect.api.enums.LogFramework;
 import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
+import com.logcollect.core.format.ConsolePatternDetector;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.security.SecurityComponentRegistry;
+import com.logcollect.log4j2.Log4j2ConsolePatternDetector;
 import com.logcollect.log4j2.LogCollectLog4j2Appender;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.Appender;
@@ -11,6 +13,7 @@ import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.util.Map;
@@ -124,5 +127,10 @@ public class LogCollectLog4j2AppenderAutoConfiguration implements InitializingBe
             return DEFAULT_APPENDER_NAME;
         }
         return configured.trim();
+    }
+
+    @Bean
+    public ConsolePatternDetector log4j2ConsolePatternDetector() {
+        return new Log4j2ConsolePatternDetector();
     }
 }

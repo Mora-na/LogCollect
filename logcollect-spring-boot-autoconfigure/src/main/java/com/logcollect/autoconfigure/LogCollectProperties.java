@@ -25,32 +25,6 @@ public class LogCollectProperties {
 
     private Map<String, MethodConfig> methods = new LinkedHashMap<String, MethodConfig>();
 
-    // ===== 兼容旧接口 =====
-    public boolean isEnabled() {
-        return global.isEnabled();
-    }
-
-    public long getGlobalBufferTotalMaxBytes() {
-        return global.getBuffer().getTotalMaxBytesValue();
-    }
-
-    public String getInternalLogLevel() {
-        return internal.getLogLevel();
-    }
-
-    public int getGlobalHandlerTimeoutMs() {
-        return global.getHandlerTimeoutMs();
-    }
-
-    public int getGlobalMaxNestingDepth() {
-        return global.getMaxNestingDepth();
-    }
-
-    public int getGlobalDegradeWindowSeconds() {
-        return 10;
-    }
-
-    // ===== 新结构访问器 =====
     public Global getGlobal() {
         return global;
     }

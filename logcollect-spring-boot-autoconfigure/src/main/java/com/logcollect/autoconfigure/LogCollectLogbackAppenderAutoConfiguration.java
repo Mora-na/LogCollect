@@ -6,13 +6,16 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.Appender;
 import com.logcollect.api.enums.LogFramework;
 import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
+import com.logcollect.core.format.ConsolePatternDetector;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.security.SecurityComponentRegistry;
 import com.logcollect.logback.LogCollectLogbackAppender;
+import com.logcollect.logback.LogbackConsolePatternDetector;
 import org.slf4j.ILoggerFactory;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.util.Iterator;
@@ -111,5 +114,10 @@ public class LogCollectLogbackAppenderAutoConfiguration implements InitializingB
             return DEFAULT_APPENDER_NAME;
         }
         return configured.trim();
+    }
+
+    @Bean
+    public ConsolePatternDetector logbackConsolePatternDetector() {
+        return new LogbackConsolePatternDetector();
     }
 }

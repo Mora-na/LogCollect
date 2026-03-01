@@ -56,9 +56,6 @@ public class LogCollectConfig {
     // ===== 可观测性配置 =====
     private boolean enableMetrics = true;
 
-    // ===== 兼容字段（旧窗口失败统计） =====
-    private int degradeWindowSeconds = 10;
-
     public static LogCollectConfig frameworkDefaults() {
         return new LogCollectConfig();
     }
@@ -303,29 +300,4 @@ public class LogCollectConfig {
         this.enableMetrics = enableMetrics;
     }
 
-    public int getDegradeWindowSeconds() {
-        return degradeWindowSeconds;
-    }
-
-    public void setDegradeWindowSeconds(int degradeWindowSeconds) {
-        this.degradeWindowSeconds = degradeWindowSeconds;
-    }
-
-    // ===== 兼容旧字段命名 =====
-
-    public int getFailureThreshold() {
-        return getDegradeFailThreshold();
-    }
-
-    public void setFailureThreshold(int failureThreshold) {
-        setDegradeFailThreshold(failureThreshold);
-    }
-
-    public int getMaxRecoverIntervalSeconds() {
-        return getRecoverMaxIntervalSeconds();
-    }
-
-    public void setMaxRecoverIntervalSeconds(int maxRecoverIntervalSeconds) {
-        setRecoverMaxIntervalSeconds(maxRecoverIntervalSeconds);
-    }
 }

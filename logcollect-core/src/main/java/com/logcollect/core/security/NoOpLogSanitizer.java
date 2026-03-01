@@ -12,4 +12,9 @@ public final class NoOpLogSanitizer implements LogSanitizer {
     public String sanitize(String raw) {
         return raw;
     }
+
+    @Override
+    public String sanitizeThrowable(String throwableString) {
+        return throwableString;
+    }
 }

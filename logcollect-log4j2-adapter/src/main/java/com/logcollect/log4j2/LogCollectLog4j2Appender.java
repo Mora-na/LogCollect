@@ -11,6 +11,7 @@ import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.context.LogCollectContextManager;
 import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.internal.LogCollectInternalLogger;
+import com.logcollect.core.pipeline.SecurityPipeline;
 import com.logcollect.core.security.DefaultLogMasker;
 import com.logcollect.core.security.DefaultLogSanitizer;
 import com.logcollect.core.security.SecurityComponentRegistry;
@@ -25,7 +26,11 @@ import org.apache.logging.log4j.core.config.plugins.PluginAttribute;
 import org.apache.logging.log4j.core.config.plugins.PluginElement;
 import org.apache.logging.log4j.core.config.plugins.PluginFactory;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 
 @Plugin(name = "LogCollect", category = Core.CATEGORY_NAME, elementType = Appender.ELEMENT_TYPE)
 public class LogCollectLog4j2Appender extends AbstractAppender {
@@ -84,17 +89,21 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                 return;
             }
 
-            Object securityTimer = metricCallWithResult(context, "startSecurityTimer");
-            String processed = securityProcess(config, methodKey, rawMessage, context);
-            metricCall(context, "stopSecurityTimer", securityTimer, methodKey);
+            long eventTimestamp = event.getTimeMillis();
+            LogEntry rawEntry = LogEntry.builder()
+                    .traceId(context.getTraceId())
+                    .content(copyString(rawMessage))
+                    .level(copyString(level))
+                    .time(LocalDateTime.ofInstant(Instant.ofEpochMilli(eventTimestamp), ZoneId.systemDefault()))
+                    .timestamp(eventTimestamp)
+                    .threadName(copyString(event.getThreadName()))
+                    .loggerName(copyString(event.getLoggerName()))
+                    .throwableString(extractThrowableString(event))
+                    .build();
 
-            LogEntry entry = new LogEntry(
-                    context.getTraceId(),
-                    processed,
-                    level,
-                    LocalDateTime.now(),
-                    event.getThreadName(),
-                    event.getLoggerName());
+            Object securityTimer = metricCallWithResult(context, "startSecurityTimer");
+            LogEntry entry = securityProcess(config, methodKey, rawEntry, context);
+            metricCall(context, "stopSecurityTimer", securityTimer, methodKey);
 
             metricCall(context, "incrementCollected", methodKey, level, context.getCollectMode().name());
 
@@ -112,22 +121,61 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         }
     }
 
-    private String securityProcess(LogCollectConfig config, String methodKey, String rawMessage, LogCollectContext context) {
-        String content = rawMessage;
-
+    private LogEntry securityProcess(LogCollectConfig config, String methodKey, LogEntry rawEntry, LogCollectContext context) {
         LogSanitizer sanitizer = resolveSanitizer(config);
-        String sanitized = sanitizer == null ? content : sanitizer.sanitize(content);
-        if (sanitized != null && !sanitized.equals(content)) {
+        LogMasker masker = resolveMasker(config);
+
+        String rawContent = rawEntry.getContent();
+        String rawThrowable = rawEntry.getThrowableString();
+
+        String sanitizedContent = sanitizer == null ? rawContent : sanitizer.sanitize(rawContent);
+        String sanitizedThrowable = rawThrowable;
+        if (sanitizer != null && rawThrowable != null) {
+            sanitizedThrowable = sanitizer.sanitizeThrowable(rawThrowable);
+        }
+
+        LogEntry secured = new SecurityPipeline(sanitizer, masker).process(rawEntry);
+        String securedContent = secured.getContent() == null ? "" : secured.getContent();
+        secured = LogEntry.builder()
+                .traceId(secured.getTraceId())
+                .content(securedContent)
+                .level(secured.getLevel())
+                .time(secured.getTime())
+                .timestamp(secured.getTimestamp())
+                .threadName(secured.getThreadName())
+                .loggerName(secured.getLoggerName())
+                .throwableString(secured.getThrowableString())
+                .build();
+
+        boolean sanitizeHit = sanitizer != null
+                && (!safeEquals(rawContent, sanitizedContent) || !safeEquals(rawThrowable, sanitizedThrowable));
+        if (sanitizeHit) {
             metricCall(context, "incrementSanitizeHits", methodKey);
         }
-        content = sanitized == null ? "" : sanitized;
 
-        LogMasker masker = resolveMasker(config);
-        String masked = masker == null ? content : masker.mask(content);
-        if (masked != null && !masked.equals(content)) {
+        boolean maskHit = masker != null
+                && (!safeEquals(sanitizedContent, securedContent)
+                || !safeEquals(sanitizedThrowable, secured.getThrowableString()));
+        if (maskHit) {
             metricCall(context, "incrementMaskHits", methodKey);
         }
-        return masked == null ? "" : masked;
+        return secured;
+    }
+
+    private String extractThrowableString(LogEvent event) {
+        Throwable thrown = event.getThrown();
+        if (thrown == null) {
+            return null;
+        }
+        StringWriter sw = new StringWriter(1024);
+        PrintWriter pw = new PrintWriter(sw);
+        thrown.printStackTrace(pw);
+        pw.flush();
+        return sw.toString();
+    }
+
+    private String copyString(String value) {
+        return value == null ? null : new String(value);
     }
 
     private LogSanitizer resolveSanitizer(LogCollectConfig config) {
@@ -197,7 +245,7 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                     AggregatedLog agg = new AggregatedLog(
                             line == null ? "" : line,
                             1,
-                            line == null ? 0L : (long) line.length() * 2L,
+                            estimateStringBytes(line),
                             entry.getLevel(),
                             entry.getTime(),
                             entry.getTime(),
@@ -263,6 +311,17 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         } catch (Throwable t) {
             LogCollectInternalLogger.warn("onError callback failed", t);
         }
+    }
+
+    private long estimateStringBytes(String value) {
+        if (value == null) {
+            return 0L;
+        }
+        return 40L + (long) value.length() * 2L;
+    }
+
+    private boolean safeEquals(String left, String right) {
+        return left == null ? right == null : left.equals(right);
     }
 
     private void metricCall(LogCollectContext context, String methodName, Object... args) {

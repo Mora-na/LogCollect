@@ -31,13 +31,19 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         final String formattedLine;
         final String level;
         final LocalDateTime time;
+        final long timestamp;
         final long estimatedBytes;
 
-        LogSegment(String formattedLine, String level, LocalDateTime time) {
+        LogSegment(String formattedLine,
+                   String level,
+                   LocalDateTime time,
+                   long timestamp,
+                   long estimatedBytes) {
             this.formattedLine = formattedLine;
             this.level = level;
             this.time = time;
-            this.estimatedBytes = (formattedLine == null ? 0 : (long) formattedLine.length() * 2L) + 64;
+            this.timestamp = timestamp;
+            this.estimatedBytes = estimatedBytes;
         }
     }
 
@@ -73,11 +79,17 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             notifyError(context, t, "formatLogLine");
             formattedLine = entry.getContent();
         }
-        if (formattedLine == null) {
-            formattedLine = "";
+        if (formattedLine == null || formattedLine.isEmpty()) {
+            return false;
         }
 
-        LogSegment seg = new LogSegment(formattedLine, entry.getLevel(), entry.getTime());
+        long lineBytes = estimateStringBytes(formattedLine);
+        LogSegment seg = new LogSegment(
+                formattedLine,
+                entry.getLevel(),
+                entry.getTime(),
+                entry.getTimestamp(),
+                lineBytes);
         if (maxBytes > 0 && seg.estimatedBytes > maxBytes) {
             if (context != null) {
                 context.incrementDiscardedCount();
@@ -204,11 +216,18 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         return new AggregatedLog(
                 sb.toString(),
                 drainedCount,
-                (long) sb.length() * 2L,
+                drainedBytes,
                 localMaxLevel,
                 firstTime,
                 lastTime,
                 isFinal);
+    }
+
+    private long estimateStringBytes(String value) {
+        if (value == null) {
+            return 0L;
+        }
+        return 40L + (long) value.length() * 2L;
     }
 
     private void flushAggregated(LogCollectContext context, AggregatedLog agg) {

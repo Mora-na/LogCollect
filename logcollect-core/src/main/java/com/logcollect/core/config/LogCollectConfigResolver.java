@@ -5,6 +5,7 @@ import com.logcollect.api.config.LogCollectConfigSource;
 import com.logcollect.api.enums.CollectMode;
 import com.logcollect.api.enums.DegradeStorage;
 import com.logcollect.api.enums.LogFramework;
+import com.logcollect.api.format.LogLineDefaults;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.runtime.LogCollectGlobalSwitch;
@@ -29,6 +30,7 @@ public class LogCollectConfigResolver {
     private final ConcurrentHashMap<String, LogCollectConfig> resolvedCache =
             new ConcurrentHashMap<String, LogCollectConfig>();
     private volatile Instant lastRefreshTime;
+    private volatile Map<String, String> latestGlobalProperties = Collections.emptyMap();
 
     public LogCollectConfigResolver(List<LogCollectConfigSource> sources, LogCollectLocalConfigCache cache) {
         this(sources, cache, null, null);
@@ -47,6 +49,8 @@ public class LogCollectConfigResolver {
         this.cache = cache;
         this.globalSwitch = globalSwitch;
         this.metrics = metrics;
+        syncGlobalEnabledFromSources();
+        syncGlobalLogLinePatternFromSources();
     }
 
     /**
@@ -83,6 +87,7 @@ public class LogCollectConfigResolver {
     public void onConfigChange(String source) {
         clearCache();
         syncGlobalEnabledFromSources();
+        syncGlobalLogLinePatternFromSources();
         invokeMetrics("incrementConfigRefresh", source == null ? "unknown" : source);
         LogCollectInternalLogger.info("Config cache cleared due to config change from: {}",
                 source == null ? "unknown" : source);
@@ -123,6 +128,10 @@ public class LogCollectConfigResolver {
         return Collections.unmodifiableMap(resolvedCache);
     }
 
+    public Map<String, String> getLatestGlobalProperties() {
+        return latestGlobalProperties;
+    }
+
     public void saveToLocalCache() {
         if (cache == null) {
             return;
@@ -150,9 +159,12 @@ public class LogCollectConfigResolver {
             }
         }
         if (!merged.isEmpty()) {
+            latestGlobalProperties = Collections.unmodifiableMap(new LinkedHashMap<String, String>(merged));
             return merged;
         }
-        return loadGlobalPropertiesFromLocalCache();
+        Map<String, String> fromCache = loadGlobalPropertiesFromLocalCache();
+        latestGlobalProperties = Collections.unmodifiableMap(new LinkedHashMap<String, String>(fromCache));
+        return fromCache;
     }
 
     private Map<String, String> loadMethodProperties(String configMethodKey) {
@@ -364,14 +376,6 @@ public class LogCollectConfigResolver {
         applyInt(props, "max-nesting-depth", config::setMaxNestingDepth);
 
         applyBoolean(props, "metrics.enabled", config::setEnableMetrics);
-
-        // 兼容旧 key
-        applyBoolean(props, "logcollect.enabled", config::setEnabled);
-        applyInt(props, "failure-threshold", config::setDegradeFailThreshold);
-        applyInt(props, "half-open-success-threshold", config::setHalfOpenSuccessThreshold);
-        applyInt(props, "half-open-pass-count", config::setHalfOpenPassCount);
-        applyInt(props, "recover-interval-seconds", config::setRecoverIntervalSeconds);
-        applyInt(props, "max-recover-interval-seconds", config::setRecoverMaxIntervalSeconds);
     }
 
     private void syncGlobalEnabledFromSources() {
@@ -391,6 +395,19 @@ public class LogCollectConfigResolver {
             } catch (Throwable t) {
                 LogCollectInternalLogger.warn("Sync global enabled from {} failed", source.getType(), t);
             }
+        }
+    }
+
+    private void syncGlobalLogLinePatternFromSources() {
+        try {
+            Map<String, String> globals = loadGlobalProperties();
+            if (globals == null || globals.isEmpty()) {
+                LogLineDefaults.setConfiguredPattern(null);
+                return;
+            }
+            LogLineDefaults.setConfiguredPattern(globals.get("format.log-line-pattern"));
+        } catch (Throwable t) {
+            LogCollectInternalLogger.debug("Sync global log-line-pattern failed: {}", t.getMessage());
         }
     }
 

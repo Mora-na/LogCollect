@@ -36,47 +36,10 @@ public interface LogCollectConfigSource {
     }
 
     /**
-     * 兼容旧接口。
-     */
-    @Deprecated
-    default Map<String, String> getProperties(String prefix) {
-        Map<String, String> merged = new LinkedHashMap<String, String>();
-        Map<String, String> global = getGlobalProperties();
-        if (global != null) {
-            for (Map.Entry<String, String> entry : global.entrySet()) {
-                merged.put(prefix + "global." + entry.getKey(), entry.getValue());
-            }
-        }
-        return merged;
-    }
-
-    /**
      * 注册配置变更监听器。
      */
     default void addChangeListener(Consumer<String> listener) {
         // no-op
-    }
-
-    /**
-     * 兼容旧监听签名。
-     */
-    @Deprecated
-    default void addChangeListener(Runnable listener) {
-        if (listener == null) {
-            return;
-        }
-        addChangeListener((Consumer<String>) source -> listener.run());
-    }
-
-    /**
-     * 兼容旧监听签名。
-     */
-    @Deprecated
-    default void addChangeListener(LogCollectConfigChangeListener listener) {
-        if (listener == null) {
-            return;
-        }
-        addChangeListener((Consumer<String>) source -> listener.onChange(Collections.<String, String>emptyMap()));
     }
 
     default String getType() {

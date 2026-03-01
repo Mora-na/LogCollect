@@ -2,12 +2,14 @@ package com.logcollect.autoconfigure;
 
 import com.logcollect.api.config.LogCollectConfigSource;
 import com.logcollect.api.enums.LogFramework;
+import com.logcollect.api.format.LogLineDefaults;
 import com.logcollect.autoconfigure.circuitbreaker.CircuitBreakerRegistry;
 import com.logcollect.autoconfigure.config.LocalPropertiesLogCollectConfigSource;
 import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
 import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.config.LogCollectConfigResolver;
 import com.logcollect.core.config.LogCollectLocalConfigCache;
+import com.logcollect.core.format.ConsolePatternDetector;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.runtime.LogCollectGlobalSwitch;
 import com.logcollect.core.security.SecurityComponentRegistry;
@@ -58,8 +60,7 @@ public class LogCollectAutoConfiguration {
                 sources, cache, globalSwitch, metricsProvider.getIfAvailable());
         for (LogCollectConfigSource source : sources) {
             try {
-                source.addChangeListener((java.util.function.Consumer<String>)
-                        sourceName -> resolver.onConfigChange(sourceName));
+                source.addChangeListener(sourceName -> resolver.onConfigChange(sourceName));
             } catch (Throwable t) {
                 LogCollectInternalLogger.warn("Register config change listener failed: {}", source.getType(), t);
             }
@@ -100,6 +101,17 @@ public class LogCollectAutoConfiguration {
     }
 
     @Bean
+    public org.springframework.beans.factory.InitializingBean logCollectConsolePatternInitializer(
+            ObjectProvider<java.util.List<ConsolePatternDetector>> detectorsProvider,
+            LogCollectConfigResolver configResolver) {
+        return () -> {
+            java.util.List<ConsolePatternDetector> detectors = detectorsProvider.getIfAvailable(ArrayList::new);
+            ConsolePatternInitializer.initialize(detectors);
+            applyConfiguredLogLinePattern(configResolver);
+        };
+    }
+
+    @Bean
     public LogCollectInternalLogger.Level logCollectInternalLoggerLevel(LogCollectProperties props) {
         try {
             LogCollectInternalLogger.Level level = LogCollectInternalLogger.Level.valueOf(
@@ -133,6 +145,24 @@ public class LogCollectAutoConfiguration {
             return true;
         } catch (ClassNotFoundException e) {
             return false;
+        }
+    }
+
+    private void applyConfiguredLogLinePattern(LogCollectConfigResolver configResolver) {
+        if (configResolver == null) {
+            return;
+        }
+        try {
+            java.util.Map<String, String> globals = configResolver.getLatestGlobalProperties();
+            if (globals == null || globals.isEmpty()) {
+                return;
+            }
+            String configuredPattern = globals.get("format.log-line-pattern");
+            if (configuredPattern != null && !configuredPattern.trim().isEmpty()) {
+                LogLineDefaults.setConfiguredPattern(configuredPattern);
+            }
+        } catch (Throwable t) {
+            LogCollectInternalLogger.debug("Apply configured log-line-pattern failed: {}", t.getMessage());
         }
     }
 }

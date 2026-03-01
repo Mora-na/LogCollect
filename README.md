@@ -1,2402 +1,378 @@
+# LogCollect
 
+`@LogCollect` 是一个面向 Java/Spring 的方法级日志收集框架。
 
-# @LogCollect
-
-<p align="center">
-  <strong>全栈高可用业务日志聚合框架</strong>
-</p>
-
-<p align="center">
-  零侵入 · 全异步覆盖 · 双日志框架适配 · 配置中心热更 · 分层降级熔断 · 纵深安全防护
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/JDK-8%2B-brightgreen" alt="JDK 8+"/>
-  <img src="https://img.shields.io/badge/Spring%20Boot-2.7%2B%20%7C%203.x-blue" alt="Spring Boot"/>
-  <img src="https://img.shields.io/badge/License-Apache%202.0-green" alt="License"/>
-  <img src="https://img.shields.io/badge/version-1.0.0-orange" alt="Version"/>
-</p>
+本版本 README 对应当前代码的**最终重构方案**，重点是：
+- `LogEntry` 结构化重构（Builder、`throwableString`、`timestamp`）
+- 默认格式化机制重构（Pattern 解析 + 控制台 Pattern 自动探测）
+- 安全流水线重构（消息与异常堆栈分离净化）
+- Appender 适配层重构（提取即拷贝，避免事件复用回收风险）
+- 缓冲区行为收敛（AGGREGATE 入缓冲时格式化，仅存字符串）
 
 ---
 
-## 目录
+## 1. 模块改动总览
 
-- [一、简介](#一简介)
-- [二、核心特性](#二核心特性)
-- [三、版本兼容矩阵](#三版本兼容矩阵)
-- [四、快速开始](#四快速开始)
-- [五、核心概念](#五核心概念)
-- [六、双模式日志收集](#六双模式日志收集)
-- [七、LogCollectHandler 接口参考](#七logcollecthandler-接口参考)
-- [八、注解配置参考](#八注解配置参考)
-- [九、全异步场景指南](#九全异步场景指南)
-- [十、安全防护体系](#十安全防护体系)
-- [十一、熔断降级机制](#十一熔断降级机制)
-- [十二、配置中心集成](#十二配置中心集成)
-- [十三、可观测性](#十三可观测性)
-- [十四、Actuator 管理端点](#十四actuator-管理端点)
-- [十五、项目结构](#十五项目结构)
-- [十六、生产部署指南](#十六生产部署指南)
-- [十七、常见问题](#十七常见问题)
-- [十八、开发注意事项](#十八开发注意事项)
-- [十九、框架定位与生态关系](#十九框架定位与生态关系)
-- [二十、已知局限性](#二十已知局限性)
-- [二十一、贡献指南](#二十一贡献指南)
-
----
-
-## 一、简介
-
-### 这是什么
-
-`@LogCollect` 是一个**轻量级业务日志聚合框架**，只需在方法上加一个注解，即可将该方法及其启动的**全部异步子线程**的日志精准聚合到业务数据库中，与全局日志天然隔离。
-
-### 解决什么问题
-
-在以下典型场景中，传统日志方案（文件日志 / ELK）难以满足需求：
-
-| 场景 | 痛点 | @LogCollect 方案 |
-|------|------|------------------|
-| 每日对账定时任务 | 50个子线程的日志散落在文件中，按 traceId 手动 grep，效率低下 | 自动聚合到 `reconcile_log` 表的一条记录中，一个查询即可回溯全过程 |
-| 支付接口审计 | 操作日志需与支付流水强绑定，文件日志无法做到 | 日志直接写入业务表，与支付记录关联查询 |
-| 数据导入任务 | 并行导入 10 万条数据，需要知道哪条成功、哪条失败 | 每条导入的日志按任务聚合，失败可逐条追溯 |
-
-### 一句话定位
-
-> **业务日志聚合的最后一公里** —— 与 ELK / SkyWalking 互补，而非替代。
-
----
-
-## 二、核心特性
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                        @LogCollect 核心特性                       │
-│                                                                  │
-│  🎯 精准聚合    仅捕获指定方法（含全部异步子线程）的日志           │
-│  ⚡ 极致性能    异步非阻塞 + 双阈值缓冲 + Log4j2 无锁队列         │
-│  🔄 双收集模式  单条入库 / 聚合刷写，注解一键切换                  │
-│  🔗 上下文贯穿  LogCollectContext 贯穿 before→收集→after 全生命周期│
-│  🔒 纵深安全    9 层防御：注入过滤 / 脱敏 / 防SQL注入 / 防泄漏     │
-│  🛡️ 极端高可用  4 层降级 + 三状态熔断 + 指数退避 + 渐进恢复        │
-│  🔌 双框架适配  Logback / Log4j2 自动识别，零配置切换              │
-│  🧵 全异步覆盖  @Async / 线程池 / WebFlux / new Thread 全支持     │
-│  ☁️ 配置热更    Nacos / Apollo / Spring Cloud Config 动态调整      │
-│  📊 可观测性    Metrics + 健康检查 + Actuator 管理端点              │
-│  📦 极简接入    一个注解 + 实现一个方法，两步完成接入               │
-└──────────────────────────────────────────────────────────────────┘
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                          重构改动总览                                   │
+│                                                                        │
+│  logcollect-api (零外部依赖)                                            │
+│  ├── LogEntry               去掉构造器直灌，新增 throwableString       │
+│  │                          新增 timestamp，Builder 模式，估算修正      │
+│  ├── LogCollectHandler      formatLogLine 默认实现重构                  │
+│  │                          新增 logLinePattern()                      │
+│  ├── LogLinePatternParser   新增：轻量 pattern 解析器                   │
+│  ├── LogLineDefaults        新增：默认 pattern 持有与覆盖               │
+│  └── LogSanitizer           新增 sanitizeThrowable 接口方法            │
+│                                                                        │
+│  logcollect-core                                                       │
+│  ├── ConsolePatternDetector SPI接口 + PatternCleaner                   │
+│  ├── DefaultLogSanitizer    实现 sanitizeThrowable                     │
+│  ├── SecurityPipeline       消息与堆栈分离净化                          │
+│  └── AggregateModeBuffer    入缓冲即格式化，仅存字符串                  │
+│                                                                        │
+│  logcollect-logback-adapter                                             │
+│  ├── LogCollectLogbackAppender    提取异常堆栈 + Builder 构建           │
+│  └── LogbackConsolePatternDetector  动态提取 pattern                    │
+│                                                                        │
+│  logcollect-log4j2-adapter                                              │
+│  ├── LogCollectLog4j2Appender     安全提取 + 深拷贝(防回收)             │
+│  └── Log4j2ConsolePatternDetector  动态提取 pattern                     │
+│                                                                        │
+│  logcollect-spring-boot-autoconfigure                                   │
+│  └── ConsolePatternInitializer    启动检测并注入默认 pattern            │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 三、版本兼容矩阵
+## 2. 关键设计原则
 
-| 依赖 | 最低版本 | 推荐版本 | 说明 |
-|------|---------|---------|------|
-| **JDK** | 1.8+ | 11+ / 17+ | 全版本编译测试通过 |
-| **Spring Boot** | 2.7.x | 2.7.x / 3.x | 双版本自动适配 |
-| **Spring Framework** | 5.3.x | 5.3.x / 6.x | - |
-| **Context Propagation** | 1.0.6 | 1.0.6 (JDK 8) / 1.1.x (JDK 11+) | 框架内部管理版本 |
-| **Micrometer** | 1.10.13 | 1.10.x / 1.12.x | 可选，Metrics 依赖 |
-| **Reactor** | 3.4.x（可选） | 3.5.3+（自动上下文传播） | WebFlux 场景需要 |
-
-### Spring Boot 2.7 与 3.x 的差异
-
-| 能力 | Spring Boot 2.7.x | Spring Boot 3.x |
-|------|-------------------|-----------------|
-| @Async 上下文传播 | 框架通过 `AsyncConfigurer` 自动补齐 | 原生 Context Propagation 自动传播 |
-| Spring 线程池传播 | 框架通过 `BeanPostProcessor` 自动包装 | 原生 Context Propagation 自动传播 |
-| WebFlux 传播 | Reactor 3.5.3+：自动；3.4.x：框架手动 Hook | 原生自动传播 |
-| 自动装配注册 | `META-INF/spring.factories` | `META-INF/spring/...AutoConfiguration.imports` |
-
-> **对用户透明**：两种模式下，业务代码完全一致，无需任何修改。框架在启动时自动检测并适配。
+- **纯数据载体**：`LogEntry` 不承担格式化、净化、过滤职责。
+- **提取即释放**：Appender 中从原始日志事件提取字段后立刻释放事件引用。
+- **先安全后缓冲**：安全流水线先处理，再进入缓冲。
+- **模式分工明确**：
+  - `SINGLE` 存 `LogEntry`，便于结构化使用。
+  - `AGGREGATE` 入缓冲即 `formatLogLine`，仅存字符串，降低对象驻留。
+- **保守内存估算**：统一 `40 + length*2` 的字符串估算策略，宁可高估提前 flush，不低估导致内存风险。
 
 ---
 
-## 四、快速开始
+## 3. LogEntry 最终模型
 
-### 4.1 引入依赖
+路径：`logcollect-api/src/main/java/com/logcollect/api/model/LogEntry.java`
 
-**Maven**
+字段：
+- `traceId`
+- `content`
+- `level`
+- `time`
+- `timestamp`
+- `threadName`
+- `loggerName`
+- `throwableString`
 
-```xml
-<dependencyManagement>
-    <dependencies>
-        <dependency>
-            <groupId>com.logcollect</groupId>
-            <artifactId>logcollect-bom</artifactId>
-            <version>1.0.0</version>
-            <type>pom</type>
-            <scope>import</scope>
-        </dependency>
-    </dependencies>
-</dependencyManagement>
+特性：
+- `final` 类 + 全字段 `final`
+- `private` 构造 + `Builder`
+- `hasThrowable()` 快捷判断
+- `estimateBytes()` 使用保守估算
 
-<dependencies>
-    <!-- 核心 Starter（必须） -->
-    <dependency>
-        <groupId>com.logcollect</groupId>
-        <artifactId>logcollect-spring-boot-starter</artifactId>
-    </dependency>
-    
-    <!-- Nacos 配置中心适配（可选） -->
-    <dependency>
-        <groupId>com.logcollect</groupId>
-        <artifactId>logcollect-config-nacos</artifactId>
-    </dependency>
-</dependencies>
-```
-
-**Gradle**
-
-```groovy
-dependencies {
-    implementation platform('com.logcollect:logcollect-bom:1.0.0')
-    implementation 'com.logcollect:logcollect-spring-boot-starter'
-    
-    // 可选
-    implementation 'com.logcollect:logcollect-config-nacos'
-}
-```
-
-### 4.2 实现 Handler（聚合模式，推荐）
-
-```java
-@Component
-@RequiredArgsConstructor
-public class TaskLogHandler implements LogCollectHandler {
-
-    private final TaskLogService taskLogService;
-
-    @Override
-    public CollectMode preferredMode() {
-        return CollectMode.AGGREGATE;
-    }
-
-    @Override
-    public void before(LogCollectContext context) {
-        // 初始化任务日志主记录，并把主键放入上下文（跨阶段复用）
-        Long executionLogId = taskLogService.createStartLog(
-                context.getTraceId(),
-                context.getMethodSignature(),
-                context.getStartTime());
-        context.setBusinessId(executionLogId);
-        context.setAttribute("operator", "system");
-    }
-
-    @Override
-    public void flushAggregatedLog(LogCollectContext context, AggregatedLog aggregatedLog) {
-        // AGGREGATE 模式下批量回调：每次 flush 收到一段聚合日志
-        Long executionLogId = context.getBusinessId(Long.class);
-        taskLogService.appendAggregatedLog(
-                executionLogId,
-                aggregatedLog.getContent(),
-                aggregatedLog.getEntryCount(),
-                aggregatedLog.getMaxLevel(),
-                aggregatedLog.isFinalFlush());
-    }
-
-    @Override
-    public void after(LogCollectContext context) {
-        // 收尾：写入终态和统计
-        Long executionLogId = context.getBusinessId(Long.class);
-        taskLogService.finish(
-                executionLogId,
-                context.hasError(),
-                context.getElapsedMillis(),
-                context.getTotalCollectedCount(),
-                context.getTotalDiscardedCount(),
-                context.getFlushCount(),
-                context.hasError() ? context.getError().getMessage() : null);
-    }
-}
-```
-
-> **推荐**：继承框架提供的 `AbstractJdbcLogCollectHandler` 安全基类，自动使用参数化查询防止 SQL 注入。详见 [安全防护体系](#十安全防护体系)。
-
-### 4.3 加注解
-
-```java
-@Service
-public class ReconcileService {
-
-    @LogCollect
-    public void dailyReconcile() {
-        log.info("开始对账，用户手机: 13812345678");
-        // → 自动脱敏为: 开始对账，用户手机: 138****5678
-        
-        CompletableFuture.runAsync(() -> {
-            log.info("子线程处理中...");
-            // → 自动聚合到同一 traceId
-        }, springManagedExecutor);
-        
-        log.info("对账完成");
-    }
-}
-```
-
-### 4.4 业务代码中直接访问当前上下文（静态访问器）
-
-框架提供 `LogCollectContext` 静态访问器，业务代码可在任意层级直接读写当前收集上下文（类似 `MDC` / `SecurityContextHolder` 的使用方式）。
-
-```java
-@Service
-public class ImportService {
-
-    @LogCollect
-    public void importData(String taskId, List<DataRecord> records) {
-        LogCollectContext.setCurrentBusinessId(taskId);
-        LogCollectContext.setCurrentAttribute("totalRecords", records.size());
-
-        for (DataRecord record : records) {
-            processRecord(record); // 无需层层传 taskId
-        }
-    }
-
-    private void processRecord(DataRecord record) {
-        String taskId = LogCollectContext.getCurrentBusinessId(String.class);
-        Integer total = LogCollectContext.getCurrentAttribute("totalRecords", Integer.class);
-        log.info("[{}] processing record={} / total={}", taskId, record.getId(), total);
-    }
-}
-```
-
-> 非 `@LogCollect` 范围内调用也安全：读操作返回 `null/0/false`，写操作静默忽略，不抛异常。
-
-**完成。** 引入 starter 后，框架会自动注册日志采集 Appender，异步收集、缓冲聚合入库、日志净化、敏感脱敏、降级兜底、Metrics 上报全部自动开启。
+估算规则：
+- `LogEntry` 自身按 `80 bytes`
+- `LocalDateTime` 按 `48 bytes`
+- 每个非空字符串按 `40 + length*2`
 
 ---
 
-## 五、核心概念
+## 4. LogCollectHandler 格式化机制
 
-### 5.1 处理流水线
+路径：`logcollect-api/src/main/java/com/logcollect/api/handler/LogCollectHandler.java`
 
+新增与变更：
+- 新增 `logLinePattern()`
+- `formatLogLine(LogEntry entry)` 默认实现改为：
+  - `LogLinePatternParser.format(entry, logLinePattern())`
+
+默认 pattern 来源优先级：
+1. 配置中心覆盖：`logcollect.global.format.log-line-pattern`
+2. 启动时自动探测控制台 appender pattern（并清理颜色/PID）
+3. 框架兜底 pattern
+
+### 4.1 支持占位符
+
+- `%d{pattern}` 时间
+- `%p` / `%level` 级别
+- `%t` / `%thread` 线程
+- `%c{n}` / `%logger{n}` Logger 缩写
+- `%C` / `%loggerFull` Logger 全名
+- `%m` / `%msg` 消息
+- `%ex` / `%throwable` / `%wEx` 异常堆栈
+- `%n` 换行
+
+宽度修饰：
+- `%-5p` 左对齐最小宽度
+- `%15.15t` 最大宽度截断 + 最小宽度填充
+
+---
+
+## 5. Pattern 自动探测与清理
+
+### 5.1 SPI
+
+路径：`logcollect-core/src/main/java/com/logcollect/core/format/ConsolePatternDetector.java`
+
+接口：
+- `boolean isAvailable()`
+- `String detectRawPattern()`
+
+实现：
+- `LogbackConsolePatternDetector`
+- `Log4j2ConsolePatternDetector`
+
+### 5.2 清理器
+
+路径：`logcollect-core/src/main/java/com/logcollect/core/format/PatternCleaner.java`
+
+清理策略：
+- 去 `%clr(...)` / `%highlight(...)` / `%style(...)`
+- 去 PID 占位符
+- 解析 Spring 属性默认值 `${XXX:-default}`
+- 去装饰性 `---`
+- 压缩多空格
+
+### 5.3 启动初始化
+
+路径：`logcollect-spring-boot-autoconfigure/src/main/java/com/logcollect/autoconfigure/ConsolePatternInitializer.java`
+
+流程：
+1. 遍历可用 detector
+2. 提取 raw pattern
+3. `PatternCleaner.clean(...)`
+4. 校验至少包含消息占位符
+5. `LogLineDefaults.setDetectedPattern(...)`
+6. 全失败则落回兜底 pattern
+
+---
+
+## 6. 安全流水线（消息/堆栈分离）
+
+### 6.1 接口
+
+路径：`logcollect-api/src/main/java/com/logcollect/api/sanitizer/LogSanitizer.java`
+
+方法：
+- `sanitize(String raw)`：消息严格净化
+- `sanitizeThrowable(String throwableString)`：堆栈宽松净化（保留 `\r\n\t`）
+
+### 6.2 默认实现
+
+路径：`logcollect-core/src/main/java/com/logcollect/core/security/DefaultLogSanitizer.java`
+
+- 消息：清 HTML、ANSI、控制字符（含换行/制表）
+- 堆栈：清 HTML、ANSI、危险控制字符（保留换行/制表）
+
+### 6.3 SecurityPipeline
+
+路径：`logcollect-core/src/main/java/com/logcollect/core/pipeline/SecurityPipeline.java`
+
+执行顺序：
+1. `sanitize(content)`
+2. `sanitizeThrowable(throwable)`
+3. `mask(content)`
+4. `mask(throwable)`
+5. 构建新的安全 `LogEntry`
+
+---
+
+## 7. Appender 适配层（最终行为）
+
+### 7.1 Logback
+
+路径：`logcollect-logback-adapter/.../LogCollectLogbackAppender.java`
+
+- 在 `append(ILoggingEvent)` 内一次性提取：
+  - `traceId/content/level/time/timestamp/thread/logger/throwableString`
+- 异常提取：`ThrowableProxyUtil.asString(IThrowableProxy)`
+- 使用 `SecurityPipeline` 输出安全 `LogEntry`
+
+### 7.2 Log4j2
+
+路径：`logcollect-log4j2-adapter/.../LogCollectLog4j2Appender.java`
+
+- 在 `append(LogEvent)` 内一次性提取并做字符串拷贝
+- 关键点：避免持有 `MutableLogEvent` 的生命周期引用
+- 异常提取：`Throwable#printStackTrace(PrintWriter)`
+- 使用 `SecurityPipeline` 输出安全 `LogEntry`
+
+---
+
+## 8. 缓冲区与模式语义
+
+### 8.1 SINGLE
+
+- 缓冲区：`SingleModeBuffer`
+- 存储对象：完整 `LogEntry`
+- Flush 行为：逐条调用 `handler.appendLog(...)`
+
+### 8.2 AGGREGATE
+
+- 缓冲区：`AggregateModeBuffer`
+- **入缓冲即格式化**：`handler.formatLogLine(entry)`
+- 存储对象：`LogSegment(formattedLine, level, time, timestamp, estimatedBytes)`
+- Flush 行为：拼接为 `AggregatedLog.content`，调用 `handler.flushAggregatedLog(...)`
+
+### 8.3 估算
+
+- AGGREGATE 单行字符串估算：`40 + length*2`
+- SINGLE 估算：`entry.estimateBytes()`
+
+---
+
+## 9. 完整数据流（最终版）
+
+```text
+                         ILoggingEvent (Logback) / LogEvent (Log4j2)
+                                         │
+                         ┌───────────────┴───────────────────┐
+                         │        Appender 层（适配器）        │
+                         │                                    │
+                         │  提取字段 → 构建原始 LogEntry       │
+                         │  ★ 立即释放原始事件引用             │
+                         │  ★ 异常堆栈提取为 String            │
+                         └───────────────┬───────────────────┘
+                                         │ LogEntry (原始)
+                         ┌───────────────┴───────────────────┐
+                         │        安全流水线（Core 层）        │
+                         │                                    │
+                         │  ① sanitize(content)   → 严格净化  │
+                         │  ② sanitizeThrowable() → 宽松净化  │
+                         │  ③ mask(content)        → 脱敏     │
+                         │  ④ mask(throwable)      → 脱敏     │
+                         │  ⑤ 构建安全 LogEntry               │
+                         └───────────────┬───────────────────┘
+                                         │ LogEntry (安全)
+                    ┌────────────────────┴──────────────────────┐
+                    │                                           │
+            ┌───────┴────────┐                      ┌───────────┴──────────┐
+            │  SINGLE 缓冲区  │                      │  AGGREGATE 缓冲区    │
+            │                │                      │                      │
+            │  存储完整       │                      │ handler.formatLogLine│
+            │  LogEntry 对象  │                      │  ↓                   │
+            │                │                      │ 存 formattedLine     │
+            │                │                      │ (LogSegment)         │
+            │                │                      │ ★ LogEntry 可被 GC   │
+            └───────┬────────┘                      └───────────┬──────────┘
+                    │ flush                                     │ flush
+                    ↓                                           ↓
+        handler.appendLog(ctx, entry)            StringBuilder 拼接 + separator
+        ├ entry.getContent()        结构化存储      → AggregatedLog.content
+        ├ entry.getThrowableString() 异常堆栈      handler.flushAggregatedLog(ctx, agg)
+        └ handler.formatLogLine(entry) 按需格式化
 ```
-业务方法调用
-    ↓
-┌─────────────────────────────────────────────────────────────┐
-│ 0. 配置解析                                                  │
-│    四级合并：框架默认 ← 注解 ← 配置中心方法级 ← 配置中心全局   │
-├─────────────────────────────────────────────────────────────┤
-│ 1. AOP 前置                                                  │
-│    生成 UUID traceId → 创建 LogCollectContext                │
-│    → 栈式上下文 push → handler.before(context)               │
-├─────────────────────────────────────────────────────────────┤
-│ 2. 业务方法执行                                               │
-│    每条日志 → Appender 拦截 → 检查 MDC traceId               │
-│    ↓ 匹配                                                    │
-│ 3. 收集过滤                                                  │
-│    级别过滤 → handler.shouldCollect() 自定义过滤              │
-│    ↓ 通过                                                    │
-│ 4. 安全流水线                                                 │
-│    Sanitizer(净化) → Masker(脱敏) → 安全日志内容              │
-│    ↓                                                         │
-│ 5. 模式分发                                                   │
-│    ├─ SINGLE:    构建 LogEntry → SingleModeBuffer             │
-│    └─ AGGREGATE: formatLogLine → AggregateModeBuffer          │
-│    ↓                                                         │
-│ 6. 缓冲层（双阈值：条数 + 内存）                              │
-│    ↓ 达到阈值或方法结束                                       │
-│ 7. 熔断层（三状态：CLOSED → OPEN → HALF_OPEN）               │
-│    ↓ 允许写入                                                │
-│ 8. 模式分发调用                                               │
-│    ├─ SINGLE:    循环调用 handler.appendLog(context, entry)   │
-│    └─ AGGREGATE: 一次调用 handler.flushAggregatedLog(ctx,agg) │
-│    ↓ 失败                                                    │
-│ 9. 降级层（流量削峰 → 熔断 → 兜底存储 → 终极丢弃）            │
-├─────────────────────────────────────────────────────────────┤
-│10. AOP 后置（finally）                                       │
-│    设置 context.returnValue / context.error                   │
-│    → flush 剩余缓冲 → handler.after(context)                 │
-│    → 栈式上下文 pop                                           │
-│    所有操作 try-catch(Throwable) → 绝不影响业务                │
-└─────────────────────────────────────────────────────────────┘
-```
 
-### 5.2 LogCollectContext 上下文模型
+---
 
-`LogCollectContext` 是贯穿日志收集全生命周期的上下文对象，在 `before()` → 日志收集 → `after()` 各阶段共享同一个实例。
+## 10. 对现有用户的影响
 
-```
-LogCollectContext
-├── 不可变字段（框架创建时设置）
-│   ├── traceId            本次收集的唯一追踪 ID（UUID）
-│   ├── methodSignature    被拦截方法的全限定签名
-│   ├── className          类名（短名）
-│   ├── methodName         方法名
-│   ├── methodArgs         方法入参快照
-│   ├── startTime          方法开始时间
-│   ├── startTimeMillis    开始时间戳（用于计算耗时）
-│   ├── collectMode        本次使用的收集模式（SINGLE / AGGREGATE）
-│   └── handlerClass       Handler 实例的 Class 类型
-│
-├── 执行状态（框架在 AOP finally 中设置）
-│   ├── returnValue        方法返回值（正常结束时）
-│   └── error              方法抛出的异常（异常结束时）
-│
-├── 收集统计（框架维护，用户只读）
-│   ├── totalCollectedCount    本次共收集的日志条数
-│   ├── totalDiscardedCount    本次共丢弃的日志条数
-│   ├── totalCollectedBytes    本次共收集的日志字节数
-│   └── flushCount             已执行的 flush 次数
-│
-└── 用户自定义状态
-    ├── businessId         业务唯一标识
-    └── attributes         ConcurrentHashMap，支持跨阶段传递任意数据
-```
+| 用户场景 | 影响 | 说明 |
+|---|---|---|
+| 仅用 AGGREGATE + `flushAggregatedLog` | ✅ 基本零改动 | `content` 仍为字符串聚合体，内容更完整（可含异常） |
+| 覆写了 `formatLogLine` | ✅ 零改动 | 覆写优先级最高，不受默认 pattern 解析影响 |
+| SINGLE 中读取 `entry.getContent()` | ✅ 零改动 | `content` 语义保持“消息文本” |
+| 读取 `entry.getLoggerName()` | ✅ 零改动 | 仍返回全限定类名 |
+| 需要异常堆栈 | ✅ 新增能力 | `entry.getThrowableString()` + `entry.hasThrowable()` |
 
-**便捷方法**：
+潜在注意点：
+- `LogEntry` 构造方式切换为 `Builder`。
+- 自定义 `LogSanitizer` 需要实现新方法 `sanitizeThrowable(...)`。
 
-| 方法 | 说明 |
-|------|------|
-| `hasError()` | 方法是否异常结束 |
-| `getElapsedMillis()` | 方法已执行的毫秒数 |
-| `getBusinessId(Class<T>)` | 类型安全地获取 businessId |
-| `setAttribute(key, value)` | 设置自定义属性（跨阶段传递） |
-| `getAttribute(key, Class<T>)` | 类型安全地获取自定义属性 |
-| `hasAttribute(key)` | 判断属性是否存在 |
+---
 
-**线程安全设计**：
+## 11. 配置项（新增重点）
 
-| 字段类别 | 策略 | 说明 |
-|----------|------|------|
-| 不可变字段 | `final` | 创建后不可修改 |
-| `returnValue` / `error` / `businessId` | `volatile` | 单线程写入，多线程可读 |
-| 统计计数器 | `AtomicInteger` / `AtomicLong` | 多线程并发递增 |
-| `attributes` | `ConcurrentHashMap` | 多线程并发读写 |
+全局动态格式覆盖：
 
-### 5.3 上下文传播模型
-
-```
-主线程
-│  @LogCollect 方法入口
-│  ├── push(LogCollectContext) → ThreadLocal + MDC
-│  │
-│  ├── log.info("主线程日志")  ────────────────────── ✅ 自动拦截
-│  │
-│  ├── @Async 子线程  ─── TaskDecorator 自动传播 ──── ✅ 自动拦截
-│  │
-│  ├── CompletableFuture + Spring池  ──────────────── ✅ 自动拦截
-│  │
-│  ├── WebFlux Mono/Flux  ── Reactor Hook 自动传播 ── ✅ 自动拦截
-│  │
-│  ├── new Thread(wrapRunnable(...))  ── 手动包装 ─── ✅ 手动一行
-│  │
-│  ├── 嵌套 @LogCollect ── push(ctx-B) / pop(ctx-B) ─ ✅ 栈式隔离
-│  │
-│  └── finally: pop(ctx-A) → 栈空 → ThreadLocal.remove()
-```
-
-### 5.4 四级配置优先级
-
-```
-优先级从高到低：
-
-① 配置中心 - 全局配置      logcollect.global.level=WARN
-   ↓ 覆盖
-② 配置中心 - 方法级配置    logcollect.methods.{类名_方法名}.level=ERROR
-   ↓ 覆盖
-③ @LogCollect 注解配置      @LogCollect(level = "INFO")
-   ↓ 覆盖
-④ 框架默认配置              INFO（硬编码在框架中）
-
-合并规则：每个参数独立合并，高优先级仅覆盖其显式设置的参数。
-```
-
-### 5.5 日志框架接入（自动 Appender 注册）
-
-为实现零配置接入，框架在启动时会自动将采集 Appender 挂到 ROOT Logger：
-
-- Logback：`com.logcollect.logback.LogCollectLogbackAppender`
-- Log4j2：`com.logcollect.log4j2.LogCollectLog4j2Appender`
-
-默认配置如下：
-
-```yaml
-logcollect:
-  logging:
-    auto-register-appender: true
-    appender-name: LOG_COLLECT
+```properties
+logcollect.global.format.log-line-pattern=%d{yyyy-MM-dd HH:mm:ss.SSS} %-5p [%t] %c - %m%ex%n
 ```
 
 说明：
-
-- `auto-register-appender=true`（默认）：框架自动注册，无需手工改 `logback-spring.xml` / `log4j2.xml`。
-- `appender-name`：自动注册时使用的 Appender 名称，默认 `LOG_COLLECT`。
-- 如果你关闭自动注册（`false`），需要自行在日志框架配置中挂载对应 Appender 到 ROOT。
-
-### 5.6 LogCollectContext 静态访问器
-
-设计目标：
-
-- 业务代码可直接获取当前 `@LogCollect` 上下文（ThreadLocal 栈顶），无需层层传参。
-- 与 `MDC.put(...)`、`SecurityContextHolder.getContext()`、`RequestContextHolder.getRequestAttributes()` 类似的调用体验。
-- 在非收集范围内保持“静默安全”，不影响普通业务方法。
-
-常用静态方法：
-
-| 方法 | 返回值 | 非收集范围内行为 | 典型用途 |
-|------|--------|------------------|----------|
-| `current()` | `LogCollectContext` / `null` | `null` | 获取完整上下文 |
-| `isActive()` | `boolean` | `false` | 判断是否在收集范围内 |
-| `getCurrentTraceId()` | `String` / `null` | `null` | 取 traceId |
-| `getCurrentCollectedCount()` | `int` | `0` | 取当前收集条数 |
-| `setCurrentBusinessId(Object)` | `void` | 静默忽略 | 业务方法中设置 businessId |
-| `getCurrentBusinessId(Class<T>)` | `T` / `null` | `null` | 读取 businessId |
-| `setCurrentAttribute(String,Object)` | `void` | 静默忽略 | 写自定义上下文参数 |
-| `getCurrentAttribute(String)` | `Object` / `null` | `null` | 读自定义参数 |
-| `getCurrentAttribute(String,Class<T>)` | `T` / `null` | `null` | 类型安全读取参数 |
-| `currentHasAttribute(String)` | `boolean` | `false` | 判断参数是否存在 |
-
-线程与内存安全说明：
-
-- 主线程与子线程访问通过上下文传播机制协同，属性容器使用 `ConcurrentHashMap`，并发读写安全。
-- 嵌套 `@LogCollect` 场景下按栈顶上下文生效，天然栈式隔离。
-- 生命周期结束后上下文会出栈并清理 `ThreadLocal`，避免泄漏。
-- 建议不要将超大对象放入 `attribute`（生命周期随整次方法执行）。
+- 为空时不覆盖，使用自动探测/兜底。
+- 配置变更后会通过 `LogCollectConfigResolver#onConfigChange` 同步到 `LogLineDefaults`。
 
 ---
 
-## 六、双模式日志收集
+## 12. 快速接入
 
-框架提供两种日志收集模式，由注解 `collectMode` 参数决定（二选一），默认使用效率更高的聚合模式。
-
-### 6.1 模式总览
-
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│  模式1 SINGLE（单条缓冲模式）                                              │
-│  ┌──────┐  ┌──────┐  ┌──────┐        ┌─────────────────────────┐          │
-│  │Log 1 │→ │Log 2 │→ │Log N │ ────→  │ 批量循环调用 appendLog  │          │
-│  └──────┘  └──────┘  └──────┘        │ appendLog(ctx, entry1)  │          │
-│   过滤+脱敏后逐条放入缓冲区            │ appendLog(ctx, entry2)  │          │
-│   达到阈值 / 方法结束 → flush          │ ...                     │          │
-│   缓冲区: ConcurrentLinkedQueue        │ appendLog(ctx, entryN)  │          │
-│           <LogEntry>                   └─────────────────────────┘          │
-│                                                                            │
-│  模式2 AGGREGATE（聚合刷写模式）⭐ 默认                                     │
-│  ┌──────┐  ┌──────┐  ┌──────┐        ┌──────────────────────────────┐     │
-│  │Log 1 │→ │Log 2 │→ │Log N │ ────→  │ 一次调用 flushAggregatedLog │     │
-│  └──────┘  └──────┘  └──────┘        │ 参数: 一整个大日志体          │     │
-│   过滤+脱敏后格式化为一行              │ "[10:00] INFO 日志1\n        │     │
-│   追加到聚合缓冲区                     │  [10:01] WARN 日志2\n        │     │
-│   达到阈值 / 方法结束 → flush          │  [10:02] ERROR 日志3"        │     │
-│   缓冲区: ConcurrentLinkedQueue        └──────────────────────────────┘     │
-│           <String片段>                                                     │
-│   flush时: StringBuilder 拼接                                              │
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-### 6.2 两种模式对比
-
-| 对比维度 | 模式1 SINGLE | 模式2 AGGREGATE（默认） |
-|----------|-------------|----------------------|
-| Handler 调用 | N 次 `appendLog()` | 1~几次 `flushAggregatedLog()` |
-| 典型 DB 操作 | N 次 INSERT | 1 次 INSERT / UPDATE |
-| 对象创建 | 每条创建 `LogEntry` 对象 | 仅存储格式化后的 `String`，flush 时构建 `AggregatedLog` |
-| 内存效率 | 每条 ~128 字节额外开销 | 每条 ~16 字节额外开销 |
-| GC 压力 | N 个对象 | 极少对象，StringBuilder 复用 |
-| 适用场景 | 逐条入库（明细表）、逐条重试 | 大批量日志聚合到单条记录（推荐） |
-
-> **结论**：AGGREGATE 在对象开销、方法调用次数、DB 写入次数上全面优于 SINGLE，因此设为默认模式。
-
-### 6.3 使用方式
-
-#### 聚合模式（默认，推荐）
-
-```java
-// 默认即为聚合模式，无需显式指定
-@LogCollect
-public void dailyReconcile() { ... }
-
-// 显式指定
-@LogCollect(collectMode = CollectMode.AGGREGATE)
-public void dailyReconcile() { ... }
-```
-
-```java
-@Component
-public class ReconcileLogHandler implements LogCollectHandler {
-
-    @Autowired
-    private ReconcileLogMapper mapper;
-
-    @Override
-    public void before(LogCollectContext context) {
-        ReconcileLog log = new ReconcileLog();
-        log.setTraceId(context.getTraceId());
-        log.setTaskName(context.getMethodName());
-        log.setStatus("RUNNING");
-        log.setStartTime(context.getStartTime());
-        log.setLogContent("");
-        mapper.insert(log);
-        
-        context.setBusinessId(log.getId());
-        context.setAttribute("batchDate", LocalDate.now().toString());
-    }
-
-    @Override
-    public void flushAggregatedLog(LogCollectContext context,
-                                   AggregatedLog aggregatedLog) {
-        // 一次 UPDATE 追加一整块日志到 content 字段
-        Long logId = context.getBusinessId(Long.class);
-        mapper.appendContent(logId, aggregatedLog.getContent());
-        
-        // 可利用聚合体的元信息
-        if ("ERROR".equals(aggregatedLog.getMaxLevel())) {
-            mapper.markHasError(logId);
-        }
-    }
-
-    @Override
-    public void after(LogCollectContext context) {
-        Long logId = context.getBusinessId(Long.class);
-        ReconcileLog log = new ReconcileLog();
-        log.setId(logId);
-        log.setStatus(context.hasError() ? "FAILED" : "SUCCESS");
-        log.setEndTime(LocalDateTime.now());
-        log.setElapsedMs(context.getElapsedMillis());
-        log.setCollectedCount(context.getTotalCollectedCount());
-        log.setFlushCount(context.getFlushCount());
-        log.setBatchDate(context.getAttribute("batchDate", String.class));
-        log.setErrorMsg(context.hasError() ? context.getError().getMessage() : null);
-        mapper.updateById(log);
-    }
-}
-```
-
-#### 单条模式（需要逐条入明细表时使用）
-
-```java
-@LogCollect(collectMode = CollectMode.SINGLE, maxBufferSize = 50)
-public void importData(List<DataRecord> records) { ... }
-```
-
-```java
-@Component
-public class ImportLogHandler implements LogCollectHandler {
-
-    @Autowired
-    private ImportLogMapper logMapper;
-    @Autowired
-    private ImportLogDetailMapper detailMapper;
-
-    @Override
-    public CollectMode preferredMode() {
-        return CollectMode.SINGLE;
-    }
-
-    @Override
-    public void before(LogCollectContext context) {
-        ImportLog log = new ImportLog();
-        log.setTraceId(context.getTraceId());
-        log.setStatus("RUNNING");
-        logMapper.insert(log);
-        context.setBusinessId(log.getId());
-    }
-
-    @Override
-    public void appendLog(LogCollectContext context, LogEntry entry) {
-        // 每条日志插入明细表（框架从缓冲区批量循环调用）
-        ImportLogDetail detail = new ImportLogDetail();
-        detail.setLogId(context.getBusinessId(Long.class));
-        detail.setContent(entry.getContent());   // 已过净化 + 脱敏
-        detail.setLevel(entry.getLevel());
-        detail.setLogTime(entry.getTime());
-        detail.setThreadName(entry.getThreadName());
-        detailMapper.insert(detail);
-    }
-
-    @Override
-    public void after(LogCollectContext context) {
-        ImportLog log = new ImportLog();
-        log.setId(context.getBusinessId(Long.class));
-        log.setStatus(context.hasError() ? "FAILED" : "SUCCESS");
-        log.setTotalLogs(context.getTotalCollectedCount());
-        logMapper.updateById(log);
-    }
-}
-```
-
-### 6.4 模式自动选择逻辑
-
-当注解配置为 `CollectMode.AUTO`（默认值）时：
-
-```
-@LogCollect(collectMode = AUTO)
-         │
-         ▼
-handler.preferredMode() 返回值?
-  ├── SINGLE    → 使用模式1
-  ├── AGGREGATE → 使用模式2
-  └── AUTO      → 使用模式2（框架默认，效率更高）
-```
-
-优先级：**注解显式指定 > Handler.preferredMode() > 框架默认(AGGREGATE)**
-
-### 6.5 缓冲区内部设计
-
-#### 单条缓冲区 SingleModeBuffer
-
-```
-ConcurrentLinkedQueue<LogEntry>
-┌─────────┬─────────┬─────────┬─────────┬─────────┐
-│ LogEntry│ LogEntry│ LogEntry│ LogEntry│ LogEntry│  ← 每条一个对象
-│ content │ content │ content │ content │ content │
-│ level   │ level   │ level   │ level   │ level   │
-│ time    │ time    │ time    │ time    │ time    │
-│threadNm │threadNm │threadNm │threadNm │threadNm │
-│loggerNm │loggerNm │loggerNm │loggerNm │loggerNm │
-└─────────┴─────────┴─────────┴─────────┴─────────┘
-
-flush → drain 全部 entry → 循环调用 handler.appendLog(context, entry)
-每次 flush 产生 N 次 handler 调用
-```
-
-- **数据结构**：`ConcurrentLinkedQueue<LogEntry>`（无锁队列，多线程并发 offer 无争用）
-- **内存跟踪**：`AtomicInteger count` + `AtomicLong bytes`
-- **flush 触发**：`count >= maxBufferSize` 或 `bytes >= maxBufferBytes`
-- **flush 动作**：drain 全部 entry → 循环调用 `handler.appendLog(context, entry)`
-
-#### 聚合缓冲区 AggregateModeBuffer
-
-```
-ConcurrentLinkedQueue<LogSegment>（仅存格式化后的字符串）
-┌───────────────┬───────────────┬───────────────┐
-│ "[10:00] INFO  │ "[10:01] WARN │ "[10:02] ERROR│
-│  日志内容1"    │  日志内容2"    │  日志内容3"    │
-└───────────────┴───────────────┴───────────────┘
-
-flush → StringBuilder 拼接 → 构建 AggregatedLog（一整个大字符串）
-     → 一次调用 handler.flushAggregatedLog(context, aggregatedLog)
-每次 flush 产生 1 次 handler 调用
-```
-
-- **数据结构**：`ConcurrentLinkedQueue<LogSegment>`（`LogSegment` 仅含格式化字符串 + 级别 + 时间）
-- **内存跟踪**：`AtomicInteger count` + `AtomicLong bytes`
-- **flush 触发**：`count >= maxBufferSize` 或 `bytes >= maxBufferBytes`
-- **flush 动作**：drain 全部片段 → `StringBuilder` 拼接 → 构建 `AggregatedLog` → 一次调用 `handler.flushAggregatedLog()`
-
-> **为何不直接用 StringBuilder**：`StringBuilder` 不是线程安全的，多线程并发 append 会产生数据错乱。使用 `ConcurrentLinkedQueue<String>` 存储片段 + flush 时聚合，兼顾线程安全与内存效率。
-
-### 6.6 内存安全防护
-
-两种模式共享同一套五层内存保护机制：
-
-```
-每条日志到达缓冲区时的内存保护：
-
-第一层：级别过滤
-  低于配置级别的日志直接丢弃，零内存占用
-
-第二层：shouldCollect() 自定义过滤
-  用户可按业务逻辑过滤，进一步减少入队量
-
-第三层：单缓冲区阈值（per-method）
-  count >= maxBufferSize → 触发 flush
-  bytes >= maxBufferBytes → 触发 flush
-  flush 后仍超限 → 丢弃该条日志（Metrics: reason=buffer_full）
-
-第四层：全局内存阈值（cross-method）
-  GlobalMemoryGuard.tryAcquire() 失败 → 触发降级
-  降级策略：丢弃 DEBUG/INFO，仅保留 WARN/ERROR
-  Metrics: reason=global_memory_limit
-
-第五层：缓冲区关闭保护
-  方法结束后 closed=true，迟到的日志被拒绝
-  防止已结束方法的缓冲区被遗留异步线程继续填充
-```
-
-**全局内存管控器**：控制所有活跃 `@LogCollect` 方法的缓冲区总内存占用，防止多个并发收集任务同时积压导致 OOM。配置项：`logcollect.global.buffer.total-max-bytes`（默认 `100MB`）。
-
-### 6.7 缓冲区线程安全总结
-
-| 组件 | 策略 | 无锁？ |
-|------|------|--------|
-| 日志入队 | `ConcurrentLinkedQueue.offer()` | ✅ |
-| 条数统计 | `AtomicInteger.incrementAndGet()` | ✅ CAS |
-| 字节统计 | `AtomicLong.addAndGet()` | ✅ CAS |
-| flush 互斥 | `AtomicBoolean.compareAndSet()` | ✅ CAS |
-| 关闭标记 | `AtomicBoolean.set(true)` | ✅ |
-| 全局内存 | `AtomicLong` CAS | ✅ CAS |
-
-> 全链路无锁（Lock-Free），所有并发控制均基于 CAS 原子操作，避免线程阻塞和死锁风险。
-
-### 6.8 调用时序示例
-
-#### 模式1 SINGLE 时序（maxBufferSize=3）
-
-```
-日志1 → 过滤✅ → 脱敏 → LogEntry → 入缓冲区  count=1
-日志2 → 过滤✅ → 脱敏 → LogEntry → 入缓冲区  count=2
-日志3 → 过滤✅ → 脱敏 → LogEntry → 入缓冲区  count=3 → 达到阈值!
-  └─ flush:
-     ├─ handler.appendLog(ctx, entry1)  ← INSERT INTO detail ...
-     ├─ handler.appendLog(ctx, entry2)
-     └─ handler.appendLog(ctx, entry3)
-日志4 → 入缓冲区  count=1
-方法结束 → final flush:
-  └─ handler.appendLog(ctx, entry4)
-```
-
-#### 模式2 AGGREGATE 时序（maxBufferSize=3）
-
-```
-日志1 → 过滤✅ → 脱敏 → formatLogLine → "[10:00] INFO 日志1" → 入缓冲区  count=1
-日志2 → 过滤✅ → 脱敏 → formatLogLine → "[10:01] INFO 日志2" → 入缓冲区  count=2
-日志3 → 过滤✅ → 脱敏 → formatLogLine → "[10:02] WARN 日志3" → 入缓冲区  count=3 → 达到阈值!
-  └─ flush:
-     ├─ StringBuilder 拼接三条
-     └─ handler.flushAggregatedLog(ctx, AggregatedLog{
-          content = "[10:00] INFO 日志1\n[10:01] INFO 日志2\n[10:02] WARN 日志3",
-          entryCount = 3,
-          maxLevel = "WARN",
-          finalFlush = false    // 中途刷写
-        })                       ← 一次 UPDATE ...
-日志4 → formatLogLine → 入缓冲区  count=1
-方法结束 → final flush:
-  └─ handler.flushAggregatedLog(ctx, AggregatedLog{
-       content = "[10:03] INFO 日志4",
-       entryCount = 1,
-       finalFlush = true        // 最终刷写
-     })
-```
-
-### 6.9 模型类
-
-#### LogEntry（两种模式均使用）
-
-```java
-public class LogEntry {
-    private final String traceId;
-    private final String content;      // 已经过净化 + 脱敏处理
-    private final String level;
-    private final LocalDateTime time;
-    private final String threadName;
-    private final String loggerName;
-    
-    /** 估算本条日志的内存占用（字节） */
-    public long estimatedBytes() { ... }
-}
-```
-
-#### AggregatedLog（仅模式2 使用）
-
-```java
-public class AggregatedLog {
-    /** 聚合后的完整日志体（一整个大字符串，不是列表） */
-    private final String content;
-    
-    /** 本次聚合体包含的日志条数 */
-    private final int entryCount;
-    
-    /** 本次聚合体的总字节数 */
-    private final long totalBytes;
-    
-    /** 本次聚合体中最高严重级别 */
-    private final String maxLevel;
-    
-    /** 第一条日志的时间 */
-    private final LocalDateTime firstLogTime;
-    
-    /** 最后一条日志的时间 */
-    private final LocalDateTime lastLogTime;
-    
-    /**
-     * 是否为最终刷写（方法结束触发）。
-     * true  = 方法已结束，这是最后一批
-     * false = 中途阈值触发，后续可能还有
-     */
-    private final boolean finalFlush;
-}
-```
-
----
-
-## 七、LogCollectHandler 接口参考
-
-### 7.1 完整接口定义
-
-```java
-public interface LogCollectHandler {
-
-    // ==================== 生命周期方法 ====================
-
-    /**
-     * 方法执行前回调。
-     * 典型用法：插入初始记录、context.setBusinessId()、context.setAttribute()
-     */
-    default void before(LogCollectContext context) {}
-
-    /**
-     * 方法执行后回调（flush 剩余缓冲之后调用）。
-     * 此时 context 包含完整信息：returnValue/error/统计/属性等。
-     */
-    default void after(LogCollectContext context) {}
-
-    // ==================== 模式1：单条缓冲模式 ====================
-
-    /**
-     * 【模式1】追加单条日志。
-     * 框架从缓冲区 drain 后循环调用。content 已过净化 + 脱敏。
-     */
-    default void appendLog(LogCollectContext context, LogEntry entry) {
-        throw new UnsupportedOperationException(
-            "SINGLE 模式需实现 appendLog。如需聚合模式，请实现 flushAggregatedLog");
-    }
-
-    // ==================== 模式2：聚合刷写模式 ====================
-
-    /**
-     * 【模式2】刷写聚合日志体。
-     * 所有日志格式化、拼接为一个大字符串后一次调用。
-     * 如日志量超阈值，可能被调用多次，通过 aggregatedLog.isFinalFlush() 判断。
-     */
-    default void flushAggregatedLog(LogCollectContext context,
-                                    AggregatedLog aggregatedLog) {
-        throw new UnsupportedOperationException(
-            "AGGREGATE 模式需实现 flushAggregatedLog。如需单条模式，请实现 appendLog");
-    }
-
-    // ==================== 格式化与定制 ====================
-
-    /**
-     * 【模式2专用】格式化单条日志为一行字符串。
-     * 默认格式：[time] [level] [thread] content
-     */
-    default String formatLogLine(LogEntry entry) {
-        return String.format("[%s] [%-5s] [%s] %s",
-            entry.getTime(), entry.getLevel(),
-            entry.getThreadName(), entry.getContent());
-    }
-
-    /**
-     * 【模式2专用】聚合日志体的行分隔符。默认 "\n"。
-     */
-    default String aggregatedLogSeparator() {
-        return "\n";
-    }
-
-    // ==================== 收集过滤 ====================
-
-    /**
-     * 自定义日志收集过滤器。
-     * 在级别过滤之后、安全流水线之前调用。返回 false 跳过该条日志。
-     */
-    default boolean shouldCollect(LogCollectContext context,
-                                  String level, String rawMessage) {
-        return true;
-    }
-
-    // ==================== 模式偏好 ====================
-
-    /**
-     * 声明本 Handler 偏好的收集模式。
-     * 当注解 collectMode=AUTO 时，框架据此决策。返回 AUTO 则使用框架默认(AGGREGATE)。
-     */
-    default CollectMode preferredMode() {
-        return CollectMode.AUTO;
-    }
-
-    // ==================== 降级与错误处理 ====================
-
-    /**
-     * 降级事件回调。日志写入失败触发降级时调用。
-     */
-    default void onDegrade(LogCollectContext context, DegradeEvent event) {}
-
-    /**
-     * 写入异常处理。appendLog 或 flushAggregatedLog 抛异常后调用。
-     */
-    default void onError(LogCollectContext context, Throwable error, String phase) {}
-}
-```
-
-### 7.2 方法速查表
-
-| 方法 | 类型 | 默认行为 | 职责 | 适用模式 |
-|------|------|---------|------|---------|
-| `before(context)` | 生命周期 | 空实现 | 初始化业务记录、设置 businessId 和 attributes | 两种 |
-| `after(context)` | 生命周期 | 空实现 | 更新终态（成功/失败/耗时/统计） | 两种 |
-| `appendLog(context, entry)` | 收集入口 | 抛异常 | 逐条日志写入 | SINGLE |
-| `flushAggregatedLog(context, aggLog)` | 收集入口 | 抛异常 | 聚合日志体一次性写入 | AGGREGATE |
-| `formatLogLine(entry)` | 格式化 | `[time] [level] [thread] content` | 定义聚合体每行格式 | AGGREGATE |
-| `aggregatedLogSeparator()` | 格式化 | `"\n"` | 聚合体行分隔符 | AGGREGATE |
-| `shouldCollect(context, level, msg)` | 过滤 | `return true` | 自定义业务过滤 | 两种 |
-| `preferredMode()` | 模式选择 | `return AUTO` | 声明偏好模式 | 两种 |
-| `onDegrade(context, event)` | 降级 | 空实现 | 降级通知（可发告警） | 两种 |
-| `onError(context, error, phase)` | 错误处理 | 空实现 | 写入异常通知 | 两种 |
-
-### 7.3 方法协作流程
-
-```
-框架创建 LogCollectContext
-    │
-    ▼
-handler.before(context)                              ← 用户: 初始化
-    │  context.setBusinessId(id)
-    │  context.setAttribute("key", value)
-    │
-    ▼
-┌─ 业务方法执行期间 ──────────────────────────────────────────────┐
-│  每条日志：                                                     │
-│    ① 级别过滤 → ② handler.shouldCollect()? → ③ 净化 → ④ 脱敏    │
-│    ⑤ 进入缓冲区:                                                │
-│       SINGLE:    LogEntry → SingleModeBuffer                    │
-│       AGGREGATE: handler.formatLogLine(entry) → AggregateBuffer │
-│                                                                  │
-│  达到阈值时 flush:                                               │
-│    SINGLE:    循环 handler.appendLog(context, entry)             │
-│    AGGREGATE: 一次 handler.flushAggregatedLog(context, aggLog)   │
-│                                                                  │
-│  写入失败: 熔断降级 → handler.onDegrade() → handler.onError()    │
-└──────────────────────────────────────────────────────────────────┘
-    │
-    ▼
-框架设置 context.returnValue / context.error
-    │
-    ▼
-最终 flush 缓冲区剩余日志
-    │
-    ▼
-handler.after(context)                               ← 用户: 收尾
-    │  context.getBusinessId() / context.hasError()
-    │  context.getTotalCollectedCount() / context.getElapsedMillis()
-    │  context.getAttribute("key")
-    │
-    ▼
-框架 pop 上下文 → ThreadLocal 清理
-```
-
-### 7.4 最简实现
-
-**如果只需要聚合模式**，只需实现 `flushAggregatedLog` 一个方法即可：
-
-```java
-@Component
-public class SimpleLogHandler implements LogCollectHandler {
-
-    @Autowired
-    private LogMapper logMapper;
-
-    @Override
-    public void flushAggregatedLog(LogCollectContext context,
-                                   AggregatedLog aggregatedLog) {
-        logMapper.insertOrAppend(
-            context.getTraceId(),
-            aggregatedLog.getContent()
-        );
-    }
-}
-```
-
----
-
-## 八、注解配置参考
-
-### 8.1 完整参数表
-
-#### 基础配置
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `handler` | `Class` | 自动匹配 | 业务日志处理实现类。Spring 环境下按类型自动匹配，无需指定 |
-| `async` | `boolean` | `true` | 是否异步收集日志。异步时业务线程仅写入队列即返回 |
-| `level` | `String` | `"INFO"` | 收集的最低日志级别 |
-| `collectMode` | `CollectMode` | `AUTO` | 日志收集模式。`AUTO`=框架自动选择（默认AGGREGATE），`SINGLE`=单条缓冲，`AGGREGATE`=聚合刷写 |
-
-#### 缓冲区配置
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `useBuffer` | `boolean` | `true` | 是否启用双阈值缓冲区（批量入库） |
-| `maxBufferSize` | `int` | `100` | 单批次最大日志条数 |
-| `maxBufferBytes` | `String` | `"1MB"` | 单次调用的缓冲区最大内存占用 |
-
-#### 熔断降级配置
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enableDegrade` | `boolean` | `true` | 是否启用降级兜底 |
-| `degradeFailThreshold` | `int` | `5` | 连续写入失败触发熔断的阈值 |
-| `degradeStorage` | `DegradeStorage` | `FILE` | 熔断后的兜底存储方式。可选：`FILE` / `LIMITED_MEMORY` / `DISCARD_NON_ERROR` |
-| `recoverIntervalSeconds` | `int` | `30` | 熔断后探活的时间间隔（秒） |
-| `recoverMaxIntervalSeconds` | `int` | `300` | 指数退避最大探活间隔（秒） |
-| `halfOpenPassCount` | `int` | `3` | 半开状态放行请求数 |
-| `halfOpenSuccessThreshold` | `int` | `3` | 半开成功切回正常的阈值 |
-| `blockWhenDegradeFail` | `boolean` | `false` | 兜底也失败时是否阻塞主业务。**强烈建议保持 `false`** |
-
-#### 安全防护配置
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enableSanitize` | `boolean` | `true` | 是否启用日志内容净化（防注入） |
-| `sanitizer` | `Class` | `DefaultLogSanitizer.class` | 净化器实现类 |
-| `enableMask` | `boolean` | `true` | 是否启用敏感数据脱敏 |
-| `masker` | `Class` | `DefaultLogMasker.class` | 脱敏器实现类 |
-
-#### 高级配置
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `handlerTimeoutMs` | `int` | `5000` | Handler before/after 执行超时（毫秒） |
-| `transactionIsolation` | `boolean` | `false` | 是否在独立事务中执行 Handler |
-| `maxNestingDepth` | `int` | `10` | 最大 `@LogCollect` 嵌套深度 |
-
-#### 可观测性配置
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enableMetrics` | `boolean` | `true` | 是否暴露 Metrics 指标 |
-
-> `metricsPrefix` 为全局配置，仅支持 `logcollect.global.metrics.prefix`。
->
-> FILE 降级存储参数（`max-total-size` / `ttl-days` / `encrypt-enabled`）为全局物理约束，仅支持 `logcollect.global.degrade.file.*`。
-
-### 8.2 常用配置组合
-
-**定时任务（默认配置，聚合模式）**
-
-```java
-@LogCollect  // 全部使用默认值，聚合模式
-public void dailyReconcile() { ... }
-```
-
-**数据导入（单条模式，逐条入明细表）**
-
-```java
-@LogCollect(
-    collectMode = CollectMode.SINGLE,  // 需要逐条入库
-    maxBufferSize = 50                 // 每50条 flush 一次
-)
-public void importData(List<DataRecord> records) { ... }
-```
-
-**支付接口（强一致 + 极端兜底）**
-
-```java
-@LogCollect(
-    async = false,
-    level = "WARN",
-    useBuffer = false,
-    collectMode = CollectMode.SINGLE,
-    degradeStorage = DegradeStorage.DISCARD_NON_ERROR,
-    transactionIsolation = true
-)
-public PayResult pay(PayRequest request) { ... }
-```
-
-**高并发场景（大缓冲 + 聚合模式）**
-
-```java
-@LogCollect(
-    maxBufferSize = 500,
-    maxBufferBytes = "5MB"
-)
-public void seckill(Long itemId) { ... }
-```
-
----
-
-## 九、全异步场景指南
-
-### 9.1 场景覆盖总表
-
-| 场景 | Boot 2.7 | Boot 3.x | 接入方式 | 示例 |
-|------|----------|----------|---------|------|
-| 同步方法 | ✅ 自动 | ✅ 自动 | 无需操作 | [9.2](#92-同步方法默认) |
-| Spring `@Async` | ✅ 自动 | ✅ 自动 | 无需操作 | [9.3](#93-spring-async自动传播) |
-| Spring 管理的 `ThreadPoolTaskExecutor` | ✅ 自动 | ✅ 自动 | 无需操作 | [9.4](#94-spring-线程池自动传播) |
-| `CompletableFuture` + Spring 线程池 | ✅ 自动 | ✅ 自动 | 无需操作 | [9.5](#95-completablefuture--spring-线程池) |
-| WebFlux `Mono`/`Flux` | ✅ 自动* | ✅ 自动 | 无需操作 | [9.6](#96-webflux-响应式) |
-| Kotlin Coroutines | ⚠️ 一行代码 | ⚠️ 一行代码 | `withContext(LogCollectCoroutineContext())` | - |
-| 手动 `ExecutorService` | ⚠️ 一行代码 | ⚠️ 一行代码 | 工具类包装 | [9.7](#97-手动-executorservice工具类) |
-| 直接 `new Thread()` | ⚠️ 一行代码 | ⚠️ 一行代码 | 工具类包装 | [9.8](#98-直接-new-thread工具类) |
-| 第三方库回调 | ⚠️ 一行代码 | ⚠️ 一行代码 | 工具类包装 | [9.9](#99-第三方回调工具类) |
-| `ForkJoinPool` / `parallelStream` | ⚠️ 一行代码 | ⚠️ 一行代码 | 工具类包装 | [9.10](#910-forkjoinpool) |
-| 嵌套 `@LogCollect` | ✅ 自动 | ✅ 自动 | 栈式隔离 | [9.11](#911-嵌套-logcollect) |
-| Servlet `AsyncContext` | ✅ 自动 | ✅ 自动 | 无需操作 | - |
-
-> **✅ 自动**：框架完全自动处理，用户零配置  
-> **⚠️ 一行代码**：需使用 `LogCollectContextUtils` 包装  
-> **\***：Boot 2.7 + Reactor 3.4.x 需框架手动 Hook（已自动处理）；Reactor 3.5.3+ 全自动
-
-### 9.2 同步方法（默认）
-
-```java
-@LogCollect
-public void syncProcess() {
-    log.info("这条日志会被收集");       // ✅
-    log.debug("低于 INFO 级别，忽略");  // ❌ 默认 level=INFO
-}
-```
-
-### 9.3 Spring @Async（自动传播）
-
-```java
-@LogCollect
-public void batchProcess() {
-    log.info("主线程");                   // ✅
-    asyncService.processPartA();          // ✅ 子线程日志自动聚合
-    asyncService.processPartB();          // ✅ 子线程日志自动聚合
-}
-
-@Service
-public class AsyncService {
-    @Async
-    public void processPartA() {
-        log.info("子线程 A");             // ✅ 归属同一 traceId
-    }
-    @Async
-    public void processPartB() {
-        log.info("子线程 B");             // ✅ 归属同一 traceId
-    }
-}
-```
-
-### 9.4 Spring 线程池（自动传播）
-
-```java
-@Configuration
-public class ThreadPoolConfig {
-    @Bean
-    public ThreadPoolTaskExecutor businessExecutor() {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(4);
-        executor.setMaxPoolSize(8);
-        executor.setThreadNamePrefix("business-");
-        // 无需手动设置 TaskDecorator，框架 BeanPostProcessor 自动包装
-        return executor;
-    }
-}
-
-@Service
-public class OrderService {
-    @Autowired
-    private ThreadPoolTaskExecutor businessExecutor;
-
-    @LogCollect
-    public void createOrder(OrderRequest req) {
-        log.info("创建订单");                              // ✅
-        businessExecutor.submit(() -> {
-            log.info("子线程处理库存扣减");                 // ✅ 自动聚合
-        });
-    }
-}
-```
-
-### 9.5 CompletableFuture + Spring 线程池
-
-```java
-@LogCollect
-public void analyze() {
-    CompletableFuture<Integer> f1 = CompletableFuture.supplyAsync(() -> {
-        log.info("计算指标 A");   // ✅ 通过 Spring 线程池自动传播
-        return calculateA();
-    }, springManagedExecutor);
-
-    CompletableFuture<Integer> f2 = CompletableFuture.supplyAsync(() -> {
-        log.info("计算指标 B");   // ✅
-        return calculateB();
-    }, springManagedExecutor);
-
-    CompletableFuture.allOf(f1, f2).join();
-}
-```
-
-### 9.6 WebFlux 响应式
-
-```java
-@LogCollect(handler = OrderLogHandler.class)
-@PostMapping("/orders")
-public Mono<Order> createOrder(@RequestBody OrderRequest req) {
-    return Mono.just(req)
-        .flatMap(r -> {
-            log.info("校验参数: {}", r.getPhone());    // ✅ 自动脱敏 + 聚合
-            return validateOrder(r);
-        })
-        .publishOn(Schedulers.boundedElastic())        // 切换线程
-        .flatMap(r -> {
-            log.info("扣减库存");                       // ✅ 切换线程后仍自动聚合
-            return deductStock(r);
-        })
-        .map(order -> {
-            log.info("订单创建成功: {}", order.getId()); // ✅
-            return order;
-        });
-}
-```
-
-> **Reactor 版本说明**：
-> - Reactor 3.5.3+（Boot 3.x 默认）：原生 `Hooks.enableAutomaticContextPropagation()` 全自动传播。
-> - Reactor 3.4.x（Boot 2.7 默认）：框架通过 `Hooks.onEachOperator()` 注册 `CoreSubscriber` 包装器，在每个操作符的 `onNext`/`onError`/`onComplete` 回调前恢复 `ThreadLocal`，回调后清理，实现等价效果。
-
-### 9.7 手动 ExecutorService（工具类）
-
-```java
-// 手动创建的线程池（非 Spring 管理）需要一行代码包装
-private final ExecutorService rawPool = Executors.newFixedThreadPool(8);
-private final ExecutorService pool =
-    LogCollectContextUtils.wrapExecutorService(rawPool);  // ← 一行包装
-
-@LogCollect
-public void importData(List<DataRecord> records) {
-    for (DataRecord record : records) {
-        pool.submit(() -> {
-            log.info("导入记录: {}", record.getId());   // ✅ 自动聚合
-        });
-    }
-}
-```
-
-### 9.8 直接 new Thread（工具类）
-
-```java
-@LogCollect
-public void legacyProcess() {
-    // 方式一：包装 Runnable
-    Thread t1 = new Thread(
-        LogCollectContextUtils.wrapRunnable(() -> {
-            log.info("线程 1");   // ✅
-        }), "worker-1");
-    t1.start();
-
-    // 方式二：工具类直接创建
-    Thread t2 = LogCollectContextUtils.newThread(() -> {
-        log.info("线程 2");       // ✅
-    }, "worker-2");
-    t2.start();
-
-    // 方式三：守护线程
-    Thread t3 = LogCollectContextUtils.newDaemonThread(() -> {
-        log.info("守护线程");     // ✅
-    }, "daemon-1");
-    t3.start();
-}
-```
-
-### 9.9 第三方回调（工具类）
-
-```java
-@LogCollect
-public void mqConsume() {
-    mqClient.onMessage(LogCollectContextUtils.wrapRunnable(msg -> {
-        log.info("收到消息: {}", msg.getId());   // ✅
-    }));
-}
-```
-
-### 9.10 ForkJoinPool
-
-```java
-@LogCollect
-public void parallelProcess(List<Item> items) {
-    ForkJoinPool customPool = new ForkJoinPool(4,
-        LogCollectContextUtils.wrapThreadFactory(
-            ForkJoinPool.defaultForkJoinWorkerThreadFactory),
-        null, false);
-    
-    customPool.submit(() ->
-        items.parallelStream().forEach(item -> {
-            log.info("处理: {}", item.getId());  // ✅
-        })
-    ).join();
-}
-```
-
-### 9.11 嵌套 @LogCollect
-
-```java
-@LogCollect(handler = OrderLogHandler.class)
-public void createOrder(OrderRequest req) {
-    log.info("创建订单");           // → traceId-A → OrderLogHandler
-
-    riskService.riskCheck(req);     // 嵌套调用
-
-    log.info("订单创建完成");       // → traceId-A → OrderLogHandler（自动恢复）
-}
-
-@LogCollect(handler = RiskLogHandler.class)
-public void riskCheck(OrderRequest req) {
-    log.info("风控检查");           // → traceId-B → RiskLogHandler
-    // 方法结束自动 pop，恢复外层 traceId-A
-}
-```
-
-### 9.12 `LogCollectContextUtils` API 速查
-
-| 方法 | 适用场景 | 签名 |
-|------|---------|------|
-| `wrapRunnable` | `new Thread()` / 回调 | `Runnable wrapRunnable(Runnable)` |
-| `wrapCallable` | `ExecutorService.submit(Callable)` | `<V> Callable<V> wrapCallable(Callable<V>)` |
-| `wrapExecutorService` | 手动创建的线程池 | `ExecutorService wrapExecutorService(ExecutorService)` |
-| `wrapExecutor` | 通用 Executor | `Executor wrapExecutor(Executor)` |
-| `newThread` | 直接创建线程 | `Thread newThread(Runnable, String)` |
-| `newDaemonThread` | 创建守护线程 | `Thread newDaemonThread(Runnable, String)` |
-| `threadFactory` | 自定义线程池工厂 | `ThreadFactory threadFactory(String)` |
-| `wrapThreadFactory` | 包装已有工厂 | `ThreadFactory wrapThreadFactory(ThreadFactory)` |
-| `supplyAsync` | CF 增强 | `<U> CompletableFuture<U> supplyAsync(Supplier<U>)` |
-| `runAsync` | CF 增强 | `CompletableFuture<Void> runAsync(Runnable)` |
-| `isInLogCollectContext` | 诊断 | `boolean isInLogCollectContext()` |
-| `diagnosticInfo` | 诊断 | `String diagnosticInfo()` |
-
-**内存安全保障**：所有 `wrap*` 方法均在子线程 `finally` 块中强制清理 `ThreadLocal`，无论任务成功、失败或异常，绝无内存泄漏。
-
----
-
-## 十、安全防护体系
-
-### 10.1 九层纵深防御总览
-
-```
-威胁                   防护层                    状态
-─────────────────────────────────────────────────────
-① 日志注入攻击    →   LogSanitizer            → 默认开启
-② 敏感数据泄露    →   LogMasker               → 默认开启
-③ SQL 注入        →   安全基类                 → 可选继承
-④ MDC 串日志/嵌套 →   栈式上下文管理           → 框架内置
-⑤ 降级文件风险    →   DegradeFileManager       → 框架内置
-⑥ 熔断恢复风暴    →   三状态熔断器             → 框架内置
-⑦ ThreadLocal 泄漏→   全场景 finally 清理      → 框架内置
-⑧ ReDoS 攻击     →   RegexSafetyValidator     → 自定义规则时校验
-⑨ 事务耦合       →   独立事务 Handler          → 可选开启
-```
-
-### 10.2 日志注入防护
-
-攻击者可通过可控输入（如请求参数）注入换行符伪造日志条目：
-
-```java
-// 攻击载荷：username = "admin\n2026-01-01 INFO 支付成功 amount=0"
-log.info("用户登录: {}", username);
-// 未防护 → 日志中出现一条伪造的"支付成功"记录
-// 已防护 → 换行符被替换为空格，伪造无效
-```
-
-**默认净化器** `DefaultLogSanitizer` 过滤：
-
-| 威胁字符 | 处理方式 |
-|---------|---------|
-| `\r` `\n` | 替换为空格 |
-| HTML 标签 `<script>` 等 | 删除 |
-| ANSI 转义码 `\x1B[...m` | 删除 |
-| 其他控制字符 `\x00`-`\x08` `\x0B` 等 | 删除 |
-
-**自定义扩展**：
-
-```java
-@Component
-public class FinanceLogSanitizer extends DefaultLogSanitizer {
-    private static final Pattern SQL_KW =
-        Pattern.compile("(?i)(DROP|DELETE|UPDATE|INSERT|ALTER)\\s");
-    
-    @Override
-    public String sanitize(String raw) {
-        String result = super.sanitize(raw);
-        return SQL_KW.matcher(result).replaceAll("[SQL_FILTERED] ");
-    }
-}
-
-// 使用
-@LogCollect(sanitizer = FinanceLogSanitizer.class)
-```
-
-### 10.3 敏感数据脱敏
-
-**默认脱敏器** `DefaultLogMasker` 内置规则：
-
-| 数据类型 | 示例 | 脱敏结果 |
-|---------|------|---------|
-| 手机号 | `13812345678` | `138****5678` |
-| 身份证号 | `110105199001011234` | `110***********1234` |
-| 银行卡号 | `6222021234567890123` | `6222****0123` |
-| 邮箱 | `zhangsan@example.com` | `zha***@example.com` |
-
-**自定义扩展**：
-
-```java
-@Component
-public class BusinessLogMasker extends DefaultLogMasker {
-    public BusinessLogMasker() {
-        super();
-        addRule(
-            Pattern.compile("(?i)(password|pwd|secret)[=:\"\\s]+\\S+"),
-            m -> m.group().replaceAll("([=:\"\\s]+)\\S+", "$1******")
-        );
-    }
-}
-```
-
-> **ReDoS 防护**：通过配置中心动态添加的正则表达式，框架会使用 `RegexSafetyValidator` 进行复杂度检查和超时测试（100ms），拒绝不安全的正则。
-
-### 10.4 SQL 注入防护
-
-框架提供安全基类，强制使用参数化查询：
-
-```java
-@Component
-public class TaskLogHandler extends AbstractJdbcLogCollectHandler {
-
-    @Override
-    protected String tableName() {
-        return "task_log_detail";
-    }
-
-    @Override
-    protected Map<String, Object> buildInsertParams(
-            String traceId, String content, String level, LocalDateTime time) {
-        Map<String, Object> params = new LinkedHashMap<>();
-        params.put("trace_id", traceId);
-        params.put("content", content);
-        params.put("level", level);
-        params.put("created_at", time);
-        return params;
-    }
-}
-```
-
-### 10.5 降级文件安全
-
-| 防护项 | 措施 |
-|--------|------|
-| 路径遍历 | traceId 由框架内部 `UUID.randomUUID()` 生成，仅含十六进制和短横线，不接受外部输入 |
-| 权限控制 | Linux/Mac：`rw-------` (600)；Windows：ACL 限制仅 owner 读写 |
-| 磁盘耗尽 | 总大小上限（默认 500MB） + TTL 自动清理（默认 90 天） + 磁盘可用空间 < 100MB 时停止写入 |
-| 数据泄露 | 降级文件同样经过 Sanitizer + Masker 处理；可选 AES-256-GCM 加密 |
-| 密钥管理 | 加密密钥来源优先级：KMS > 环境变量 `LOGCOLLECT_DEGRADE_FILE_KEY` > Spring Vault > 配置文件（仅开发环境） |
-
-### 10.6 事务隔离
-
-默认情况下，`handler.after()` 在业务方法的同一事务中执行。如果业务事务回滚，日志记录也会回滚。
-
-```java
-// 启用独立事务：日志操作在 REQUIRES_NEW 事务中执行
-@LogCollect(transactionIsolation = true)
-public void criticalOperation() { ... }
-```
-
----
-
-## 十一、熔断降级机制
-
-### 11.1 四层分层降级
-
-```
-第一层：流量削峰
-  缓冲区/异步队列满量 → 丢弃 DEBUG/INFO，保留 WARN/ERROR
-
-第二层：三状态熔断
-  CLOSED ──连续失败≥阈值──→ OPEN ──探活成功──→ HALF_OPEN ──连续成功──→ CLOSED
-                             ↑                      │
-                             └──────探活失败──────────┘
-                                   （间隔×2，上限 300s，±20% 随机抖动）
-
-第三层：兜底存储
-  FILE           → 安全文件（UUID 名 + 权限 600 + 空间上限 + TTL 90天 + 可选加密）
-  LIMITED_MEMORY → 固定长度内存队列
-  DISCARD_NON_ERROR → 仅保留 ERROR 级日志
-
-第四层：终极兜底
-  兜底存储也失败 → 丢弃日志，绝不阻塞主业务
-```
-
-### 11.2 三状态熔断器详解
-
-```
-┌──────────┐   连续失败≥阈值    ┌──────────┐
-│  CLOSED  │ ──────────────→   │   OPEN   │
-│ (正常写入)│                    │ (熔断中)  │
-│          │ ←────────────────  │          │
-└──────────┘  半开全部成功       └────┬─────┘
-      ↑                              │
-      │                   探活间隔到达 │
-      │                              ↓
-      │                        ┌───────────┐
-      │    连续N次成功          │ HALF_OPEN  │
-      └────────────────────── │ (半开探测)  │
-                               └──────┬─────┘
-                                      │
-                                 探测失败
-                                      │
-                                      ↓
-                              回到 OPEN + 间隔×2
-                              (指数退避 + ±20% 随机抖动防惊群)
-```
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `degradeFailThreshold` | 5 | 滑动窗口内连续失败达到此值触发熔断 |
-| `recoverIntervalSeconds` | 30 | 初始探活间隔 |
-| `recoverMaxIntervalSeconds` | 300 | 指数退避上限 |
-| `halfOpenPassCount` | 3 | 半开状态放行的请求数 |
-| `halfOpenSuccessThreshold` | 3 | 半开连续成功多少次切回 CLOSED |
-
-**手动重置**：通过 [Actuator 管理端点](#十四actuator-管理端点) 手动重置熔断器。
-
----
-
-## 十二、配置中心集成
-
-### 12.1 架构
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  LogCollectConfigResolver（四级配置合并引擎）                              │
-│  框架默认 ← @LogCollect注解 ← 配置中心方法级 ← 配置中心全局              │
-└────────────────────────────────┬─────────────────────────────────────────┘
-                                 ↓
-┌──────────┬──────────┬──────────────────┬───────────────────┐
-│ Nacos    │ Apollo   │ Spring Cloud     │ 预留 SPI 扩展      │
-│ 适配器   │ 适配器    │ Config 适配器     │ • Consul / Etcd   │
-│ order=100│ order=100│ order=200        │ • 自定义实现        │
-└──────────┴──────────┴──────────────────┴───────────────────┘
-
-条件装配：@ConditionalOnClass 自动发现配置中心依赖
-平滑切换：Spring Environment 抽象 + @Primary 优先级
-变更监听：配置变更 → 缓存清除 → 下次调用即时生效
-本地缓存：配置中心不可用时，使用最后一次有效配置（默认保留 7 天）
-```
-
-### 12.2 接入方式
-
-**Nacos**
+### 12.1 依赖
 
 ```xml
 <dependency>
-    <groupId>com.logcollect</groupId>
-    <artifactId>logcollect-config-nacos</artifactId>
+  <groupId>com.logcollect</groupId>
+  <artifactId>logcollect-spring-boot-starter</artifactId>
+  <version>1.0.0</version>
 </dependency>
 ```
 
-```yaml
-logcollect:
-  config:
-    nacos:
-      enabled: true
-      data-id: logcollect-config
-      group: DEFAULT_GROUP
-```
-
-**Apollo**
-
-```xml
-<dependency>
-    <groupId>com.logcollect</groupId>
-    <artifactId>logcollect-config-apollo</artifactId>
-</dependency>
-```
-
-```yaml
-logcollect:
-  config:
-    apollo:
-      enabled: true
-      namespace: logcollect
-```
-
-### 12.3 配置 Key 命名规范
-
-```properties
-# ========== 全局配置 ==========
-logcollect.global.enabled=true
-logcollect.global.async=true
-logcollect.global.level=INFO
-logcollect.global.collect-mode=AGGREGATE
-logcollect.global.buffer.enabled=true
-logcollect.global.buffer.max-size=100
-logcollect.global.buffer.max-bytes=1MB
-logcollect.global.buffer.total-max-bytes=100MB
-logcollect.global.degrade.enabled=true
-logcollect.global.degrade.fail-threshold=5
-logcollect.global.degrade.storage=FILE
-logcollect.global.degrade.recover-interval-seconds=30
-logcollect.global.degrade.file.max-total-size=500MB
-logcollect.global.degrade.file.ttl-days=90
-logcollect.global.security.sanitize.enabled=true
-logcollect.global.security.mask.enabled=true
-logcollect.global.handler-timeout-ms=5000
-logcollect.global.max-nesting-depth=10
-logcollect.global.metrics.enabled=true
-logcollect.internal.log-level=INFO
-
-# ========== 方法级配置 ==========
-logcollect.methods.com_example_service_OrderService_pay.level=ERROR
-logcollect.methods.com_example_service_OrderService_pay.async=false
-logcollect.methods.com_example_service_OrderService_pay.collect-mode=SINGLE
-logcollect.methods.com_example_job_ReconcileJob_execute.buffer.max-size=500
-```
-
-### 12.4 动态调整示例
-
-```properties
-# 紧急降级：Nacos 推送，立即生效
-logcollect.global.level=ERROR
-
-# 临时关闭脱敏（排查问题时）
-logcollect.global.security.mask.enabled=false
-
-# 切换收集模式
-logcollect.global.collect-mode=SINGLE
-
-# 一键关闭日志收集（紧急预案）
-logcollect.global.enabled=false
-```
-
----
-
-## 十三、可观测性
-
-### 13.1 Metrics 指标
-
-框架自动集成 Micrometer，对接 Prometheus / Grafana。
-
-**计数器**
-
-| 指标 | 标签 | 说明 |
-|------|------|------|
-| `logcollect.collected.total` | `level`, `method`, `mode` | 收集的日志总数 |
-| `logcollect.discarded.total` | `reason`, `method` | 丢弃的日志总数。reason: `buffer_full` / `level_filter` / `degrade` / `global_memory_limit` |
-| `logcollect.persisted.total` | `method`, `mode` | 入库成功总数 |
-| `logcollect.persist.failed.total` | `method` | 入库失败总数 |
-| `logcollect.flush.total` | `method`, `mode`, `trigger` | flush 次数。trigger: `threshold` / `final` |
-| `logcollect.degrade.triggered.total` | `type`, `method` | 降级触发次数 |
-| `logcollect.circuit.recovered.total` | `method` | 熔断恢复次数 |
-| `logcollect.security.sanitize.hits.total` | `method` | 净化器命中次数 |
-| `logcollect.security.mask.hits.total` | `method` | 脱敏器命中次数 |
-| `logcollect.config.refresh.total` | `source` | 配置刷新次数 |
-| `logcollect.handler.timeout.total` | `method` | Handler 超时次数 |
-
-**仪表盘（实时值）**
-
-| 指标 | 标签 | 说明 |
-|------|------|------|
-| `logcollect.buffer.utilization` | `method` | 缓冲区使用率 (0.0~1.0) |
-| `logcollect.buffer.global.utilization` | - | 全局缓冲区使用率 |
-| `logcollect.circuit.state` | `method` | 熔断器状态 (0=CLOSED, 1=OPEN, 2=HALF_OPEN) |
-| `logcollect.degrade.file.total.bytes` | - | 降级文件总大小 |
-| `logcollect.degrade.file.count` | - | 降级文件数量 |
-| `logcollect.active.collections` | - | 当前活跃的 @LogCollect 数 |
-
-**计时器**（含 P50 / P95 / P99）
-
-| 指标 | 标签 | 说明 |
-|------|------|------|
-| `logcollect.persist.duration` | `method`, `mode` | 单批次入库耗时 |
-| `logcollect.security.pipeline.duration` | `method` | 安全流水线耗时 |
-| `logcollect.handler.duration` | `method`, `phase` | Handler 执行耗时 |
-
-### 13.2 健康检查
-
-```
-GET /actuator/health/logcollect
-```
-
-```json
-{
-  "status": "UP",
-  "details": {
-    "circuitBreakers": {
-      "com.example.OrderService#placeOrder": "CLOSED",
-      "com.example.ReconcileJob#execute": "CLOSED"
-    },
-    "activeCollections": 3,
-    "totalCollected": 258420,
-    "totalPersisted": 258388,
-    "totalDiscarded": 32,
-    "totalFlushes": 2584,
-    "bufferUtilization": {
-      "com.example.ReconcileJob#execute": 0.23
-    },
-    "globalBufferUtilization": "2.23%",
-    "collectModes": {
-      "com.example.OrderService#placeOrder": "SINGLE",
-      "com.example.ReconcileJob#execute": "AGGREGATE"
-    },
-    "degradeFileCount": 0,
-    "degradeFileTotalSize": "0 B",
-    "degradeFileDiskFreeSpace": "50.00 GB",
-    "sanitizeHits": 12,
-    "maskHits": 1847,
-    "lastPersistDurationP99": "4.2ms",
-    "configSources": [
-      "nacos(order=100,available=true)"
-    ],
-    "logFramework": "Log4j2 (AsyncLogger + Disruptor)",
-    "contextPropagation": true,
-    "springBootVersion": "2.7.18"
-  }
-}
-```
-
-状态判定规则：
-
-| 状态 | 条件 |
-|------|------|
-| `UP` | 所有熔断器 CLOSED |
-| `DEGRADED` | 有熔断器处于 HALF_OPEN |
-| `DOWN` | 有熔断器处于 OPEN |
-
-### 13.3 Prometheus 告警规则示例
-
-```yaml
-groups:
-  - name: logcollect
-    rules:
-      - alert: LogCollectCircuitBreakerOpen
-        expr: logcollect_circuit_state > 0
-        for: 1m
-        labels:
-          severity: warning
-        annotations:
-          summary: "LogCollect 熔断器打开: {{ $labels.method }}"
-
-      - alert: LogCollectHighDiscardRate
-        expr: rate(logcollect_discarded_total[5m]) > 10
-        for: 2m
-        labels:
-          severity: warning
-
-      - alert: LogCollectBufferHighUtilization
-        expr: logcollect_buffer_global_utilization > 0.8
-        for: 3m
-        labels:
-          severity: warning
-
-      - alert: LogCollectDegradeDiskLow
-        expr: logcollect_degrade_file_disk_free_bytes < 1073741824
-        for: 5m
-        labels:
-          severity: critical
-```
-
----
-
-## 十四、Actuator 管理端点
-
-框架集成 Spring Boot Actuator，提供运行时管理能力。
-
-> **前置条件**：项目引入 `spring-boot-starter-actuator`，并暴露 `logcollect` 端点：
-> ```yaml
-> management:
->   endpoints:
->     web:
->       exposure:
->         include: health,logcollect
-> ```
-
-### 14.1 端点总览
-
-| HTTP 方法 | 路径 | 说明 |
-|-----------|------|------|
-| `GET` | `/actuator/logcollect/status` | 查看框架全局运行时状态 |
-| `POST` | `/actuator/logcollect/circuitBreakerReset` | 重置熔断器 |
-| `POST` | `/actuator/logcollect/refreshConfig` | 手动刷新配置 |
-| `POST` | `/actuator/logcollect/cleanupDegradeFiles` | 清理降级文件 |
-| `PUT` | `/actuator/logcollect/enabled` | 全局开关 |
-
-### 14.2 查看全局状态
-
-```
-GET /actuator/logcollect/status
-```
-
-**响应示例**
-
-```json
-{
-  "enabled": true,
-  "circuitBreakers": {
-    "com.example.service.OrderService#placeOrder": {
-      "state": "CLOSED",
-      "consecutiveFailures": 0,
-      "lastFailureTime": "never",
-      "currentRecoverIntervalMs": 30000
-    },
-    "com.example.job.ReconcileJob#execute": {
-      "state": "OPEN",
-      "consecutiveFailures": 7,
-      "lastFailureTime": "2026-02-28T07:30:12.456Z",
-      "currentRecoverIntervalMs": 60000
-    }
-  },
-  "registeredMethods": {
-    "com.example.service.OrderService#placeOrder": {
-      "collectMode": "SINGLE"
-    },
-    "com.example.job.ReconcileJob#execute": {
-      "collectMode": "AGGREGATE"
-    }
-  },
-  "globalBuffer": {
-    "totalUsedBytes": 2341876,
-    "maxTotalBytes": 104857600,
-    "utilization": "2.23%"
-  },
-  "degradeFiles": {
-    "fileCount": 3,
-    "totalSizeBytes": 156234,
-    "totalSizeHuman": "152.6 KB",
-    "maxTotalSizeBytes": 524288000,
-    "ttlDays": 90,
-    "diskFreeSpaceBytes": 53687091200,
-    "diskFreeSpaceHuman": "50.00 GB",
-    "baseDir": "/app/logs/logCollect"
-  },
-  "configSources": [
-    { "type": "nacos", "order": 100, "available": true },
-    { "type": "spring-cloud-config", "order": 200, "available": true }
-  ],
-  "configCacheSize": 2,
-  "lastConfigRefreshTime": "2026-02-28T07:25:00Z"
-}
-```
-
-### 14.3 重置熔断器
-
-**重置指定方法的熔断器**
-
-```
-POST /actuator/logcollect/circuitBreakerReset?method=com.example.job.ReconcileJob#execute
-```
-
-```json
-{
-  "method": "com.example.job.ReconcileJob#execute",
-  "previousState": "OPEN",
-  "currentState": "CLOSED",
-  "resetTime": "2026-02-28T07:35:22.123Z"
-}
-```
-
-**重置所有熔断器**（不传 `method` 参数）
-
-```
-POST /actuator/logcollect/circuitBreakerReset
-```
-
-```json
-{
-  "resetCount": 2,
-  "details": [
-    {
-      "method": "com.example.service.OrderService#placeOrder",
-      "previousState": "CLOSED",
-      "currentState": "CLOSED"
-    },
-    {
-      "method": "com.example.job.ReconcileJob#execute",
-      "previousState": "OPEN",
-      "currentState": "CLOSED"
-    }
-  ],
-  "resetTime": "2026-02-28T07:35:22.123Z"
-}
-```
-
-**方法不存在时**（HTTP 404）
-
-```json
-{
-  "error": "Method not found: com.example.Foo#bar",
-  "registeredMethods": [
-    "com.example.service.OrderService#placeOrder",
-    "com.example.job.ReconcileJob#execute"
-  ]
-}
-```
-
-### 14.4 手动刷新配置
-
-```
-POST /actuator/logcollect/refreshConfig
-```
-
-```json
-{
-  "configSources": [
-    { "type": "nacos", "order": 100, "status": "refreshed" },
-    { "type": "spring-cloud-config", "order": 200, "status": "refreshed" }
-  ],
-  "cacheClearedCount": 2,
-  "localCacheSaved": true,
-  "refreshTime": "2026-02-28T07:36:00Z"
-}
-```
-
-> **频率限制**：最小间隔 10 秒，过于频繁的请求返回 HTTP 429。
-
-### 14.5 清理降级文件
-
-**常规清理（仅删除过期文件）**
-
-```
-POST /actuator/logcollect/cleanupDegradeFiles
-```
-
-**强制清理（删除所有降级文件，紧急释放磁盘）**
-
-```
-POST /actuator/logcollect/cleanupDegradeFiles?force=true
-```
-
-> **频率限制**：`force=true` 最小间隔 60 秒。
-
-### 14.6 全局开关
-
-```
-PUT /actuator/logcollect/enabled?value=false
-```
-
-```json
-{
-  "previousEnabled": true,
-  "currentEnabled": false,
-  "updateTime": "2026-02-28T07:38:00Z"
-}
-```
-
-关闭后，所有 `@LogCollect` 注解直接跳过，业务方法正常执行，**零开销**。
-
-> **这是最重要的紧急预案入口**。如果框架出现任何影响业务的问题，通过此端点或配置中心推送 `logcollect.global.enabled=false` 可一键关闭。
-
-### 14.7 安全配置建议
-
-```yaml
-management:
-  server:
-    port: 8081                # 管理端口与业务端口分离
-    address: 127.0.0.1        # 仅本机/内网访问
-  endpoints:
-    web:
-      exposure:
-        include: health,logcollect
-  endpoint:
-    logcollect:
-      enabled: true
-```
-
-所有写操作（POST / PUT）均通过 `LogCollectInternalLogger` 记录审计日志。
-
----
-
-## 十五、项目结构
-
-```
-logcollect-parent/
-│
-├── logcollect-bom/                            BOM：版本统一管理
-│
-├── logcollect-api/                            API 层：零外部依赖
-│   ├── annotation/                            核心注解 + CollectMode 枚举
-│   ├── handler/                               LogCollectHandler 接口
-│   ├── model/                                 LogCollectContext / LogEntry / AggregatedLog
-│   ├── sanitizer/                             净化器接口
-│   ├── masker/                                脱敏器接口
-│   ├── config/                                配置源接口
-│   └── enums/                                 枚举
-│
-├── logcollect-core/                           核心逻辑
-│   ├── context/                               栈式上下文管理 + 工具类
-│   ├── security/                              净化器、脱敏器、ReDoS 校验
-│   ├── buffer/                                SingleModeBuffer / AggregateModeBuffer / GlobalMemoryGuard
-│   ├── circuitbreaker/                        三状态熔断器 + 注册表
-│   ├── degrade/                               降级文件管理 + 加密 + 密钥
-│   ├── config/                                配置合并引擎 + 本地缓存
-│   ├── pipeline/                              安全流水线编排
-│   ├── mdc/                                   统一 MDC 适配
-│   └── internal/                              内部日志
-│
-├── logcollect-logback-adapter/                Logback 适配器
-├── logcollect-log4j2-adapter/                 Log4j2 适配器
-│
-├── logcollect-spring-boot-autoconfigure/      自动装配
-│   ├── aop/                                   AOP 切面（含模式分发逻辑）
-│   ├── async/                                 TaskDecorator + AsyncConfigurer + BPP
-│   ├── reactive/                              Reactor Context Propagation
-│   ├── metrics/                               Metrics + HealthIndicator
-│   ├── management/                            Actuator 管理端点
-│   ├── jdbc/                                  安全基类 + 事务隔离
-│   └── servlet/                               Servlet AsyncContext
-│
-├── logcollect-spring-boot-starter/            Starter（纯 POM，传递所有依赖）
-│
-├── logcollect-config-nacos/                   Nacos 配置中心适配
-├── logcollect-config-apollo/                  Apollo 配置中心适配
-├── logcollect-config-spring-cloud/            Spring Cloud Config 适配
-│
-├── logcollect-test-support/                   测试支持工具
-│   ├── InMemoryLogCollectHandler              内存测试 Handler
-│   ├── LogCollectTestUtils                    测试工具
-│   └── LogCollectAssertions                   断言工具
-│
-└── logcollect-samples/                        示例工程
-    ├── logcollect-sample-boot27-logback/      Boot 2.7 + Logback
-    ├── logcollect-sample-boot27-log4j2/       Boot 2.7 + Log4j2
-    ├── logcollect-sample-boot3/               Boot 3.x
-    ├── logcollect-sample-webflux/             WebFlux 响应式
-    ├── logcollect-sample-all-async/           全异步场景覆盖
-    └── logcollect-sample-nacos/               Nacos 配置中心
-```
-
-### 依赖范围控制原则
-
-| 模块 | 外部依赖 | scope |
-|------|---------|-------|
-| `logcollect-api` | **无任何外部依赖** | - |
-| `logcollect-core` | SLF4J, Context Propagation, Micrometer, Spring Context | `compile + optional` |
-| `logcollect-logback-adapter` | Logback Classic | `compile + optional` |
-| `logcollect-log4j2-adapter` | Log4j2 Core | `compile + optional` |
-| `logcollect-spring-boot-starter` | **唯一传递所有必要依赖的模块** | `compile` |
-| `logcollect-config-nacos` | Nacos Client | `compile + optional` |
-
-> 用户仅需引入 `logcollect-spring-boot-starter` + 按需引入 `logcollect-config-*`。
-
----
-
-## 十六、生产部署指南
-
-### 16.1 灰度发布策略
-
-```
-第一阶段（1 周）：非核心定时任务
-  • 选择 1~2 个低频定时任务，使用默认聚合模式
-  • 默认配置，观察 Metrics
-  • 重点监控：缓冲区水位、入库耗时、内存占用
-
-第二阶段（2 周）：核心批处理任务
-  • 推广到对账、数据同步等核心批处理
-  • 保守配置：maxBufferSize=50, maxBufferBytes=512KB
-  • 重点监控：熔断状态、降级次数、日志丢弃数
-
-第三阶段（1 周）：在线核心接口
-  • 支付/订单等：async=false, level=WARN, collectMode=SINGLE
-  • 重点监控：Handler 超时次数、业务接口 RT 变化
-  • 压测验证：对比开启/关闭框架的性能差异
-
-第四阶段：全面推广
-  • 建立监控大盘
-  • 配置告警规则
-  • 编写应急预案
-```
-
-### 16.2 推荐初始配置
-
-```yaml
-logcollect:
-  global:
-    enabled: true
-    async: true
-    level: INFO
-    collect-mode: AGGREGATE
-    buffer:
-      enabled: true
-      max-size: 50
-      max-bytes: 512KB
-      total-max-bytes: 50MB
-    degrade:
-      enabled: true
-      fail-threshold: 10
-      storage: FILE
-      file:
-        max-total-size: 500MB
-        ttl-days: 90
-    security:
-      sanitize:
-        enabled: true
-      mask:
-        enabled: true
-    handler-timeout-ms: 5000
-    max-nesting-depth: 10
-    metrics:
-      enabled: true
-  internal:
-    log-level: INFO
-  config:
-    local-cache:
-      enabled: true
-```
-
-### 16.3 监控重点
-
-| 指标 | 告警阈值 | 说明 |
-|------|---------|------|
-| `logcollect_circuit_state > 0` | 持续 1 分钟 | 有熔断器打开 |
-| `rate(logcollect_discarded_total[5m]) > 10` | 持续 2 分钟 | 日志大量丢弃 |
-| `logcollect_buffer_global_utilization > 0.8` | 持续 3 分钟 | 全局缓冲区即将满 |
-| `logcollect_degrade_file_disk_free_bytes < 1GB` | 持续 5 分钟 | 降级文件磁盘空间不足 |
-| `logcollect_handler_timeout_total` 增长 | - | Handler 执行超时 |
-
-### 16.4 应急预案
-
-| 故障场景 | 应急操作 |
-|---------|---------|
-| **框架影响业务 RT** | ① `PUT /actuator/logcollect/enabled?value=false` 一键关闭<br>② 或推送 `logcollect.global.enabled=false` |
-| **数据库被日志打垮** | ① 推送 `logcollect.global.level=ERROR` 仅收集 ERROR<br>② 切换为聚合模式减少 DB 操作 |
-| **内存持续增长** | ① 降低 `buffer.total-max-bytes`<br>② 降低 `buffer.max-size` / `buffer.max-bytes`<br>③ 紧急关闭 `enabled=false` |
-| **磁盘被降级文件占满** | ① `POST /actuator/logcollect/cleanupDegradeFiles?force=true`<br>② 切换 `degrade.storage=DISCARD_NON_ERROR` |
-| **配置中心全部宕机** | 框架自动使用本地缓存（最后一次有效配置）<br>本地缓存也无 → 使用注解值/框架默认值 |
-| **熔断器误触发** | `POST /actuator/logcollect/circuitBreakerReset?method=xxx` |
-
----
-
-## 十七、常见问题
-
-### Q1: 框架是否会影响业务方法的执行和返回值？
-
-**绝不影响。** 框架的核心设计原则是「异常全隔离」，所有内部操作均在 `try-catch(Throwable)` 中执行。任何阶段的失败只会记录框架内部日志，绝不会向业务方法抛出异常。
-
-### Q2: 该选择 SINGLE 还是 AGGREGATE 模式？
-
-| 场景 | 推荐模式 | 理由 |
-|------|---------|------|
-| 定时任务日志聚合到一条记录 | **AGGREGATE**（默认） | 一次 UPDATE，DB 操作最少 |
-| 数据导入逐条追溯 | **SINGLE** | 需要逐条入明细表 |
-| 支付接口审计 | **AGGREGATE** | 日志量小，一次写入即可 |
-| 高并发秒杀 | **AGGREGATE**（默认） | 最少 DB 交互，最小 RT 影响 |
-| 需要按条重试失败日志 | **SINGLE** | 逐条重试更精准 |
-
-**不确定时使用默认值（AGGREGATE），覆盖绝大多数场景。**
-
-### Q3: 聚合模式下 flushAggregatedLog 会被调用几次？
-
-取决于日志量与缓冲区阈值的比值。如果一次方法调用产生的日志总量未超过 `maxBufferSize`，则仅在方法结束时调用一次（`finalFlush=true`）。如果超过阈值，则中途每达到阈值触发一次（`finalFlush=false`），方法结束时再触发最后一次（`finalFlush=true`）。
-
-```
-日志量 = 250 条, maxBufferSize = 100
-
-第1次 flush: 100条, finalFlush=false  (中途阈值触发)
-第2次 flush: 100条, finalFlush=false  (中途阈值触发)
-第3次 flush:  50条, finalFlush=true   (方法结束)
-```
-
-### Q4: LogCollectContext 在各个 Handler 方法中能获取什么信息？
-
-| 信息 | `before()` | `appendLog()` / `flushAggregatedLog()` | `after()` |
-|------|-----------|---------------------------------------|----------|
-| traceId / methodName / methodArgs | ✅ | ✅ | ✅ |
-| businessId（用户设置的） | ❌（尚未设置）→ 设置 | ✅ | ✅ |
-| attributes（用户设置的） | ❌（尚未设置）→ 设置 | ✅ | ✅ |
-| totalCollectedCount | 0 | 实时累加中 | ✅ 最终值 |
-| flushCount | 0 | 实时累加中 | ✅ 最终值 |
-| returnValue | ❌ | ❌ | ✅ |
-| error | ❌ | ❌ | ✅ |
-| elapsedMillis | ✅（从方法开始算） | ✅ | ✅ |
-
-### Q5: 自调用（`this.method()`）为什么不生效？
-
-这是 Spring AOP 的固有限制。Spring AOP 基于代理模式，同一类内部的方法调用不经过代理，因此 `@LogCollect` 注解不生效。
-
-**解决方案**：将需要独立收集日志的方法放到不同的 Spring Bean 中。
-
-### Q6: 子线程日志没有被收集怎么排查？
-
-1. 使用诊断工具：
-   ```java
-   log.info("上下文状态: {}", LogCollectContextUtils.diagnosticInfo());
-   ```
-
-2. 检查线程类型：
-   - Spring 管理的线程池：自动传播，无需操作
-   - 手动创建的线程池：需要 `LogCollectContextUtils.wrapExecutorService()` 包装
-   - `new Thread()`：需要 `LogCollectContextUtils.wrapRunnable()` 包装
-
-3. 检查框架内部日志：将 `logcollect.internal.log-level` 设为 `DEBUG` 查看详细的上下文传播日志。
-
-### Q7: 框架的线程安全如何保障？
-
-| 组件 | 线程安全策略 |
-|------|------------|
-| `LogCollectContext` | 不可变字段 `final` + `volatile` 可变状态 + `AtomicInteger`/`AtomicLong` 计数器 + `ConcurrentHashMap` 属性 |
-| `SingleModeBuffer` / `AggregateModeBuffer` | `ConcurrentLinkedQueue` + `AtomicInteger`/`AtomicLong` + CAS flush 互斥 |
-| `CircuitBreaker` | `AtomicReference<State>` + CAS 操作 |
-| 上下文栈 | `ThreadLocal<Deque>` 线程隔离 |
-| 子线程快照 | 浅拷贝栈结构，元素引用共享但栈操作独立 |
-| 脱敏规则列表 | `CopyOnWriteArrayList` |
-| 配置缓存 | `ConcurrentHashMap` |
-
-### Q8: 如何在测试中使用？
-
-```xml
-<dependency>
-    <groupId>com.logcollect</groupId>
-    <artifactId>logcollect-test-support</artifactId>
-    <scope>test</scope>
-</dependency>
-```
+### 12.2 最小 Handler
 
 ```java
-@SpringBootTest
-class OrderServiceTest {
-
-    @Autowired
-    private InMemoryLogCollectHandler testHandler;
-
-    @Autowired
-    private OrderService orderService;
-
-    @Test
-    void testCreateOrder() {
-        orderService.createOrder(new OrderRequest());
-
-        // 验证日志被收集
-        List<LogEntry> logs = testHandler.getAllLogs();
-        assertFalse(logs.isEmpty());
-
-        // 验证敏感数据已脱敏
-        LogCollectAssertions.assertMasked(testHandler, traceId, "13812345678");
-
-        // 验证无上下文泄漏
-        LogCollectAssertions.assertNoContextLeak();
+@Component
+public class DemoHandler implements LogCollectHandler {
+    @Override
+    public void flushAggregatedLog(LogCollectContext context, AggregatedLog aggregatedLog) {
+        // 持久化 aggregatedLog.getContent()
     }
 }
 ```
 
-### Q9: 非 `@LogCollect` 方法里调用静态访问器会不会报错？
+### 12.3 注解使用
 
-不会。静态访问器全部按“静默安全”设计：
-
-| 调用类型 | 非收集范围内行为 |
-|----------|------------------|
-| 读操作（如 `getCurrentTraceId` / `getCurrentAttribute`） | 返回 `null`（计数返回 `0`，布尔返回 `false`） |
-| 写操作（如 `setCurrentBusinessId` / `setCurrentAttribute`） | 静默忽略，不抛异常 |
-| `current()` | 返回 `null` |
-
----
-
-## 十八、开发注意事项
-
-### ⚠️ 必须遵守
-
-| 规则 | 原因 | 违反后果 |
-|------|------|---------|
-| **Handler 中不要启动未包装的异步线程** | 框架只能跟踪通过工具类包装的子线程 | 未包装的子线程日志不会被收集 |
-| **不要在 Handler 中执行耗时操作** | Handler 在 AOP 切面中执行（含超时保护） | 超时后 Handler 被跳过，日志可能不完整 |
-| **不要在 Handler 中抛出 RuntimeException** | 框架会 catch 但会记录告警 | 日志收集流程被跳过 |
-| **使用 `AbstractJdbcLogCollectHandler` 基类** | 强制参数化查询 | 自行实现可能存在 SQL 注入 |
-| **生产环境启用 `transactionIsolation`（核心业务）** | 防止业务回滚导致日志丢失 | 核心操作审计日志随业务回滚丢失 |
-| **SINGLE 模式须实现 `appendLog`，AGGREGATE 模式须实现 `flushAggregatedLog`** | 两种模式走不同方法 | 运行时抛 UnsupportedOperationException |
-| **`LogCollectContext` attribute 不要存放超大对象** | attribute 生命周期等同于整次收集周期 | 内存占用抬高，可能触发 GC 压力 |
-| **子线程读取静态访问器前确保上下文已传播** | 未包装线程拿不到当前上下文 | 子线程中读到 `null`，日志与业务参数关联失败 |
-
-### 💡 最佳实践
-
-| 实践 | 说明 |
-|------|------|
-| 先灰度再推广 | 在非核心任务上验证 1~2 周后再推广到核心接口 |
-| 保守的初始配置 | `maxBufferSize=50`, `maxBufferBytes=512KB`, `degradeFailThreshold=10` |
-| 大批量任务用聚合模式 | 万级日志聚合，DB 操作减少 99% |
-| 明细追溯用单条模式 | 需逐条入库、逐条查询的场景 |
-| 利用 context.setAttribute() | 跨阶段传递计算结果，避免外部变量 |
-| 建立监控大盘 | 重点关注：熔断状态、缓冲区水位、日志丢弃数 |
-| 准备紧急开关 | 配置中心推送 `logcollect.global.enabled=false` 或 Actuator 端点 |
-
-### 🔧 框架内部日志排查
-
-框架使用独立的 Logger `com.logcollect.internal`，不会被 `@LogCollect` 拦截。
-
-```yaml
-logcollect:
-  internal:
-    log-level: DEBUG
+```java
+@LogCollect(handler = DemoHandler.class)
+public void runJob() {
+    // your business logic
+}
 ```
 
-### 📐 向后兼容承诺
-
-- API 模块遵循语义化版本，**主版本内不做破坏性变更**
-- `LogCollectHandler` 新增方法提供 `default` 实现，老版本实现类无需修改
-- 注解新增参数有默认值，旧代码无需修改
-- 废弃 API 标注 `@Deprecated`，至少保留 2 个次版本后才移除
-- CI 矩阵覆盖 JDK 8/11/17/21 × Boot 2.7/3.0/3.2/3.4 × Logback/Log4j2
-
 ---
 
-## 十九、框架定位与生态关系
+## 13. 工程结构（核心）
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                    推荐生产架构：分层互补                          │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐    │
-│  │ @LogCollect（本框架）                                     │    │
-│  │ 定位：业务日志聚合的最后一公里                              │    │
-│  │ 职责：核心业务操作日志 → 精确聚合 → 业务数据库              │    │
-│  │ 场景：对账任务 / 支付审计 / 订单追踪 / 数据导入             │    │
-│  └────────────────────────────┬─────────────────────────────┘    │
-│                               │                                  │
-│  ┌────────────────────────────▼─────────────────────────────┐    │
-│  │ ELK / Loki（通用日志平台）                                │    │
-│  │ 职责：全量应用日志 → 全文检索 → 监控告警                   │    │
-│  └────────────────────────────┬─────────────────────────────┘    │
-│                               │                                  │
-│  ┌────────────────────────────▼─────────────────────────────┐    │
-│  │ SkyWalking / OpenTelemetry（分布式追踪）                   │    │
-│  │ 职责：跨服务链路追踪 → 性能分析                            │    │
-│  └──────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  三者互补，各司其职，可共享 traceId 实现关联查询。                │
-└──────────────────────────────────────────────────────────────────┘
+```text
+logcollect-api
+logcollect-core
+logcollect-logback-adapter
+logcollect-log4j2-adapter
+logcollect-spring-boot-autoconfigure
+logcollect-spring-boot-starter
+logcollect-config-* (nacos / apollo / spring-cloud)
+logcollect-test-support
+logcollect-samples
 ```
 
-### 对比
-
-| 维度 | @LogCollect | ELK | SkyWalking |
-|------|------------|-----|-----------|
-| 接入成本 | ⭐⭐⭐⭐⭐ 一个注解 | ⭐⭐ 集群部署 | ⭐⭐⭐ Agent |
-| 业务绑定 | ⭐⭐⭐⭐⭐ 方法级聚合 | ⭐⭐ 文本搜索 | ⭐⭐⭐ Span 关联 |
-| 分布式追踪 | ⭐ 仅单 JVM | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
-| 全文检索 | ⭐ SQL 查询 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
-| 运维复杂度 | ⭐⭐⭐⭐⭐ 零基础设施 | ⭐ ES 集群 | ⭐⭐⭐ |
-| 降级兜底 | ⭐⭐⭐⭐⭐ 4 层降级 | ⭐⭐⭐ | ⭐⭐⭐ |
-
 ---
 
-## 二十、已知局限性
-
-| 局限 | 说明 | 缓解方案 |
-|------|------|---------|
-| **仅限单 JVM** | 不支持跨服务分布式链路追踪 | 配合 SkyWalking 共享 traceId |
-| **Spring AOP 盲区** | 自调用 / `private` / `static` 方法不生效 | 将方法放到不同 Bean 中 |
-| **存储能力有限** | 关系型数据库无全文检索 | 业务表可同步到 ES 做分析 |
-| **非 Java 不支持** | 纯 Java 方案 | 多语言场景使用 OpenTelemetry |
-| **手动线程池需一行代码** | 非 Spring 管理的线程池需工具类包装 | `LogCollectContextUtils` 极简 API |
-| **GraalVM Native Image** | 重度反射 + 动态代理，暂不支持 | 未来版本通过 GraalVM Metadata 支持 |
-
----
-
-## 二十一、贡献指南
-
-### 构建
+## 14. 构建与验证
 
 ```bash
-# 要求 JDK 8+, Maven 3.8+
-mvn clean install -DskipTests
-
-# 完整测试（JDK 8 环境）
-mvn clean verify
-
-# 指定 Spring Boot 版本测试
-mvn clean verify -Dspring-boot.version=3.2.5
+mvn -DskipTests compile
+mvn test
 ```
-
-### 测试矩阵
-
-```
-JDK:           8 / 11 / 17 / 21
-Spring Boot:   2.7.x / 3.0.x / 3.2.x / 3.4.x
-Log Framework: Logback / Log4j2
-组合:          4 × 4 × 2 = 32 种组合
-```
-
-### 代码规范
-
-- 所有公开 API 提供完整 Javadoc
-- 所有 `catch` 块使用 `catch (Throwable t)` 确保 `Error` 也被捕获
-- 新增接口方法必须提供 `default` 实现
-- 新增注解参数必须有默认值
-- 核心模块测试覆盖率 ≥ 80%
 
 ---
 
-## License
+## 15. 版本说明
 
-Apache License 2.0
+当前 README 对应重构后实现，关键代码可从以下路径直接查看：
+- `logcollect-api/src/main/java/com/logcollect/api/model/LogEntry.java`
+- `logcollect-api/src/main/java/com/logcollect/api/handler/LogCollectHandler.java`
+- `logcollect-api/src/main/java/com/logcollect/api/format/LogLinePatternParser.java`
+- `logcollect-core/src/main/java/com/logcollect/core/pipeline/SecurityPipeline.java`
+- `logcollect-core/src/main/java/com/logcollect/core/format/PatternCleaner.java`
+- `logcollect-logback-adapter/src/main/java/com/logcollect/logback/LogCollectLogbackAppender.java`
+- `logcollect-log4j2-adapter/src/main/java/com/logcollect/log4j2/LogCollectLog4j2Appender.java`
+- `logcollect-spring-boot-autoconfigure/src/main/java/com/logcollect/autoconfigure/ConsolePatternInitializer.java`
+

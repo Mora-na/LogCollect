@@ -42,13 +42,6 @@ public final class LogCollectContextManager {
         return popped;
     }
 
-    /**
-     * 兼容旧接口：忽略 expectedTraceId，仅按栈顶弹出。
-     */
-    public static LogCollectContext pop(String expectedTraceId) {
-        return pop();
-    }
-
     public static LogCollectContext current() {
         Deque<LogCollectContext> stack = CONTEXT_STACK.get();
         return stack.isEmpty() ? null : stack.peek();
@@ -80,8 +73,6 @@ public final class LogCollectContextManager {
         CONTEXT_STACK.remove();
         MDCAdapter.remove(TRACE_ID_KEY);
     }
-
-    // ===== 兼容旧快照接口 =====
 
     public static LogCollectContextSnapshot captureSnapshot() {
         return new LogCollectContextSnapshot(snapshot(), MDCAdapter.getCopyOfContextMap());

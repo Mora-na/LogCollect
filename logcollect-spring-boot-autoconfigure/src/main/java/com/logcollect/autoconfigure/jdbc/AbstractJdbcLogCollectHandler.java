@@ -35,19 +35,7 @@ public abstract class AbstractJdbcLogCollectHandler implements LogCollectHandler
         insertWithParams(tableName(), params);
     }
 
-    /**
-     * 新接口：返回表名。
-     */
-    protected String tableName() {
-        return getTableName();
-    }
-
-    /**
-     * 兼容旧接口。
-     */
-    protected String getTableName() {
-        throw new UnsupportedOperationException("Subclass must implement tableName() or getTableName()");
-    }
+    protected abstract String tableName();
 
     /**
      * 新接口：构建参数。
