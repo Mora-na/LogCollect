@@ -10,12 +10,11 @@ import java.util.ServiceLoader;
 public final class EncryptionKeyResolver {
 
     private static final String ENV_KEY = "LOGCOLLECT_DEGRADE_FILE_KEY";
-    private static final String SYS_PROP_KEY = "logcollect.degrade.file.encrypt-key";
 
     private EncryptionKeyResolver() {
     }
 
-    public static byte[] resolveKey(ApplicationContext applicationContext, String profile) {
+    public static byte[] resolveKey(ApplicationContext applicationContext, String[] activeProfiles) {
         for (KmsKeyProvider provider : ServiceLoader.load(KmsKeyProvider.class)) {
             try {
                 byte[] key = provider.getKey("logcollect-degrade-file");
@@ -40,14 +39,22 @@ public final class EncryptionKeyResolver {
             }
         }
 
-        String configKey = System.getProperty(SYS_PROP_KEY);
-        if ((configKey == null || configKey.isEmpty()) && applicationContext != null) {
-            configKey = applicationContext.getEnvironment().getProperty("logcollect.global.degrade.file.encrypt-key");
-        }
+        String configKey = applicationContext == null
+                ? null
+                : applicationContext.getEnvironment().getProperty("logcollect.global.degrade.file.encrypt-key");
         if (configKey != null && !configKey.isEmpty()) {
-            if (isProductionProfile(profile)) {
-                LogCollectInternalLogger.warn("Encryption key loaded from config file in production environment");
+            if (isProductionProfile(activeProfiles)) {
+                LogCollectInternalLogger.error(
+                        "SECURITY: degrade file encryption key from config is rejected in production profile. "
+                                + "Use KMS/environment variable/Vault instead.");
+                configKey = null;
+            } else {
+                LogCollectInternalLogger.warn(
+                        "Degrade file encryption key loaded from config. Development only, do not use in production.");
             }
+        }
+
+        if (configKey != null && !configKey.isEmpty()) {
             return Base64.getDecoder().decode(configKey);
         }
 
@@ -80,11 +87,19 @@ public final class EncryptionKeyResolver {
         }
     }
 
-    private static boolean isProductionProfile(String profile) {
-        if (profile == null) {
+    private static boolean isProductionProfile(String[] profiles) {
+        if (profiles == null || profiles.length == 0) {
             return false;
         }
-        String p = profile.toLowerCase();
-        return p.contains("prod") || p.contains("production");
+        for (String profile : profiles) {
+            if (profile == null) {
+                continue;
+            }
+            String p = profile.toLowerCase();
+            if (p.contains("prod") || p.contains("production") || p.contains("prd")) {
+                return true;
+            }
+        }
+        return false;
     }
 }

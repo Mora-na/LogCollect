@@ -7,6 +7,7 @@ import java.util.Collection;
 import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -74,6 +75,30 @@ public final class LogCollectContextUtils {
     }
 
     /**
+     * 包装 Consumer，使其在执行时自动恢复父线程上下文。
+     */
+    public static <T> Consumer<T> wrapConsumer(Consumer<T> consumer) {
+        if (consumer == null) {
+            return null;
+        }
+        final Deque<LogCollectContext> snapshot = LogCollectContextManager.snapshot();
+        if (snapshot == null || snapshot.isEmpty()) {
+            return consumer;
+        }
+        return new Consumer<T>() {
+            @Override
+            public void accept(T t) {
+                LogCollectContextManager.restore(snapshot);
+                try {
+                    consumer.accept(t);
+                } finally {
+                    LogCollectContextManager.clear();
+                }
+            }
+        };
+    }
+
+    /**
      * 包装 ExecutorService，使其提交的所有任务自动带上上下文传播。
      *
      * @param executor 原始线程池
@@ -83,10 +108,23 @@ public final class LogCollectContextUtils {
         if (executor == null) {
             return null;
         }
+        if (executor instanceof ScheduledExecutorService) {
+            return wrapScheduledExecutorService((ScheduledExecutorService) executor);
+        }
         if (executor instanceof LogCollectExecutorServiceWrapper) {
             return executor;
         }
         return new LogCollectExecutorServiceWrapper(executor);
+    }
+
+    public static ScheduledExecutorService wrapScheduledExecutorService(ScheduledExecutorService executor) {
+        if (executor == null) {
+            return null;
+        }
+        if (executor instanceof LogCollectScheduledExecutorServiceWrapper) {
+            return executor;
+        }
+        return new LogCollectScheduledExecutorServiceWrapper(executor);
     }
 
     /**

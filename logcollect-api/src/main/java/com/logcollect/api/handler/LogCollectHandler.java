@@ -87,7 +87,14 @@ public interface LogCollectHandler {
     // 过滤
     // =====================================================================
 
-    default boolean shouldCollect(LogCollectContext context, String level, String rawMessage) {
+    /**
+     * 过滤判断。
+     *
+     * @param context 当前上下文
+     * @param level 日志级别
+     * @param messageSummary 消息摘要（已做控制字符清理并截断）
+     */
+    default boolean shouldCollect(LogCollectContext context, String level, String messageSummary) {
         return true;
     }
 

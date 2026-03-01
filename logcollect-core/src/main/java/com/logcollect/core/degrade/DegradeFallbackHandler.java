@@ -1,6 +1,7 @@
 package com.logcollect.core.degrade;
 
 import com.logcollect.api.enums.DegradeStorage;
+import com.logcollect.api.exception.LogCollectDegradeException;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
 import com.logcollect.core.internal.LogCollectInternalLogger;
@@ -29,6 +30,7 @@ public final class DegradeFallbackHandler {
         }
 
         boolean fallbackSuccess = false;
+        Throwable fallbackError = null;
         DegradeStorage storage = config.getDegradeStorage();
         try {
             switch (storage) {
@@ -52,6 +54,7 @@ public final class DegradeFallbackHandler {
                     fallbackSuccess = false;
             }
         } catch (Throwable t) {
+            fallbackError = t;
             LogCollectInternalLogger.warn("Degrade fallback failed", t);
         }
 
@@ -65,6 +68,12 @@ public final class DegradeFallbackHandler {
                         + " reason=" + reason);
                 metricCall(context, "incrementDiscarded",
                         context.getMethodSignature(), "ultimate_discard_blocked");
+                String message = "LogCollect: degrade storage failed, blockWhenDegradeFail=true, method="
+                        + context.getMethodSignature();
+                if (fallbackError == null) {
+                    throw new LogCollectDegradeException(message);
+                }
+                throw new LogCollectDegradeException(message, fallbackError);
             } else {
                 LogCollectInternalLogger.warn("All degrade strategies exhausted, discarding. method={}",
                         context.getMethodSignature());

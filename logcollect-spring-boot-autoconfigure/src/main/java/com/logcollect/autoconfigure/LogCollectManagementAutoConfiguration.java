@@ -2,7 +2,7 @@ package com.logcollect.autoconfigure;
 
 import com.logcollect.api.config.LogCollectConfigSource;
 import com.logcollect.autoconfigure.circuitbreaker.CircuitBreakerRegistry;
-import com.logcollect.autoconfigure.metrics.LogCollectManagementEndpoint;
+import com.logcollect.autoconfigure.management.LogCollectManagementEndpoint;
 import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
 import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.config.LogCollectConfigResolver;

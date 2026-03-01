@@ -6,6 +6,7 @@ import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.classic.spi.ThrowableProxyUtil;
 import ch.qos.logback.core.UnsynchronizedAppenderBase;
 import com.logcollect.api.enums.CollectMode;
+import com.logcollect.api.exception.LogCollectDegradeException;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.masker.LogMasker;
 import com.logcollect.api.model.*;
@@ -18,10 +19,7 @@ import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.pipeline.SecurityPipeline;
-import com.logcollect.core.security.DefaultLogMasker;
-import com.logcollect.core.security.DefaultLogSanitizer;
-import com.logcollect.core.security.SecurityComponentRegistry;
-import com.logcollect.core.security.StringLengthGuard;
+import com.logcollect.core.security.*;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -44,13 +42,14 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
 
     @Override
     protected void append(ILoggingEvent event) {
+        LogCollectContext context = null;
         try {
             Map<String, String> mdc = event.getMDCPropertyMap();
             if (mdc == null || !mdc.containsKey(MDC_KEY)) {
                 return;
             }
 
-            LogCollectContext context = LogCollectContextManager.current();
+            context = LogCollectContextManager.current();
             if (context == null) {
                 return;
             }
@@ -78,7 +77,8 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             }
 
             LogCollectHandler handler = context.getHandler();
-            if (handler != null && !handler.shouldCollect(context, level, rawMessage)) {
+            String messageSummary = QuickSanitizer.summarize(rawMessage, 256);
+            if (handler != null && !handler.shouldCollect(context, level, messageSummary)) {
                 context.incrementDiscardedCount();
                 metricCall(context, "incrementDiscarded", methodKey, "handler_filter");
                 return;
@@ -108,14 +108,12 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
 
             Object buf = context.getBuffer();
             if (config.isUseBuffer() && buf instanceof LogCollectBuffer) {
-                boolean offered = ((LogCollectBuffer) buf).offer(context, entry);
-                if (!offered) {
-                    metricCall(context, "incrementDiscarded", methodKey, "buffer_full");
-                }
+                ((LogCollectBuffer) buf).offer(context, entry);
             } else {
                 handleDirect(context, entry, methodKey);
             }
         } catch (Throwable t) {
+            rethrowDegradeIfNecessary(context, t);
             addError("LogCollect appender error", t);
             LogCollectInternalLogger.error("Logback appender error", t);
         }
@@ -432,5 +430,21 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             return Character.class;
         }
         return type;
+    }
+
+    private void rethrowDegradeIfNecessary(LogCollectContext context, Throwable t) {
+        if (!(t instanceof LogCollectDegradeException) || context == null || context.getConfig() == null) {
+            return;
+        }
+        if (!context.getConfig().isBlockWhenDegradeFail()) {
+            return;
+        }
+        if (t instanceof RuntimeException) {
+            throw (RuntimeException) t;
+        }
+        if (t instanceof Error) {
+            throw (Error) t;
+        }
+        throw new RuntimeException(t);
     }
 }

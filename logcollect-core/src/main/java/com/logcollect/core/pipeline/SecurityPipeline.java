@@ -5,13 +5,15 @@ import com.logcollect.api.model.LogEntry;
 import com.logcollect.api.sanitizer.LogSanitizer;
 
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 端到端唯一安全处理入口。
  */
 public class SecurityPipeline {
+    private static final Pattern SAFE_MDC_KEY_PATTERN = Pattern.compile("[a-zA-Z0-9._\\-]+");
 
     private final LogSanitizer sanitizer;
     private final LogMasker masker;
@@ -74,16 +76,38 @@ public class SecurityPipeline {
         if (mdcContext == null || mdcContext.isEmpty()) {
             return Collections.emptyMap();
         }
-        if (sanitizer == null) {
-            return mdcContext;
-        }
-        Map<String, String> sanitized = new HashMap<String, String>(mdcContext.size());
+        Map<String, String> sanitized = new LinkedHashMap<String, String>(mdcContext.size());
         for (Map.Entry<String, String> entry : mdcContext.entrySet()) {
-            String key = sanitizeField(entry.getKey());
-            String value = sanitizeField(entry.getValue());
+            String key = sanitizeMdcKey(entry.getKey());
+            if (key == null || key.isEmpty()) {
+                continue;
+            }
+            String value = sanitizeMdcValue(entry.getValue());
             sanitized.put(key, value);
         }
-        return sanitized;
+        return Collections.unmodifiableMap(sanitized);
+    }
+
+    private String sanitizeMdcValue(String value) {
+        String safeValue = value;
+        if (sanitizer != null) {
+            safeValue = sanitizer.sanitize(safeValue);
+        }
+        if (masker != null) {
+            safeValue = masker.mask(safeValue);
+        }
+        return safeValue;
+    }
+
+    private String sanitizeMdcKey(String key) {
+        if (key == null || key.isEmpty()) {
+            return null;
+        }
+        String normalized = key.length() > 128 ? key.substring(0, 128) : key;
+        if (SAFE_MDC_KEY_PATTERN.matcher(normalized).matches()) {
+            return normalized;
+        }
+        return normalized.replaceAll("[^a-zA-Z0-9._\\-]", "_");
     }
 
     public interface SecurityMetrics {

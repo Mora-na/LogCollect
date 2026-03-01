@@ -30,12 +30,8 @@ public class DegradeFileAutoConfiguration {
 
         DegradeFileEncryptor encryptor = null;
         if (file.isEncryptEnabled()) {
-            String profile = null;
             String[] active = applicationContext.getEnvironment().getActiveProfiles();
-            if (active != null && active.length > 0) {
-                profile = active[0];
-            }
-            byte[] key = EncryptionKeyResolver.resolveKey(applicationContext, profile);
+            byte[] key = EncryptionKeyResolver.resolveKey(applicationContext, active);
             encryptor = new DegradeFileEncryptor(new SecretKeySpec(key, "AES"));
         }
 

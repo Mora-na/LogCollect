@@ -2,6 +2,7 @@ package com.logcollect.autoconfigure.aop;
 
 import com.logcollect.api.annotation.LogCollect;
 import com.logcollect.api.enums.CollectMode;
+import com.logcollect.api.exception.LogCollectDegradeException;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
@@ -62,6 +63,15 @@ public class LogCollectAspect {
     private com.logcollect.autoconfigure.LogCollectBufferRegistry bufferRegistry;
 
     private static volatile GlobalBufferMemoryManager fallbackGlobalBufferManager;
+    private static final ExecutorService HANDLER_TIMEOUT_EXECUTOR =
+            Executors.newCachedThreadPool(new ThreadFactory() {
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "logcollect-handler-timeout");
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
 
     private final ConcurrentHashMap<String, LogCollectCircuitBreaker> breakerCache =
             new ConcurrentHashMap<String, LogCollectCircuitBreaker>();
@@ -171,6 +181,9 @@ public class LogCollectAspect {
             LogCollectInternalLogger.error("LogCollect after phase error", t);
             frameworkWarn("Failed to flush, data may be lost", t);
             notifyHandlerError(ctx, t, "after");
+            if (shouldPropagateDegradeException(ctx, t)) {
+                throw t;
+            }
         } finally {
             try {
                 LogCollectContextManager.pop();
@@ -298,44 +311,90 @@ public class LogCollectAspect {
         } catch (Throwable t) {
             LogCollectInternalLogger.warn("Log buffer flush failed", t);
             frameworkWarn("Log buffer flush failed", t);
+            if (shouldPropagateDegradeException(ctx, t)) {
+                if (t instanceof RuntimeException) {
+                    throw (RuntimeException) t;
+                }
+                if (t instanceof Error) {
+                    throw (Error) t;
+                }
+                throw new RuntimeException(t);
+            }
         }
     }
 
     private <T> T safeInvoke(Callable<T> callable, int timeoutMs, boolean transactionIsolation,
                              LogCollectContext context, String phase) {
+        Future<T> future = null;
         try {
-            if (transactionIsolation && txWrapper != null) {
-                return txWrapper.executeInNewTransaction(callable);
-            }
             if (timeoutMs <= 0) {
-                return callable.call();
+                return invokeWithIsolation(callable, transactionIsolation);
             }
-            return executeWithTimeout(callable, timeoutMs);
+            future = HANDLER_TIMEOUT_EXECUTOR.submit(new Callable<T>() {
+                @Override
+                public T call() throws Exception {
+                    return invokeWithIsolation(callable, transactionIsolation);
+                }
+            });
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            LogCollectInternalLogger.warn("Handler execution timeout ({}ms)", timeoutMs);
+            boolean cancelled = false;
+            if (future != null) {
+                cancelled = future.cancel(true);
+            }
+            LogCollectInternalLogger.warn("Handler {} timed out after {}ms (interrupted={})",
+                    phase, timeoutMs, cancelled);
             notifyHandlerError(context, e, phase);
             if (metrics != null && context != null && context.getConfig() != null && context.getConfig().isEnableMetrics()) {
                 metrics.incrementHandlerTimeout(context.getMethodSignature());
             }
             return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            notifyHandlerError(context, e, phase);
+            return null;
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            if (shouldPropagateDegradeException(context, cause)) {
+                if (cause instanceof RuntimeException) {
+                    throw (RuntimeException) cause;
+                }
+                if (cause instanceof Error) {
+                    throw (Error) cause;
+                }
+                throw new RuntimeException(cause);
+            }
+            LogCollectInternalLogger.error("Handler execution error", cause);
+            notifyHandlerError(context, cause, phase);
+            return null;
         } catch (Throwable t) {
+            if (shouldPropagateDegradeException(context, t)) {
+                if (t instanceof RuntimeException) {
+                    throw (RuntimeException) t;
+                }
+                if (t instanceof Error) {
+                    throw (Error) t;
+                }
+                throw new RuntimeException(t);
+            }
             LogCollectInternalLogger.error("Handler execution error", t);
             notifyHandlerError(context, t, phase);
             return null;
         }
     }
 
-    private <T> T executeWithTimeout(Callable<T> callable, int timeoutMs) throws Exception {
-        FutureTask<T> task = new FutureTask<T>(callable);
-        Thread t = new Thread(task, "logcollect-handler-timeout");
-        t.setDaemon(true);
-        t.start();
-        try {
-            return task.get(timeoutMs, TimeUnit.MILLISECONDS);
-        } catch (TimeoutException e) {
-            t.interrupt();
-            throw e;
+    private <T> T invokeWithIsolation(Callable<T> callable, boolean transactionIsolation) throws Exception {
+        if (transactionIsolation && txWrapper != null) {
+            return txWrapper.executeInNewTransaction(callable);
         }
+        return callable.call();
+    }
+
+    private boolean shouldPropagateDegradeException(LogCollectContext context, Throwable t) {
+        if (!(t instanceof LogCollectDegradeException) || context == null || context.getConfig() == null) {
+            return false;
+        }
+        return context.getConfig().isBlockWhenDegradeFail();
     }
 
     private LogCollectCircuitBreaker getOrCreateBreaker(String methodKey, LogCollectConfig config) {

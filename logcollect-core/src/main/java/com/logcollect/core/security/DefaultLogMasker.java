@@ -78,4 +78,17 @@ public class DefaultLogMasker implements LogMasker {
         }
         return result;
     }
+
+    public boolean hasPotentialMatch(String content) {
+        if (content == null || content.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < content.length(); i++) {
+            char c = content.charAt(i);
+            if (c == '@' || (c >= '0' && c <= '9')) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

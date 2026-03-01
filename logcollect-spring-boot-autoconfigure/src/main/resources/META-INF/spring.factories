@@ -11,6 +11,7 @@ com.logcollect.autoconfigure.LogCollectMetricsAutoConfiguration,\
 com.logcollect.autoconfigure.LogCollectHealthAutoConfiguration,\
 com.logcollect.autoconfigure.LogCollectHealthStatusAutoConfiguration,\
 com.logcollect.autoconfigure.LogCollectManagementAutoConfiguration,\
+com.logcollect.autoconfigure.management.LogCollectActuatorSecurityAutoConfiguration,\
 com.logcollect.autoconfigure.LogCollectTransactionAutoConfiguration,\
 com.logcollect.autoconfigure.DegradeFileAutoConfiguration,\
 com.logcollect.autoconfigure.servlet.LogCollectServletAutoConfiguration

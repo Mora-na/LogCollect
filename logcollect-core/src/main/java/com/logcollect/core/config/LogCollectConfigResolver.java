@@ -23,6 +23,16 @@ public class LogCollectConfigResolver {
 
     private static final String GLOBAL_PREFIX = "logcollect.global.";
     private static final String METHODS_PREFIX = "logcollect.methods.";
+    private static final Set<String> GLOBAL_ONLY_PREFIXES = Collections.unmodifiableSet(
+            new LinkedHashSet<String>(Arrays.asList(
+                    "degrade.file.",
+                    "buffer.total-max-bytes",
+                    "metrics.prefix",
+                    "guard.max-content-length",
+                    "guard.max-throwable-length"
+            )));
+    private static final Set<String> STARTUP_ONLY_KEYS = Collections.unmodifiableSet(
+            new LinkedHashSet<String>(Collections.singletonList("metrics.prefix")));
 
     private final List<LogCollectConfigSource> sources;
     private final LogCollectLocalConfigCache cache;
@@ -33,6 +43,7 @@ public class LogCollectConfigResolver {
             new ConcurrentHashMap<String, LogCollectConfig>();
     private volatile Instant lastRefreshTime;
     private volatile Map<String, String> latestGlobalProperties = Collections.emptyMap();
+    private volatile Map<String, String> startupOnlySnapshot = Collections.emptyMap();
 
     public LogCollectConfigResolver(List<LogCollectConfigSource> sources, LogCollectLocalConfigCache cache) {
         this(sources, cache, null, null);
@@ -53,6 +64,7 @@ public class LogCollectConfigResolver {
         this.metrics = metrics;
         syncGlobalEnabledFromSources();
         syncGlobalLogLinePatternFromSources();
+        refreshStartupOnlySnapshot();
     }
 
     /**
@@ -73,7 +85,8 @@ public class LogCollectConfigResolver {
         mergeFromAnnotation(config, annotation);
 
         // 第②级：方法级
-        Map<String, String> methodProperties = loadMethodProperties(configMethodKey);
+        Map<String, String> methodProperties = filterMethodLevelProperties(
+                loadMethodProperties(configMethodKey), configMethodKey);
         mergeFromProperties(config, methodProperties);
 
         // 第①级：全局（最高优先）
@@ -87,9 +100,11 @@ public class LogCollectConfigResolver {
     }
 
     public void onConfigChange(String source) {
+        Map<String, String> before = startupOnlySnapshot;
         clearCache();
         syncGlobalEnabledFromSources();
         syncGlobalLogLinePatternFromSources();
+        logStartupOnlyRuntimeChanges(before, source);
         invokeMetrics("incrementConfigRefresh", source == null ? "unknown" : source);
         LogCollectInternalLogger.info("Config cache cleared due to config change from: {}",
                 source == null ? "unknown" : source);
@@ -189,6 +204,36 @@ public class LogCollectConfigResolver {
             return merged;
         }
         return loadMethodPropertiesFromLocalCache(configMethodKey);
+    }
+
+    private Map<String, String> filterMethodLevelProperties(Map<String, String> methodProperties, String methodKey) {
+        if (methodProperties == null || methodProperties.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, String> filtered = new LinkedHashMap<String, String>();
+        for (Map.Entry<String, String> entry : methodProperties.entrySet()) {
+            String key = entry.getKey();
+            if (isGlobalOnlyKey(key)) {
+                LogCollectInternalLogger.warn(
+                        "Ignored method-level config for global-only key: method={}, key={}",
+                        methodKey, key);
+                continue;
+            }
+            filtered.put(key, entry.getValue());
+        }
+        return filtered;
+    }
+
+    private boolean isGlobalOnlyKey(String key) {
+        if (key == null || key.isEmpty()) {
+            return false;
+        }
+        for (String prefix : GLOBAL_ONLY_PREFIXES) {
+            if (key.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<LogCollectConfigSource> sortLowToHighPrioritySources() {
@@ -423,6 +468,37 @@ public class LogCollectConfigResolver {
         } catch (Throwable t) {
             LogCollectInternalLogger.debug("Sync global log-line-pattern failed: {}", t.getMessage());
         }
+    }
+
+    private void refreshStartupOnlySnapshot() {
+        startupOnlySnapshot = snapshotStartupOnlyValues(loadGlobalProperties());
+    }
+
+    private void logStartupOnlyRuntimeChanges(Map<String, String> before, String source) {
+        Map<String, String> after = snapshotStartupOnlyValues(loadGlobalProperties());
+        for (String key : STARTUP_ONLY_KEYS) {
+            String oldValue = before == null ? null : before.get(key);
+            String newValue = after.get(key);
+            if (!Objects.equals(oldValue, newValue)) {
+                LogCollectInternalLogger.info(
+                        "Config key '{}' changed from '{}' to '{}' (source={}) but is startup-only and ignored at runtime",
+                        key, oldValue, newValue, source == null ? "unknown" : source);
+            }
+        }
+        startupOnlySnapshot = after;
+    }
+
+    private Map<String, String> snapshotStartupOnlyValues(Map<String, String> globals) {
+        if (globals == null || globals.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, String> snapshot = new LinkedHashMap<String, String>();
+        for (String key : STARTUP_ONLY_KEYS) {
+            if (globals.containsKey(key)) {
+                snapshot.put(key, globals.get(key));
+            }
+        }
+        return snapshot;
     }
 
     private interface BooleanConsumer {

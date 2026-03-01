@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [8, 11, 17, 21]
+        spring-boot: ['2.7.18', '3.0.13', '3.2.5', '3.4.1']
+        log-framework: ['logback', 'log4j2']
+        exclude:
+          - java: 8
+            spring-boot: '3.0.13'
+          - java: 8
+            spring-boot: '3.2.5'
+          - java: 8
+            spring-boot: '3.4.1'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+      - name: Build & Test
+        run: |
+          mvn -B clean verify \
+            -Dspring-boot.version=${{ matrix.spring-boot }} \
+            -Dlog-framework=${{ matrix.log-framework }} \
+            -pl '!logcollect-samples'
+
+  coverage:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Coverage Report
+        run: |
+          mvn -B -pl logcollect-core -am \
+            org.jacoco:jacoco-maven-plugin:0.8.12:prepare-agent \
+            test \
+            org.jacoco:jacoco-maven-plugin:0.8.12:report
+      - name: Check Coverage
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          report = "logcollect-core/target/site/jacoco/jacoco.xml"
+          root = ET.parse(report).getroot()
+          line_counter = None
+          for counter in root.findall("counter"):
+              if counter.attrib.get("type") == "LINE":
+                  line_counter = counter
+                  break
+
+          if line_counter is None:
+              raise SystemExit("No LINE coverage counter found")
+
+          missed = int(line_counter.attrib["missed"])
+          covered = int(line_counter.attrib["covered"])
+          total = missed + covered
+          if total == 0:
+              raise SystemExit("LINE coverage total is zero")
+
+          ratio = covered / total
+          print(f"Core line coverage ratio: {ratio:.4f}")
+          if ratio < 0.80:
+              raise SystemExit(1)
+          PY

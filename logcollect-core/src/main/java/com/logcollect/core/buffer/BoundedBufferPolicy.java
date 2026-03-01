@@ -11,6 +11,12 @@ public class BoundedBufferPolicy {
         DROP_NEWEST
     }
 
+    public enum RejectReason {
+        ACCEPTED,
+        BUFFER_FULL,
+        GLOBAL_MEMORY_LIMIT
+    }
+
     private final long maxBytes;
     private final int maxEntries;
     private final OverflowStrategy strategy;
@@ -25,7 +31,7 @@ public class BoundedBufferPolicy {
         this.strategy = strategy == null ? OverflowStrategy.FLUSH_EARLY : strategy;
     }
 
-    public boolean beforeAdd(long entryBytes, Runnable earlyFlush) {
+    public RejectReason beforeAdd(long entryBytes, Runnable earlyFlush) {
         if (isOverflow(entryBytes)) {
             switch (strategy) {
                 case FLUSH_EARLY:
@@ -35,7 +41,7 @@ public class BoundedBufferPolicy {
                     break;
                 case DROP_NEWEST:
                     droppedCount.incrementAndGet();
-                    return false;
+                    return RejectReason.BUFFER_FULL;
                 case DROP_OLDEST:
                     break;
                 default:
@@ -44,7 +50,7 @@ public class BoundedBufferPolicy {
         }
         currentBytes.addAndGet(entryBytes);
         currentCount.incrementAndGet();
-        return true;
+        return RejectReason.ACCEPTED;
     }
 
     public void afterDrain(long bytesRemoved, int countRemoved) {

@@ -56,6 +56,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
         if (closed.get()) {
             if (context != null) {
                 context.incrementDiscardedCount();
+                metricCall(context, "incrementDiscarded", context.getMethodSignature(), "buffer_closed");
             }
             notifyDegrade(context, "buffer_closed");
             return false;
@@ -65,6 +66,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
         if (maxBytes > 0 && entryBytes > maxBytes) {
             if (context != null) {
                 context.incrementDiscardedCount();
+                metricCall(context, "incrementDiscarded", context.getMethodSignature(), "buffer_entry_too_large");
             }
             notifyDegrade(context, "buffer_entry_too_large");
             return false;
@@ -76,6 +78,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
             } else {
                 if (context != null) {
                     context.incrementDiscardedCount();
+                    metricCall(context, "incrementDiscarded", context.getMethodSignature(), "global_memory_limit");
                 }
                 notifyDegrade(context, "global_memory_limit");
                 return false;
@@ -86,13 +89,15 @@ public class SingleModeBuffer implements LogCollectBuffer {
             evictOldestUntilFit(context, entryBytes);
         }
 
-        boolean accepted = policy.beforeAdd(entryBytes, () -> triggerFlush(context, false));
-        if (!accepted) {
+        BoundedBufferPolicy.RejectReason rejectReason = policy.beforeAdd(entryBytes, () -> triggerFlush(context, false));
+        if (rejectReason != BoundedBufferPolicy.RejectReason.ACCEPTED) {
             if (globalManager != null) {
                 globalManager.release(entryBytes);
             }
             if (context != null) {
                 context.incrementDiscardedCount();
+                metricCall(context, "incrementDiscarded",
+                        context.getMethodSignature(), toDiscardReason(rejectReason));
             }
             notifyDegrade(context, "buffer_overflow_drop_newest");
             LogCollectDiag.debug("Single buffer drop newest");
@@ -274,6 +279,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
             policy.recordDropped();
             if (context != null) {
                 context.incrementDiscardedCount();
+                metricCall(context, "incrementDiscarded", context.getMethodSignature(), "buffer_full");
             }
         }
     }
@@ -448,5 +454,12 @@ public class SingleModeBuffer implements LogCollectBuffer {
             utilization = 1.0d;
         }
         metricCall(context, "updateBufferUtilization", context.getMethodSignature(), utilization);
+    }
+
+    private String toDiscardReason(BoundedBufferPolicy.RejectReason reason) {
+        if (reason == BoundedBufferPolicy.RejectReason.GLOBAL_MEMORY_LIMIT) {
+            return "global_memory_limit";
+        }
+        return "buffer_full";
     }
 }

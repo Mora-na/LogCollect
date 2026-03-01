@@ -1,6 +1,7 @@
 package com.logcollect.log4j2;
 
 import com.logcollect.api.enums.CollectMode;
+import com.logcollect.api.exception.LogCollectDegradeException;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.masker.LogMasker;
 import com.logcollect.api.model.*;
@@ -13,10 +14,7 @@ import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.pipeline.SecurityPipeline;
-import com.logcollect.core.security.DefaultLogMasker;
-import com.logcollect.core.security.DefaultLogSanitizer;
-import com.logcollect.core.security.SecurityComponentRegistry;
-import com.logcollect.core.security.StringLengthGuard;
+import com.logcollect.core.security.*;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.Appender;
 import org.apache.logging.log4j.core.Core;
@@ -64,12 +62,13 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
 
     @Override
     public void append(LogEvent event) {
+        LogCollectContext context = null;
         try {
             String traceId = event.getContextData().getValue(MDC_KEY);
             if (traceId == null) {
                 return;
             }
-            LogCollectContext context = LogCollectContextManager.current();
+            context = LogCollectContextManager.current();
             if (context == null) {
                 return;
             }
@@ -93,7 +92,8 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
 
             String rawMessage = event.getMessage() == null ? "" : event.getMessage().getFormattedMessage();
             LogCollectHandler handler = context.getHandler();
-            if (handler != null && !handler.shouldCollect(context, level, rawMessage)) {
+            String messageSummary = QuickSanitizer.summarize(rawMessage, 256);
+            if (handler != null && !handler.shouldCollect(context, level, messageSummary)) {
                 context.incrementDiscardedCount();
                 metricCall(context, "incrementDiscarded", methodKey, "handler_filter");
                 return;
@@ -123,14 +123,12 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
 
             Object buf = context.getBuffer();
             if (config.isUseBuffer() && buf instanceof LogCollectBuffer) {
-                boolean offered = ((LogCollectBuffer) buf).offer(context, entry);
-                if (!offered) {
-                    metricCall(context, "incrementDiscarded", methodKey, "buffer_full");
-                }
+                ((LogCollectBuffer) buf).offer(context, entry);
             } else {
                 handleDirect(context, entry, methodKey);
             }
         } catch (Throwable t) {
+            rethrowDegradeIfNecessary(context, t);
             LogCollectInternalLogger.error("Log4j2 appender error", t);
         }
     }
@@ -454,5 +452,21 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             return Character.class;
         }
         return type;
+    }
+
+    private void rethrowDegradeIfNecessary(LogCollectContext context, Throwable t) {
+        if (!(t instanceof LogCollectDegradeException) || context == null || context.getConfig() == null) {
+            return;
+        }
+        if (!context.getConfig().isBlockWhenDegradeFail()) {
+            return;
+        }
+        if (t instanceof RuntimeException) {
+            throw (RuntimeException) t;
+        }
+        if (t instanceof Error) {
+            throw (Error) t;
+        }
+        throw new RuntimeException(t);
     }
 }

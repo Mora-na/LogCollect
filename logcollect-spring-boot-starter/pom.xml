@@ -26,7 +26,6 @@
         <dependency>
             <groupId>com.logcollect</groupId>
             <artifactId>logcollect-logback-adapter</artifactId>
-            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>com.logcollect</groupId>
