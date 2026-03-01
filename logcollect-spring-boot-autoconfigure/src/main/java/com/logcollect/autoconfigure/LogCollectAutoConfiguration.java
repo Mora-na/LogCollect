@@ -4,37 +4,37 @@ import com.logcollect.api.config.LogCollectConfigSource;
 import com.logcollect.api.enums.LogFramework;
 import com.logcollect.autoconfigure.circuitbreaker.CircuitBreakerRegistry;
 import com.logcollect.autoconfigure.config.LocalPropertiesLogCollectConfigSource;
+import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
 import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.config.LogCollectConfigResolver;
 import com.logcollect.core.config.LogCollectLocalConfigCache;
 import com.logcollect.core.internal.LogCollectInternalLogger;
+import com.logcollect.core.runtime.LogCollectGlobalSwitch;
 import com.logcollect.core.security.SecurityComponentRegistry;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.PropertySource;
+import org.springframework.core.env.Environment;
 
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 @Configuration
 @EnableConfigurationProperties(LogCollectProperties.class)
-@PropertySource(value = "classpath:logcollect-default.properties", ignoreResourceNotFound = true)
-@ConditionalOnProperty(prefix = "logcollect.global", name = "enabled", havingValue = "true", matchIfMissing = true)
+@PropertySource(name = "logcollect-default", value = "classpath:logcollect-default.properties", ignoreResourceNotFound = true)
 public class LogCollectAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public LocalPropertiesLogCollectConfigSource localPropertiesLogCollectConfigSource(LogCollectProperties props) {
-        return new LocalPropertiesLogCollectConfigSource(props);
+    public LocalPropertiesLogCollectConfigSource localPropertiesLogCollectConfigSource(
+            Environment environment) {
+        return new LocalPropertiesLogCollectConfigSource(environment);
     }
 
     @Bean
@@ -49,13 +49,17 @@ public class LogCollectAutoConfiguration {
     @Bean
     public LogCollectConfigResolver logCollectConfigResolver(
             ObjectProvider<List<LogCollectConfigSource>> sourcesProvider,
-            LogCollectLocalConfigCache cache) {
+            LogCollectLocalConfigCache cache,
+            LogCollectGlobalSwitch globalSwitch,
+            ObjectProvider<LogCollectMetrics> metricsProvider) {
         List<LogCollectConfigSource> sources = sourcesProvider.getIfAvailable(ArrayList::new);
         sources.sort(Comparator.comparingInt(LogCollectConfigSource::getOrder));
-        LogCollectConfigResolver resolver = new LogCollectConfigResolver(sources, cache);
+        LogCollectConfigResolver resolver = new LogCollectConfigResolver(
+                sources, cache, globalSwitch, metricsProvider.getIfAvailable());
         for (LogCollectConfigSource source : sources) {
             try {
-                source.addChangeListener(resolver::onConfigChange);
+                source.addChangeListener((java.util.function.Consumer<String>)
+                        sourceName -> resolver.onConfigChange(sourceName));
             } catch (Throwable t) {
                 LogCollectInternalLogger.warn("Register config change listener failed: {}", source.getType(), t);
             }
@@ -70,16 +74,23 @@ public class LogCollectAutoConfiguration {
     }
 
     @Bean
-    @Qualifier("logCollectGlobalEnabled")
-    @ConditionalOnMissingBean(name = "logCollectGlobalEnabled")
-    public AtomicBoolean logCollectGlobalEnabled(LogCollectProperties props) {
-        return new AtomicBoolean(props.getGlobal().isEnabled());
+    @ConditionalOnMissingBean
+    public LogCollectGlobalSwitch logCollectGlobalSwitch(LogCollectProperties props) {
+        return new LogCollectGlobalSwitch(props == null || props.getGlobal() == null || props.getGlobal().isEnabled());
     }
 
     @Bean
     @ConditionalOnMissingBean
-    public GlobalBufferMemoryManager logCollectGlobalBufferMemoryManager(LogCollectProperties props) {
-        return new GlobalBufferMemoryManager(props.getGlobal().getBuffer().getTotalMaxBytesValue());
+    public GlobalBufferMemoryManager logCollectGlobalBufferMemoryManager(
+            LogCollectProperties props,
+            ObjectProvider<LogCollectMetrics> metricsProvider) {
+        GlobalBufferMemoryManager manager = new GlobalBufferMemoryManager(
+                props.getGlobal().getBuffer().getTotalMaxBytesValue());
+        Object metrics = metricsProvider.getIfAvailable();
+        if (metrics != null) {
+            manager.setMetrics(metrics);
+        }
+        return manager;
     }
 
     @Bean

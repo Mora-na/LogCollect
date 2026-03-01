@@ -95,7 +95,7 @@ public class LogCollectProperties {
         private boolean enabled = true;
         private boolean async = true;
         private String level = "INFO";
-        private String collectMode = "AGGREGATE";
+        private String collectMode = "AUTO";
         private LogFramework logFramework = LogFramework.AUTO;
 
         @NestedConfigurationProperty
@@ -679,9 +679,6 @@ public class LogCollectProperties {
         private Integer halfOpenSuccessThreshold;
         private Boolean blockWhenDegradeFail;
 
-        @NestedConfigurationProperty
-        private DegradeFileConfig file = new DegradeFileConfig();
-
         public Boolean getEnabled() {
             return enabled;
         }
@@ -746,42 +743,5 @@ public class LogCollectProperties {
             this.blockWhenDegradeFail = blockWhenDegradeFail;
         }
 
-        public DegradeFileConfig getFile() {
-            return file;
-        }
-
-        public void setFile(DegradeFileConfig file) {
-            this.file = file;
-        }
-    }
-
-    public static class DegradeFileConfig {
-        private String maxTotalSize;
-        private Integer ttlDays;
-        private Boolean encryptEnabled;
-
-        public String getMaxTotalSize() {
-            return maxTotalSize;
-        }
-
-        public void setMaxTotalSize(String maxTotalSize) {
-            this.maxTotalSize = maxTotalSize;
-        }
-
-        public Integer getTtlDays() {
-            return ttlDays;
-        }
-
-        public void setTtlDays(Integer ttlDays) {
-            this.ttlDays = ttlDays;
-        }
-
-        public Boolean getEncryptEnabled() {
-            return encryptEnabled;
-        }
-
-        public void setEncryptEnabled(Boolean encryptEnabled) {
-            this.encryptEnabled = encryptEnabled;
-        }
     }
 }

@@ -23,30 +23,56 @@ public final class DegradeFallbackHandler {
         if (context == null || context.getConfig() == null) {
             return false;
         }
-
         LogCollectConfig config = context.getConfig();
         if (!config.isEnableDegrade()) {
             return false;
         }
 
+        boolean fallbackSuccess = false;
         DegradeStorage storage = config.getDegradeStorage();
         try {
-            if (storage == DegradeStorage.FILE) {
-                return degradeToFile(context, lines);
-            }
-            if (storage == DegradeStorage.LIMITED_MEMORY) {
-                return degradeToMemory(context, lines);
-            }
-            if (storage == DegradeStorage.DISCARD_NON_ERROR) {
-                return "ERROR".equalsIgnoreCase(level) || "FATAL".equalsIgnoreCase(level);
-            }
-            if (storage == DegradeStorage.DISCARD_ALL) {
-                return false;
+            switch (storage) {
+                case FILE:
+                    fallbackSuccess = degradeToFile(context, lines) || degradeToMemory(context, lines);
+                    break;
+                case LIMITED_MEMORY:
+                    fallbackSuccess = degradeToMemory(context, lines) || degradeToFile(context, lines);
+                    break;
+                case DISCARD_NON_ERROR:
+                    if ("ERROR".equalsIgnoreCase(level) || "FATAL".equalsIgnoreCase(level)) {
+                        fallbackSuccess = degradeToMemory(context, lines) || degradeToFile(context, lines);
+                    } else {
+                        fallbackSuccess = true;
+                    }
+                    break;
+                case DISCARD_ALL:
+                    fallbackSuccess = true;
+                    break;
+                default:
+                    fallbackSuccess = false;
             }
         } catch (Throwable t) {
             LogCollectInternalLogger.warn("Degrade fallback failed", t);
         }
-        return false;
+
+        if (!fallbackSuccess) {
+            if (config.isBlockWhenDegradeFail()) {
+                LogCollectInternalLogger.error(
+                        "CRITICAL: All degrade strategies exhausted for method={}. blockWhenDegradeFail=true",
+                        context.getMethodSignature());
+                System.err.println("[LOGCOLLECT-EMERGENCY] traceId=" + context.getTraceId()
+                        + " method=" + context.getMethodSignature()
+                        + " reason=" + reason);
+                metricCall(context, "incrementDiscarded",
+                        context.getMethodSignature(), "ultimate_discard_blocked");
+            } else {
+                LogCollectInternalLogger.warn("All degrade strategies exhausted, discarding. method={}",
+                        context.getMethodSignature());
+                metricCall(context, "incrementDiscarded",
+                        context.getMethodSignature(), "ultimate_discard");
+            }
+        }
+        return fallbackSuccess;
     }
 
     private static boolean degradeToFile(LogCollectContext context, List<String> lines) {
@@ -80,5 +106,43 @@ public final class DegradeFallbackHandler {
         MEMORY_QUEUE.offer(value);
         MEMORY_QUEUE_SIZE.incrementAndGet();
         return true;
+    }
+
+    private static void metricCall(LogCollectContext context, String methodName, Object... args) {
+        Object metrics = context.getAttribute("__metrics");
+        if (metrics == null || context.getConfig() == null || !context.getConfig().isEnableMetrics()) {
+            return;
+        }
+        try {
+            MethodLoop:
+            for (java.lang.reflect.Method method : metrics.getClass().getMethods()) {
+                if (!method.getName().equals(methodName) || method.getParameterTypes().length != args.length) {
+                    continue;
+                }
+                Class<?>[] paramTypes = method.getParameterTypes();
+                for (int i = 0; i < paramTypes.length; i++) {
+                    if (args[i] == null) {
+                        continue;
+                    }
+                    if (!wrap(paramTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
+                        continue MethodLoop;
+                    }
+                }
+                method.invoke(metrics, args);
+                return;
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static Class<?> wrap(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return type;
+        }
+        if (type == int.class) return Integer.class;
+        if (type == long.class) return Long.class;
+        if (type == boolean.class) return Boolean.class;
+        if (type == double.class) return Double.class;
+        return type;
     }
 }

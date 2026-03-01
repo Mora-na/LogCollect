@@ -26,6 +26,7 @@ public class LogCollectCircuitBreaker {
     private final AtomicLong currentRecoverIntervalMs = new AtomicLong(DEFAULT_RECOVER_INTERVAL_MS);
 
     private final Supplier<LogCollectConfig> configSupplier;
+    private volatile Runnable recoveryCallback;
 
     public LogCollectCircuitBreaker(Supplier<LogCollectConfig> configSupplier) {
         this.configSupplier = configSupplier;
@@ -77,6 +78,13 @@ public class LogCollectCircuitBreaker {
                     halfOpenPassedCount.set(0);
                     currentRecoverIntervalMs.set(initialRecoverIntervalMs(safeConfig()));
                     LogCollectInternalLogger.info("CircuitBreaker -> CLOSED");
+                    Runnable callback = recoveryCallback;
+                    if (callback != null) {
+                        try {
+                            callback.run();
+                        } catch (Throwable ignored) {
+                        }
+                    }
                 }
             }
         }
@@ -140,6 +148,10 @@ public class LogCollectCircuitBreaker {
 
     public long getCurrentRecoverInterval() {
         return currentRecoverIntervalMs.get();
+    }
+
+    public void setRecoveryCallback(Runnable recoveryCallback) {
+        this.recoveryCallback = recoveryCallback;
     }
 
     private boolean allowHalfOpen(LogCollectConfig config) {

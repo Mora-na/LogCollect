@@ -18,19 +18,19 @@ import com.logcollect.core.context.LogCollectContextManager;
 import com.logcollect.core.degrade.DegradeFileManager;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.mdc.MDCAdapter;
+import com.logcollect.core.runtime.LogCollectGlobalSwitch;
+import com.logcollect.core.util.MethodKeyResolver;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Method;
 import java.util.UUID;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Aspect
@@ -49,9 +49,8 @@ public class LogCollectAspect {
     @Autowired(required = false)
     private CircuitBreakerRegistry circuitBreakerRegistry;
 
-    @Autowired(required = false)
-    @Qualifier("logCollectGlobalEnabled")
-    private AtomicBoolean globalEnabled;
+    @Autowired
+    private LogCollectGlobalSwitch globalSwitch;
 
     @Autowired(required = false)
     private GlobalBufferMemoryManager globalBufferManager;
@@ -73,7 +72,7 @@ public class LogCollectAspect {
     @Around("@annotation(logCollect)")
     public Object around(ProceedingJoinPoint pjp, LogCollect logCollect) throws Throwable {
         Method method = ((MethodSignature) pjp.getSignature()).getMethod();
-        if (globalEnabled != null && !globalEnabled.get()) {
+        if (globalSwitch != null && !globalSwitch.isEnabled()) {
             return pjp.proceed();
         }
         LogCollectConfig config;
@@ -86,12 +85,13 @@ public class LogCollectAspect {
         if (!config.isEnabled()) {
             return pjp.proceed();
         }
-        String methodKey = CircuitBreakerRegistry.buildMethodKey(method);
+        String methodKey = MethodKeyResolver.toDisplayKey(method);
         LogCollectCircuitBreaker breaker = getOrCreateBreaker(methodKey, config);
 
         String traceId = UUID.randomUUID().toString();
         LogCollectHandler handler = resolveHandler(logCollect, config);
-        CollectMode collectMode = resolveCollectMode(logCollect, handler);
+        CollectMode collectMode = resolveCollectMode(config, handler);
+        config.setEffectiveCollectMode(collectMode);
         LogCollectContext ctx = null;
         try {
             ctx = buildContext(traceId, method, pjp.getArgs(), config, handler, breaker, collectMode);
@@ -322,7 +322,7 @@ public class LogCollectAspect {
         LogCollectCircuitBreaker breaker =
                 breakerCache.computeIfAbsent(methodKey, k -> new LogCollectCircuitBreaker(configRef::get));
         if (circuitBreakerRegistry != null) {
-            circuitBreakerRegistry.register(methodKey, breaker);
+            circuitBreakerRegistry.register(methodKey, breaker, metrics);
         }
         return breaker;
     }
@@ -342,10 +342,10 @@ public class LogCollectAspect {
         }
     }
 
-    private CollectMode resolveCollectMode(LogCollect logCollect, LogCollectHandler handler) {
-        CollectMode annotationMode = logCollect == null ? CollectMode.AUTO : logCollect.collectMode();
-        if (annotationMode != null && annotationMode != CollectMode.AUTO) {
-            return annotationMode;
+    private CollectMode resolveCollectMode(LogCollectConfig config, LogCollectHandler handler) {
+        CollectMode configMode = config == null ? CollectMode.AUTO : config.getCollectMode();
+        if (configMode != null && configMode != CollectMode.AUTO) {
+            return configMode;
         }
         CollectMode preferred = handler == null ? CollectMode.AUTO : handler.preferredMode();
         if (preferred != null && preferred != CollectMode.AUTO) {

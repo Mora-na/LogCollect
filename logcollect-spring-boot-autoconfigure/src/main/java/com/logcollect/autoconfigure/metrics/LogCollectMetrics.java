@@ -1,12 +1,17 @@
 package com.logcollect.autoconfigure.metrics;
 
+import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.autoconfigure.LogCollectProperties;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
+import com.logcollect.core.degrade.DegradeFileManager;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -17,6 +22,7 @@ public class LogCollectMetrics {
 
     private final MeterRegistry registry;
     private final String prefix;
+    private final DegradeFileManager degradeFileManager;
 
     private final ConcurrentHashMap<String, Counter> collectedCounters = new ConcurrentHashMap<String, Counter>();
     private final ConcurrentHashMap<String, Counter> discardedCounters = new ConcurrentHashMap<String, Counter>();
@@ -25,6 +31,10 @@ public class LogCollectMetrics {
     private final ConcurrentHashMap<String, Counter> flushCounters = new ConcurrentHashMap<String, Counter>();
     private final ConcurrentHashMap<String, Counter> degradeCounters = new ConcurrentHashMap<String, Counter>();
     private final ConcurrentHashMap<String, Counter> handlerTimeoutCounters = new ConcurrentHashMap<String, Counter>();
+    private final ConcurrentHashMap<String, Counter> circuitRecoveredCounters = new ConcurrentHashMap<String, Counter>();
+    private final ConcurrentHashMap<String, Counter> sanitizeCounters = new ConcurrentHashMap<String, Counter>();
+    private final ConcurrentHashMap<String, Counter> maskCounters = new ConcurrentHashMap<String, Counter>();
+    private final ConcurrentHashMap<String, Counter> configRefreshCounters = new ConcurrentHashMap<String, Counter>();
 
     private final ConcurrentHashMap<String, Timer> persistTimers = new ConcurrentHashMap<String, Timer>();
     private final ConcurrentHashMap<String, Timer> securityTimers = new ConcurrentHashMap<String, Timer>();
@@ -42,11 +52,17 @@ public class LogCollectMetrics {
     private final AtomicLong totalSanitizeHits = new AtomicLong(0);
     private final AtomicLong totalMaskHits = new AtomicLong(0);
 
-    public LogCollectMetrics(MeterRegistry registry, LogCollectProperties properties) {
+    public LogCollectMetrics(MeterRegistry registry, LogCollectProperties properties, DegradeFileManager degradeFileManager) {
         this.registry = registry;
         String configured = properties == null ? null : properties.getGlobal().getMetrics().getPrefix();
         this.prefix = configured == null || configured.trim().isEmpty() ? "logcollect" : configured.trim();
+        this.degradeFileManager = degradeFileManager;
         registerGlobalGauges();
+        registerDegradeFileGauges();
+    }
+
+    public boolean isEnabled(LogCollectConfig config) {
+        return config != null && config.isEnableMetrics();
     }
 
     private void registerGlobalGauges() {
@@ -56,6 +72,23 @@ public class LogCollectMetrics {
 
         Gauge.builder(prefix + ".buffer.global.utilization", globalBufferUtilization, AtomicReference::get)
                 .description("Global buffer utilization (0.0~1.0)")
+                .register(registry);
+    }
+
+    private void registerDegradeFileGauges() {
+        if (degradeFileManager == null || !degradeFileManager.isInitialized()) {
+            return;
+        }
+        Gauge.builder(prefix + ".degrade.file.total.bytes", degradeFileManager, DegradeFileManager::getTotalSizeBytes)
+                .description("Total size of degrade files in bytes")
+                .baseUnit("bytes")
+                .register(registry);
+        Gauge.builder(prefix + ".degrade.file.count", degradeFileManager, DegradeFileManager::getFileCount)
+                .description("Number of degrade files")
+                .register(registry);
+        Gauge.builder(prefix + ".degrade.file.disk.free.bytes", degradeFileManager, DegradeFileManager::getDiskFreeSpace)
+                .description("Free disk space for degrade files in bytes")
+                .baseUnit("bytes")
                 .register(registry);
     }
 
@@ -113,14 +146,14 @@ public class LogCollectMetrics {
     }
 
     public void incrementCircuitRecovered(String method) {
-        counter(new ConcurrentHashMap<String, Counter>(),
+        counter(circuitRecoveredCounters,
                 method,
                 prefix + ".circuit.recovered.total",
                 "method", method).increment();
     }
 
     public void incrementSanitizeHits(String method) {
-        counter(new ConcurrentHashMap<String, Counter>(),
+        counter(sanitizeCounters,
                 method,
                 prefix + ".security.sanitize.hits.total",
                 "method", method).increment();
@@ -128,7 +161,7 @@ public class LogCollectMetrics {
     }
 
     public void incrementMaskHits(String method) {
-        counter(new ConcurrentHashMap<String, Counter>(),
+        counter(maskCounters,
                 method,
                 prefix + ".security.mask.hits.total",
                 "method", method).increment();
@@ -136,7 +169,7 @@ public class LogCollectMetrics {
     }
 
     public void incrementConfigRefresh(String source) {
-        counter(new ConcurrentHashMap<String, Counter>(),
+        counter(configRefreshCounters,
                 source,
                 prefix + ".config.refresh.total",
                 "source", source).increment();
@@ -241,6 +274,17 @@ public class LogCollectMetrics {
         return globalBufferUtilization.get();
     }
 
+    public Map<String, Double> getBufferUtilizations() {
+        if (bufferUtilizations.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, Double> result = new LinkedHashMap<String, Double>();
+        for (Map.Entry<String, AtomicReference<Double>> entry : bufferUtilizations.entrySet()) {
+            result.put(entry.getKey(), entry.getValue().get());
+        }
+        return result;
+    }
+
     public long getTotalCollected() {
         return totalCollected.get();
     }
@@ -263,6 +307,23 @@ public class LogCollectMetrics {
 
     public long getTotalMaskHits() {
         return totalMaskHits.get();
+    }
+
+    public String getLastPersistDurationP99() {
+        double max = -1.0d;
+        for (Timer timer : persistTimers.values()) {
+            if (timer == null) {
+                continue;
+            }
+            double p99 = timer.percentile(0.99, TimeUnit.MILLISECONDS);
+            if (!Double.isNaN(p99) && p99 > max) {
+                max = p99;
+            }
+        }
+        if (max < 0) {
+            return "N/A";
+        }
+        return String.format("%.1fms", max);
     }
 
     private Counter counter(ConcurrentHashMap<String, Counter> cache,

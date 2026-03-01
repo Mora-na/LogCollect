@@ -36,11 +36,11 @@ public class LogCollectThreadLocalAccessor implements ThreadLocalAccessor<LogCol
     /**
      * ContextPropagation 在某些实现中会调用无参 setValue。
      *
-     * <p>这里保持 no-op，避免无值场景误清理已有上下文。
+     * <p>无值场景主动清理，避免上下文泄漏。
      */
     @Override
     public void setValue() {
-        // no-op
+        LogCollectContextManager.clearSnapshotContext();
     }
 
     /** 清空当前线程中的 LogCollect 上下文。 */

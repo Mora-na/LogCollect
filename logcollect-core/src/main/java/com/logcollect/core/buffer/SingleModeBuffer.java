@@ -83,6 +83,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
         if (shouldFlush()) {
             triggerFlush(context, false);
         }
+        updateUtilization(context);
         return true;
     }
 
@@ -125,6 +126,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
                     context.incrementFlushCount();
                 }
             }
+            updateUtilization(context);
         } finally {
             flushing.set(false);
         }
@@ -284,7 +286,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
     }
 
     private void metricCall(LogCollectContext context, String methodName, Object... args) {
-        if (context == null) {
+        if (context == null || context.getConfig() == null || !context.getConfig().isEnableMetrics()) {
             return;
         }
         Object metrics = context.getAttribute("__metrics");
@@ -365,5 +367,23 @@ public class SingleModeBuffer implements LogCollectBuffer {
         } catch (Throwable ignored) {
         }
         return false;
+    }
+
+    private void updateUtilization(LogCollectContext context) {
+        if (context == null || context.getConfig() == null || !context.getConfig().isEnableMetrics()) {
+            return;
+        }
+        if (maxCount <= 0 && maxBytes <= 0) {
+            return;
+        }
+        double countRatio = maxCount <= 0 ? 0.0d : ((double) count.get() / (double) maxCount);
+        double bytesRatio = maxBytes <= 0 ? 0.0d : ((double) bytes.get() / (double) maxBytes);
+        double utilization = Math.max(countRatio, bytesRatio);
+        if (utilization < 0.0d) {
+            utilization = 0.0d;
+        } else if (utilization > 1.0d) {
+            utilization = 1.0d;
+        }
+        metricCall(context, "updateBufferUtilization", context.getMethodSignature(), utilization);
     }
 }

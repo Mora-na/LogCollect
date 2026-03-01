@@ -1,6 +1,8 @@
 package com.logcollect.autoconfigure.circuitbreaker;
 
+import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
+import com.logcollect.core.util.MethodKeyResolver;
 
 import java.lang.reflect.Method;
 import java.util.Collections;
@@ -14,14 +16,37 @@ public class CircuitBreakerRegistry {
             new ConcurrentHashMap<String, LogCollectCircuitBreaker>();
 
     public void register(String methodKey, LogCollectCircuitBreaker breaker) {
+        register(methodKey, breaker, null);
+    }
+
+    public void register(String methodKey, LogCollectCircuitBreaker breaker, LogCollectMetrics metrics) {
         if (methodKey == null || breaker == null) {
             return;
         }
-        registry.put(methodKey, breaker);
+        final String displayKey = MethodKeyResolver.normalize(methodKey);
+        if (metrics != null) {
+            breaker.setRecoveryCallback(() -> metrics.incrementCircuitRecovered(displayKey));
+        }
+        registry.put(displayKey, breaker);
+    }
+
+    public void register(Method method, LogCollectCircuitBreaker breaker, LogCollectMetrics metrics) {
+        if (method == null || breaker == null) {
+            return;
+        }
+        register(MethodKeyResolver.toDisplayKey(method), breaker, metrics);
     }
 
     public LogCollectCircuitBreaker get(String methodKey) {
-        return registry.get(methodKey);
+        if (methodKey == null) {
+            return null;
+        }
+        String normalized = MethodKeyResolver.normalize(methodKey);
+        LogCollectCircuitBreaker breaker = registry.get(normalized);
+        if (breaker == null) {
+            breaker = registry.get(methodKey);
+        }
+        return breaker;
     }
 
     public Map<String, LogCollectCircuitBreaker> getAll() {
@@ -33,10 +58,10 @@ public class CircuitBreakerRegistry {
     }
 
     public boolean contains(String methodKey) {
-        return registry.containsKey(methodKey);
+        return get(methodKey) != null;
     }
 
     public static String buildMethodKey(Method method) {
-        return method.getDeclaringClass().getName().replace('.', '_') + "_" + method.getName();
+        return MethodKeyResolver.toDisplayKey(method);
     }
 }

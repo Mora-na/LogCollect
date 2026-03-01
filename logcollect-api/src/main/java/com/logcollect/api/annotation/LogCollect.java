@@ -2,7 +2,6 @@ package com.logcollect.api.annotation;
 
 import com.logcollect.api.enums.CollectMode;
 import com.logcollect.api.enums.DegradeStorage;
-import com.logcollect.api.enums.LogFramework;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.masker.LogMasker;
 import com.logcollect.api.sanitizer.LogSanitizer;
@@ -20,7 +19,6 @@ public @interface LogCollect {
     Class<? extends LogCollectHandler> handler() default LogCollectHandler.class;
     boolean async() default true;
     String level() default "INFO";
-    LogFramework logFramework() default LogFramework.AUTO;
     CollectMode collectMode() default CollectMode.AUTO;
 
     // ===== 缓冲区配置 =====
@@ -44,11 +42,6 @@ public @interface LogCollect {
     boolean enableMask() default true;
     Class<? extends LogMasker> masker() default DefaultLogMasker.class;
 
-    // ===== FILE 降级存储配置 =====
-    String degradeFileMaxTotalSize() default "500MB";
-    int degradeFileTTLDays() default 90;
-    boolean enableDegradeFileEncrypt() default false;
-
     // ===== 高级配置 =====
     int handlerTimeoutMs() default 5000;
     boolean transactionIsolation() default false;
@@ -56,5 +49,4 @@ public @interface LogCollect {
 
     // ===== 可观测性配置 =====
     boolean enableMetrics() default true;
-    String metricsPrefix() default "logcollect";
 }

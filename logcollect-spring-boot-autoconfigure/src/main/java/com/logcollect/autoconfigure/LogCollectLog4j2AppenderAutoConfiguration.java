@@ -11,14 +11,12 @@ import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
 
 import java.util.Map;
 
 @Configuration
 @ConditionalOnClass({LoggerContext.class, LogCollectLog4j2Appender.class})
-@ConditionalOnProperty(prefix = "logcollect.global", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class LogCollectLog4j2AppenderAutoConfiguration implements InitializingBean {
 
     private static final String DEFAULT_APPENDER_NAME = "LOG_COLLECT";

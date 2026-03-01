@@ -7,7 +7,7 @@ import javax.servlet.*;
 import java.io.IOException;
 import java.util.Deque;
 
-public class LogCollectAsyncContextFilter implements Filter {
+public class JavaxLogCollectAsyncContextFilter implements Filter {
 
     @Override
     public void init(FilterConfig filterConfig) {
@@ -25,27 +25,7 @@ public class LogCollectAsyncContextFilter implements Filter {
         if (snapshot == null || snapshot.isEmpty()) {
             return;
         }
-        request.getAsyncContext().addListener(new AsyncListener() {
-            @Override
-            public void onComplete(AsyncEvent event) {
-                LogCollectContextManager.clear();
-            }
-
-            @Override
-            public void onTimeout(AsyncEvent event) {
-                LogCollectContextManager.clear();
-            }
-
-            @Override
-            public void onError(AsyncEvent event) {
-                LogCollectContextManager.clear();
-            }
-
-            @Override
-            public void onStartAsync(AsyncEvent event) {
-                LogCollectContextManager.restore(snapshot);
-            }
-        });
+        request.getAsyncContext().addListener(new JavaxLogCollectAsyncListener(snapshot));
     }
 
     @Override

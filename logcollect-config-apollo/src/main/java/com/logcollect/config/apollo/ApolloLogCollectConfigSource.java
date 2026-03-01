@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 public class ApolloLogCollectConfigSource implements LogCollectConfigSource, InitializingBean {
 
@@ -23,7 +24,7 @@ public class ApolloLogCollectConfigSource implements LogCollectConfigSource, Ini
     private String namespace;
 
     private volatile Properties cachedProperties = new Properties();
-    private final CopyOnWriteArrayList<Runnable> listeners = new CopyOnWriteArrayList<Runnable>();
+    private final CopyOnWriteArrayList<Consumer<String>> listeners = new CopyOnWriteArrayList<Consumer<String>>();
 
     @Override
     public void afterPropertiesSet() {
@@ -45,7 +46,22 @@ public class ApolloLogCollectConfigSource implements LogCollectConfigSource, Ini
     }
 
     @Override
-    public void addChangeListener(Runnable listener) {
+    public Map<String, String> getAllProperties() {
+        Properties properties = this.cachedProperties;
+        if (properties == null || properties.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, String> result = new LinkedHashMap<String, String>();
+        for (String key : properties.stringPropertyNames()) {
+            if (key.startsWith("logcollect.")) {
+                result.put(key, properties.getProperty(key));
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public void addChangeListener(Consumer<String> listener) {
         if (listener != null) {
             listeners.add(listener);
         }
@@ -63,7 +79,7 @@ public class ApolloLogCollectConfigSource implements LogCollectConfigSource, Ini
 
     @Override
     public int getOrder() {
-        return 110;
+        return 100;
     }
 
     @Override
@@ -147,9 +163,9 @@ public class ApolloLogCollectConfigSource implements LogCollectConfigSource, Ini
     }
 
     private void notifyListeners() {
-        for (Runnable listener : listeners) {
+        for (Consumer<String> listener : listeners) {
             try {
-                listener.run();
+                listener.accept("apollo");
             } catch (Throwable ignored) {
             }
         }

@@ -18,7 +18,7 @@ import com.logcollect.api.model.LogEntry;
  * </ul>
  *
  * <p>模式决策优先级（与 README 一致）：
- * 注解显式指定 {@code collectMode} > {@link #preferredMode()} > 框架默认模式。
+ * 合并配置中的 {@code collectMode} > {@link #preferredMode()} > 框架默认模式。
  */
 public interface LogCollectHandler {
 

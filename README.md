@@ -1003,7 +1003,6 @@ public class SimpleLogHandler implements LogCollectHandler {
 | `handler` | `Class` | 自动匹配 | 业务日志处理实现类。Spring 环境下按类型自动匹配，无需指定 |
 | `async` | `boolean` | `true` | 是否异步收集日志。异步时业务线程仅写入队列即返回 |
 | `level` | `String` | `"INFO"` | 收集的最低日志级别 |
-| `logFramework` | `LogFramework` | `AUTO` | 强制指定日志框架。默认自动识别 |
 | `collectMode` | `CollectMode` | `AUTO` | 日志收集模式。`AUTO`=框架自动选择（默认AGGREGATE），`SINGLE`=单条缓冲，`AGGREGATE`=聚合刷写 |
 
 #### 缓冲区配置
@@ -1036,14 +1035,6 @@ public class SimpleLogHandler implements LogCollectHandler {
 | `enableMask` | `boolean` | `true` | 是否启用敏感数据脱敏 |
 | `masker` | `Class` | `DefaultLogMasker.class` | 脱敏器实现类 |
 
-#### FILE 降级存储配置
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `degradeFileMaxTotalSize` | `String` | `"500MB"` | 降级文件总大小上限 |
-| `degradeFileTTLDays` | `int` | `90` | 降级文件保留时长（天） |
-| `enableDegradeFileEncrypt` | `boolean` | `false` | 降级文件是否 AES 加密 |
-
 #### 高级配置
 
 | 参数 | 类型 | 默认值 | 说明 |
@@ -1057,7 +1048,10 @@ public class SimpleLogHandler implements LogCollectHandler {
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enableMetrics` | `boolean` | `true` | 是否暴露 Metrics 指标 |
-| `metricsPrefix` | `String` | `"logcollect"` | 指标名称前缀 |
+
+> `metricsPrefix` 为全局配置，仅支持 `logcollect.global.metrics.prefix`。
+>
+> FILE 降级存储参数（`max-total-size` / `ttl-days` / `encrypt-enabled`）为全局物理约束，仅支持 `logcollect.global.degrade.file.*`。
 
 ### 8.2 常用配置组合
 
@@ -1115,7 +1109,7 @@ public void seckill(Long itemId) { ... }
 | Spring 管理的 `ThreadPoolTaskExecutor` | ✅ 自动 | ✅ 自动 | 无需操作 | [9.4](#94-spring-线程池自动传播) |
 | `CompletableFuture` + Spring 线程池 | ✅ 自动 | ✅ 自动 | 无需操作 | [9.5](#95-completablefuture--spring-线程池) |
 | WebFlux `Mono`/`Flux` | ✅ 自动* | ✅ 自动 | 无需操作 | [9.6](#96-webflux-响应式) |
-| Kotlin Coroutines | ✅ 自动* | ✅ 自动 | 无需操作 | - |
+| Kotlin Coroutines | ⚠️ 一行代码 | ⚠️ 一行代码 | `withContext(LogCollectCoroutineContext())` | - |
 | 手动 `ExecutorService` | ⚠️ 一行代码 | ⚠️ 一行代码 | 工具类包装 | [9.7](#97-手动-executorservice工具类) |
 | 直接 `new Thread()` | ⚠️ 一行代码 | ⚠️ 一行代码 | 工具类包装 | [9.8](#98-直接-new-thread工具类) |
 | 第三方库回调 | ⚠️ 一行代码 | ⚠️ 一行代码 | 工具类包装 | [9.9](#99-第三方回调工具类) |
@@ -1551,12 +1545,11 @@ public void criticalOperation() { ... }
 │  框架默认 ← @LogCollect注解 ← 配置中心方法级 ← 配置中心全局              │
 └────────────────────────────────┬─────────────────────────────────────────┘
                                  ↓
-┌──────────┬──────────┬──────────────────┬──────────┬───────────────────┐
-│ Nacos    │ Apollo   │ Spring Cloud     │ Consul   │ 预留 SPI 扩展      │
-│ 适配器   │ 适配器    │ Config 适配器     │ 适配器   │ • Etcd / 自定义     │
-│ @Primary │          │                  │          │                    │
-│ order=100│ order=100│ order=200        │ order=300│                    │
-└──────────┴──────────┴──────────────────┴──────────┴───────────────────┘
+┌──────────┬──────────┬──────────────────┬───────────────────┐
+│ Nacos    │ Apollo   │ Spring Cloud     │ 预留 SPI 扩展      │
+│ 适配器   │ 适配器    │ Config 适配器     │ • Consul / Etcd   │
+│ order=100│ order=100│ order=200        │ • 自定义实现        │
+└──────────┴──────────┴──────────────────┴───────────────────┘
 
 条件装配：@ConditionalOnClass 自动发现配置中心依赖
 平滑切换：Spring Environment 抽象 + @Primary 优先级

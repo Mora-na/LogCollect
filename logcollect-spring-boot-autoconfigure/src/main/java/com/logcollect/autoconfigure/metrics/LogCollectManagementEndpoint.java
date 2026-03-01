@@ -8,8 +8,9 @@ import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.config.LogCollectConfigResolver;
 import com.logcollect.core.degrade.DegradeFileManager;
 import com.logcollect.core.internal.LogCollectInternalLogger;
+import com.logcollect.core.runtime.LogCollectGlobalSwitch;
+import com.logcollect.core.util.MethodKeyResolver;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.SpringBootVersion;
 import org.springframework.boot.actuate.endpoint.web.annotation.RestControllerEndpoint;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -23,7 +24,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 @RestControllerEndpoint(id = "logcollect")
@@ -39,7 +39,7 @@ public class LogCollectManagementEndpoint {
     private final List<LogCollectConfigSource> configSources;
     private final DegradeFileManager degradeFileManager;
     private final GlobalBufferMemoryManager bufferMemoryManager;
-    private final AtomicBoolean globalEnabled;
+    private final LogCollectGlobalSwitch globalSwitch;
     private final LogCollectMetrics metrics;
 
     private final AtomicLong lastRefreshTime = new AtomicLong(0);
@@ -51,14 +51,14 @@ public class LogCollectManagementEndpoint {
             @Autowired(required = false) List<LogCollectConfigSource> configSources,
             @Autowired(required = false) DegradeFileManager degradeFileManager,
             @Autowired(required = false) GlobalBufferMemoryManager bufferMemoryManager,
-            @Qualifier("logCollectGlobalEnabled") AtomicBoolean globalEnabled,
+            LogCollectGlobalSwitch globalSwitch,
             @Autowired(required = false) LogCollectMetrics metrics) {
         this.circuitBreakerRegistry = circuitBreakerRegistry;
         this.configResolver = configResolver;
         this.configSources = configSources != null ? configSources : Collections.<LogCollectConfigSource>emptyList();
         this.degradeFileManager = degradeFileManager;
         this.bufferMemoryManager = bufferMemoryManager;
-        this.globalEnabled = globalEnabled;
+        this.globalSwitch = globalSwitch;
         this.metrics = metrics;
     }
 
@@ -66,7 +66,7 @@ public class LogCollectManagementEndpoint {
     public Map<String, Object> status() {
         Map<String, Object> result = new LinkedHashMap<String, Object>();
 
-        result.put("enabled", globalEnabled.get());
+        result.put("enabled", globalSwitch != null && globalSwitch.isEnabled());
 
         Map<String, Object> breakers = new LinkedHashMap<String, Object>();
         circuitBreakerRegistry.getAll().forEach((method, breaker) -> {
@@ -84,7 +84,9 @@ public class LogCollectManagementEndpoint {
             Map<String, Object> info = new LinkedHashMap<String, Object>();
             LogCollectConfig cfg = configResolver.getCachedConfig(methodKey);
             if (cfg != null) {
-                info.put("collectMode", cfg.getCollectMode().name());
+                info.put("collectMode", cfg.getCollectMode() == null ? "AUTO" : cfg.getCollectMode().name());
+                info.put("effectiveCollectMode",
+                        cfg.getEffectiveCollectMode() == null ? "N/A" : cfg.getEffectiveCollectMode().name());
                 info.put("level", cfg.getLevel());
                 info.put("async", cfg.isAsync());
                 info.put("enabled", cfg.isEnabled());
@@ -152,10 +154,12 @@ public class LogCollectManagementEndpoint {
 
         if (method != null && !method.trim().isEmpty()) {
             String methodKey = method.trim();
-            LogCollectCircuitBreaker breaker = circuitBreakerRegistry.get(methodKey);
+            String normalized = MethodKeyResolver.normalize(methodKey);
+            LogCollectCircuitBreaker breaker = circuitBreakerRegistry.get(normalized);
 
             if (breaker == null) {
                 result.put("error", "Method not found: " + methodKey);
+                result.put("hint", "Try display format: com.example.Class#method");
                 result.put("registeredMethods", circuitBreakerRegistry.getAllMethodKeys());
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(result);
             }
@@ -163,13 +167,13 @@ public class LogCollectManagementEndpoint {
             LogCollectCircuitBreaker.State previousState = breaker.getState();
             breaker.manualReset();
 
-            result.put("method", methodKey);
+            result.put("method", normalized);
             result.put("previousState", previousState.name());
             result.put("currentState", breaker.getState().name());
             result.put("resetTime", Instant.now().toString());
 
             LogCollectInternalLogger.info("Circuit breaker manually reset: method={}, previousState={}",
-                    methodKey, previousState);
+                    normalized, previousState);
 
             return ResponseEntity.ok(result);
         }
@@ -237,6 +241,7 @@ public class LogCollectManagementEndpoint {
 
         int clearedCount = configResolver.clearCache();
         result.put("cacheClearedCount", clearedCount);
+        configResolver.onConfigChange("management");
 
         try {
             configResolver.saveToLocalCache();
@@ -324,7 +329,7 @@ public class LogCollectManagementEndpoint {
     @PutMapping("/enabled")
     public ResponseEntity<Map<String, Object>> setEnabled(@RequestParam boolean value) {
         Map<String, Object> result = new LinkedHashMap<String, Object>();
-        boolean previous = globalEnabled.getAndSet(value);
+        boolean previous = globalSwitch == null ? value : globalSwitch.setEnabled(value);
         result.put("previousEnabled", previous);
         result.put("currentEnabled", value);
         result.put("updateTime", Instant.now().toString());

@@ -13,14 +13,12 @@ import org.slf4j.ILoggerFactory;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
 
 import java.util.Iterator;
 
 @Configuration
 @ConditionalOnClass({LoggerContext.class, LogCollectLogbackAppender.class})
-@ConditionalOnProperty(prefix = "logcollect.global", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class LogCollectLogbackAppenderAutoConfiguration implements InitializingBean {
 
     private static final String DEFAULT_APPENDER_NAME = "LOG_COLLECT";

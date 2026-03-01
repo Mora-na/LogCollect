@@ -18,7 +18,8 @@ public class LogCollectConfig {
     private boolean async = true;
     private String level = "INFO";
     private LogFramework logFramework = LogFramework.AUTO;
-    private CollectMode collectMode = CollectMode.AGGREGATE;
+    private CollectMode collectMode = CollectMode.AUTO;
+    private CollectMode effectiveCollectMode;
 
     // ===== 缓冲区配置 =====
     private boolean useBuffer = true;
@@ -54,7 +55,6 @@ public class LogCollectConfig {
 
     // ===== 可观测性配置 =====
     private boolean enableMetrics = true;
-    private String metricsPrefix = "logcollect";
 
     // ===== 兼容字段（旧窗口失败统计） =====
     private int degradeWindowSeconds = 10;
@@ -109,6 +109,14 @@ public class LogCollectConfig {
 
     public void setCollectMode(CollectMode collectMode) {
         this.collectMode = collectMode;
+    }
+
+    public CollectMode getEffectiveCollectMode() {
+        return effectiveCollectMode;
+    }
+
+    public void setEffectiveCollectMode(CollectMode effectiveCollectMode) {
+        this.effectiveCollectMode = effectiveCollectMode;
     }
 
     public boolean isUseBuffer() {
@@ -293,14 +301,6 @@ public class LogCollectConfig {
 
     public void setEnableMetrics(boolean enableMetrics) {
         this.enableMetrics = enableMetrics;
-    }
-
-    public String getMetricsPrefix() {
-        return metricsPrefix;
-    }
-
-    public void setMetricsPrefix(String metricsPrefix) {
-        this.metricsPrefix = metricsPrefix;
     }
 
     public int getDegradeWindowSeconds() {

@@ -3,6 +3,7 @@ package com.logcollect.api.config;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.Consumer;
 
 public interface LogCollectConfigSource {
 
@@ -18,6 +19,20 @@ public interface LogCollectConfigSource {
      */
     default Map<String, String> getMethodProperties(String methodKey) {
         return Collections.emptyMap();
+    }
+
+    /**
+     * 全量配置（含全局 + 方法级），返回完整 key（如 logcollect.global.xxx / logcollect.methods.xxx.xxx）。
+     */
+    default Map<String, String> getAllProperties() {
+        Map<String, String> all = new LinkedHashMap<String, String>();
+        Map<String, String> global = getGlobalProperties();
+        if (global != null) {
+            for (Map.Entry<String, String> entry : global.entrySet()) {
+                all.put("logcollect.global." + entry.getKey(), entry.getValue());
+            }
+        }
+        return all;
     }
 
     /**
@@ -38,8 +53,19 @@ public interface LogCollectConfigSource {
     /**
      * 注册配置变更监听器。
      */
-    default void addChangeListener(Runnable listener) {
+    default void addChangeListener(Consumer<String> listener) {
         // no-op
+    }
+
+    /**
+     * 兼容旧监听签名。
+     */
+    @Deprecated
+    default void addChangeListener(Runnable listener) {
+        if (listener == null) {
+            return;
+        }
+        addChangeListener((Consumer<String>) source -> listener.run());
     }
 
     /**
@@ -50,7 +76,7 @@ public interface LogCollectConfigSource {
         if (listener == null) {
             return;
         }
-        addChangeListener(() -> listener.onChange(Collections.<String, String>emptyMap()));
+        addChangeListener((Consumer<String>) source -> listener.onChange(Collections.<String, String>emptyMap()));
     }
 
     default String getType() {

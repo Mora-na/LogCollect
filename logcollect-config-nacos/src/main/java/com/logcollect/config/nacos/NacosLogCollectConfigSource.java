@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 public class NacosLogCollectConfigSource implements LogCollectConfigSource, InitializingBean, DisposableBean {
 
@@ -38,7 +39,7 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
     private volatile Properties cachedProperties = new Properties();
     private volatile ConfigService configService;
 
-    private final CopyOnWriteArrayList<Runnable> listeners = new CopyOnWriteArrayList<Runnable>();
+    private final CopyOnWriteArrayList<Consumer<String>> listeners = new CopyOnWriteArrayList<Consumer<String>>();
 
     @Override
     public void afterPropertiesSet() {
@@ -74,7 +75,22 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
     }
 
     @Override
-    public void addChangeListener(Runnable listener) {
+    public Map<String, String> getAllProperties() {
+        Properties properties = cachedProperties;
+        if (properties == null || properties.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, String> result = new LinkedHashMap<String, String>();
+        for (String key : properties.stringPropertyNames()) {
+            if (key.startsWith("logcollect.")) {
+                result.put(key, properties.getProperty(key));
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public void addChangeListener(Consumer<String> listener) {
         if (listener != null) {
             listeners.add(listener);
         }
@@ -161,9 +177,9 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
     }
 
     private void notifyListeners() {
-        for (Runnable listener : listeners) {
+        for (Consumer<String> listener : listeners) {
             try {
-                listener.run();
+                listener.accept("nacos");
             } catch (Throwable ignored) {
             }
         }
@@ -176,8 +192,14 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
                 return;
             }
             File file = new File(dir, "nacos-" + dataId + ".properties");
+            Properties toSave = new Properties();
+            for (String key : properties.stringPropertyNames()) {
+                if (key.startsWith("logcollect.")) {
+                    toSave.setProperty(key, properties.getProperty(key));
+                }
+            }
             try (FileOutputStream fos = new FileOutputStream(file)) {
-                properties.store(fos, "LogCollect nacos cache " + LocalDateTime.now());
+                toSave.store(fos, "LogCollect nacos cache " + LocalDateTime.now());
             }
         } catch (Throwable t) {
             LogCollectInternalLogger.warn("Save Nacos local cache failed", t);

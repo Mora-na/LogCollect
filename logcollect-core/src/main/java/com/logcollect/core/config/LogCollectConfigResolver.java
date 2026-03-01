@@ -7,7 +7,9 @@ import com.logcollect.api.enums.DegradeStorage;
 import com.logcollect.api.enums.LogFramework;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.core.internal.LogCollectInternalLogger;
+import com.logcollect.core.runtime.LogCollectGlobalSwitch;
 import com.logcollect.core.util.DataSizeParser;
+import com.logcollect.core.util.MethodKeyResolver;
 
 import java.lang.reflect.Method;
 import java.time.Instant;
@@ -21,10 +23,21 @@ public class LogCollectConfigResolver {
 
     private final List<LogCollectConfigSource> sources;
     private final LogCollectLocalConfigCache cache;
-    private final ConcurrentHashMap<String, LogCollectConfig> resolvedCache = new ConcurrentHashMap<String, LogCollectConfig>();
+    private final LogCollectGlobalSwitch globalSwitch;
+    private final Object metrics;
+
+    private final ConcurrentHashMap<String, LogCollectConfig> resolvedCache =
+            new ConcurrentHashMap<String, LogCollectConfig>();
     private volatile Instant lastRefreshTime;
 
     public LogCollectConfigResolver(List<LogCollectConfigSource> sources, LogCollectLocalConfigCache cache) {
+        this(sources, cache, null, null);
+    }
+
+    public LogCollectConfigResolver(List<LogCollectConfigSource> sources,
+                                    LogCollectLocalConfigCache cache,
+                                    LogCollectGlobalSwitch globalSwitch,
+                                    Object metrics) {
         List<LogCollectConfigSource> sorted = new ArrayList<LogCollectConfigSource>();
         if (sources != null) {
             sorted.addAll(sources);
@@ -32,37 +45,47 @@ public class LogCollectConfigResolver {
         sorted.sort(Comparator.comparingInt(LogCollectConfigSource::getOrder));
         this.sources = Collections.unmodifiableList(sorted);
         this.cache = cache;
+        this.globalSwitch = globalSwitch;
+        this.metrics = metrics;
     }
 
     /**
      * 四级合并：
-     * ④ 框架默认 <- ③ 注解显式 <- ② 配置中心方法级 <- ① 配置中心全局。
+     * ④ 框架默认 <- ③ 注解显式 <- ② 配置中心方法级 <- ① 配置中心全局
      */
     public LogCollectConfig resolve(Method method, LogCollect annotation) {
-        String methodKey = buildMethodKey(method);
-        return resolvedCache.computeIfAbsent(methodKey, key -> resolveInternal(methodKey, annotation));
+        String displayMethodKey = MethodKeyResolver.toDisplayKey(method);
+        String configMethodKey = MethodKeyResolver.toConfigKey(method);
+        return resolvedCache.computeIfAbsent(displayMethodKey,
+                key -> resolveInternal(configMethodKey, annotation));
     }
 
-    private LogCollectConfig resolveInternal(String methodKey, LogCollect annotation) {
+    private LogCollectConfig resolveInternal(String configMethodKey, LogCollect annotation) {
         LogCollectConfig config = LogCollectConfig.frameworkDefaults();
 
-        // 第③级：注解显式覆盖
+        // 第③级：注解显式
         mergeFromAnnotation(config, annotation);
 
-        // 第②级：方法级配置
-        Map<String, String> methodProperties = loadMethodProperties(methodKey);
+        // 第②级：方法级
+        Map<String, String> methodProperties = loadMethodProperties(configMethodKey);
         mergeFromProperties(config, methodProperties);
 
-        // 第①级：全局配置（最高优先级）
+        // 第①级：全局（最高优先）
         Map<String, String> globalProperties = loadGlobalProperties();
         mergeFromProperties(config, globalProperties);
-
         return config;
     }
 
     public void onConfigChange() {
+        onConfigChange("unknown");
+    }
+
+    public void onConfigChange(String source) {
         clearCache();
-        LogCollectInternalLogger.info("Config cache cleared due to config change");
+        syncGlobalEnabledFromSources();
+        invokeMetrics("incrementConfigRefresh", source == null ? "unknown" : source);
+        LogCollectInternalLogger.info("Config cache cleared due to config change from: {}",
+                source == null ? "unknown" : source);
     }
 
     public int clearCache() {
@@ -85,7 +108,19 @@ public class LogCollectConfigResolver {
     }
 
     public LogCollectConfig getCachedConfig(String methodKey) {
-        return resolvedCache.get(methodKey);
+        if (methodKey == null) {
+            return null;
+        }
+        String normalized = MethodKeyResolver.normalize(methodKey);
+        LogCollectConfig config = resolvedCache.get(normalized);
+        if (config == null) {
+            config = resolvedCache.get(methodKey);
+        }
+        return config;
+    }
+
+    public Map<String, LogCollectConfig> getAllCachedConfigs() {
+        return Collections.unmodifiableMap(resolvedCache);
     }
 
     public void saveToLocalCache() {
@@ -114,14 +149,13 @@ public class LogCollectConfigResolver {
                 LogCollectInternalLogger.warn("Load global properties failed from {}", source.getType(), t);
             }
         }
-
         if (!merged.isEmpty()) {
             return merged;
         }
         return loadGlobalPropertiesFromLocalCache();
     }
 
-    private Map<String, String> loadMethodProperties(String methodKey) {
+    private Map<String, String> loadMethodProperties(String configMethodKey) {
         Map<String, String> merged = new LinkedHashMap<String, String>();
         List<LogCollectConfigSource> lowToHigh = sortLowToHighPrioritySources();
         for (LogCollectConfigSource source : lowToHigh) {
@@ -129,7 +163,7 @@ public class LogCollectConfigResolver {
                 if (!source.isAvailable()) {
                     continue;
                 }
-                Map<String, String> props = source.getMethodProperties(methodKey);
+                Map<String, String> props = source.getMethodProperties(configMethodKey);
                 if (props != null && !props.isEmpty()) {
                     merged.putAll(props);
                 }
@@ -137,15 +171,15 @@ public class LogCollectConfigResolver {
                 LogCollectInternalLogger.warn("Load method properties failed from {}", source.getType(), t);
             }
         }
-
         if (!merged.isEmpty()) {
             return merged;
         }
-        return loadMethodPropertiesFromLocalCache(methodKey);
+        return loadMethodPropertiesFromLocalCache(configMethodKey);
     }
 
     private List<LogCollectConfigSource> sortLowToHighPrioritySources() {
         List<LogCollectConfigSource> ordered = new ArrayList<LogCollectConfigSource>(sources);
+        // 值越小优先级越高；这里从低优先到高优先合并，后写覆盖前写。
         ordered.sort((a, b) -> Integer.compare(b.getOrder(), a.getOrder()));
         return ordered;
     }
@@ -155,6 +189,11 @@ public class LogCollectConfigResolver {
         for (LogCollectConfigSource source : sources) {
             try {
                 if (!source.isAvailable()) {
+                    continue;
+                }
+                Map<String, String> all = source.getAllProperties();
+                if (all != null && !all.isEmpty()) {
+                    result.putAll(all);
                     continue;
                 }
                 Map<String, String> global = source.getGlobalProperties();
@@ -210,8 +249,8 @@ public class LogCollectConfigResolver {
             return;
         }
 
-        // 基础
-        if (annotation.handler() != null && annotation.handler() != com.logcollect.api.handler.LogCollectHandler.class) {
+        if (annotation.handler() != null
+                && annotation.handler() != com.logcollect.api.handler.LogCollectHandler.class) {
             config.setHandlerClass(annotation.handler());
         }
         if (!annotation.async()) {
@@ -220,14 +259,10 @@ public class LogCollectConfigResolver {
         if (!"INFO".equals(annotation.level())) {
             config.setLevel(annotation.level());
         }
-        if (annotation.logFramework() != LogFramework.AUTO) {
-            config.setLogFramework(annotation.logFramework());
-        }
         if (annotation.collectMode() != CollectMode.AUTO) {
             config.setCollectMode(annotation.collectMode());
         }
 
-        // 缓冲区
         if (!annotation.useBuffer()) {
             config.setUseBuffer(false);
         }
@@ -238,7 +273,6 @@ public class LogCollectConfigResolver {
             config.setMaxBufferBytes(DataSizeParser.parseToBytes(annotation.maxBufferBytes()));
         }
 
-        // 熔断降级
         if (!annotation.enableDegrade()) {
             config.setEnableDegrade(false);
         }
@@ -264,7 +298,6 @@ public class LogCollectConfigResolver {
             config.setBlockWhenDegradeFail(true);
         }
 
-        // 安全
         if (!annotation.enableSanitize()) {
             config.setEnableSanitize(false);
         }
@@ -278,18 +311,6 @@ public class LogCollectConfigResolver {
             config.setMaskerClass(annotation.masker());
         }
 
-        // FILE 降级
-        if (!"500MB".equalsIgnoreCase(annotation.degradeFileMaxTotalSize())) {
-            config.setDegradeFileMaxTotalSize(annotation.degradeFileMaxTotalSize());
-        }
-        if (annotation.degradeFileTTLDays() != 90) {
-            config.setDegradeFileTTLDays(annotation.degradeFileTTLDays());
-        }
-        if (annotation.enableDegradeFileEncrypt()) {
-            config.setEnableDegradeFileEncrypt(true);
-        }
-
-        // 高级
         if (annotation.handlerTimeoutMs() != 5000) {
             config.setHandlerTimeoutMs(annotation.handlerTimeoutMs());
         }
@@ -300,12 +321,8 @@ public class LogCollectConfigResolver {
             config.setMaxNestingDepth(annotation.maxNestingDepth());
         }
 
-        // 可观测性
         if (!annotation.enableMetrics()) {
             config.setEnableMetrics(false);
-        }
-        if (!"logcollect".equals(annotation.metricsPrefix())) {
-            config.setMetricsPrefix(annotation.metricsPrefix());
         }
     }
 
@@ -316,19 +333,16 @@ public class LogCollectConfigResolver {
 
         applyBoolean(props, "enabled", config::setEnabled);
 
-        // 基础
         applyBoolean(props, "async", config::setAsync);
         applyString(props, "level", config::setLevel);
         applyEnum(props, "log-framework", LogFramework.class, config::setLogFramework);
         applyEnum(props, "collect-mode", CollectMode.class, config::setCollectMode);
 
-        // 缓冲区
         applyBoolean(props, "buffer.enabled", config::setUseBuffer);
         applyInt(props, "buffer.max-size", config::setMaxBufferSize);
         applyDataSize(props, "buffer.max-bytes", config::setMaxBufferBytes);
         applyDataSize(props, "buffer.total-max-bytes", config::setGlobalBufferTotalMaxBytes);
 
-        // 熔断降级
         applyBoolean(props, "degrade.enabled", config::setEnableDegrade);
         applyInt(props, "degrade.fail-threshold", config::setDegradeFailThreshold);
         applyEnum(props, "degrade.storage", DegradeStorage.class, config::setDegradeStorage);
@@ -338,23 +352,18 @@ public class LogCollectConfigResolver {
         applyInt(props, "degrade.half-open-success-threshold", config::setHalfOpenSuccessThreshold);
         applyBoolean(props, "degrade.block-when-degrade-fail", config::setBlockWhenDegradeFail);
 
-        // FILE 降级
         applyString(props, "degrade.file.max-total-size", config::setDegradeFileMaxTotalSize);
         applyInt(props, "degrade.file.ttl-days", config::setDegradeFileTTLDays);
         applyBoolean(props, "degrade.file.encrypt-enabled", config::setEnableDegradeFileEncrypt);
 
-        // 安全
         applyBoolean(props, "security.sanitize.enabled", config::setEnableSanitize);
         applyBoolean(props, "security.mask.enabled", config::setEnableMask);
 
-        // 高级
         applyInt(props, "handler-timeout-ms", config::setHandlerTimeoutMs);
         applyBoolean(props, "transaction-isolation", config::setTransactionIsolation);
         applyInt(props, "max-nesting-depth", config::setMaxNestingDepth);
 
-        // 指标
         applyBoolean(props, "metrics.enabled", config::setEnableMetrics);
-        applyString(props, "metrics.prefix", config::setMetricsPrefix);
 
         // 兼容旧 key
         applyBoolean(props, "logcollect.enabled", config::setEnabled);
@@ -363,6 +372,26 @@ public class LogCollectConfigResolver {
         applyInt(props, "half-open-pass-count", config::setHalfOpenPassCount);
         applyInt(props, "recover-interval-seconds", config::setRecoverIntervalSeconds);
         applyInt(props, "max-recover-interval-seconds", config::setRecoverMaxIntervalSeconds);
+    }
+
+    private void syncGlobalEnabledFromSources() {
+        if (globalSwitch == null) {
+            return;
+        }
+        for (LogCollectConfigSource source : sources) {
+            try {
+                if (!source.isAvailable()) {
+                    continue;
+                }
+                Map<String, String> globalProps = source.getGlobalProperties();
+                if (globalProps != null && globalProps.containsKey("enabled")) {
+                    globalSwitch.onConfigChange(Boolean.parseBoolean(globalProps.get("enabled")));
+                    return;
+                }
+            } catch (Throwable t) {
+                LogCollectInternalLogger.warn("Sync global enabled from {} failed", source.getType(), t);
+            }
+        }
     }
 
     private interface BooleanConsumer {
@@ -435,10 +464,40 @@ public class LogCollectConfigResolver {
         }
     }
 
-    private String buildMethodKey(Method method) {
-        if (method == null) {
-            return "unknown_method";
+    private void invokeMetrics(String methodName, Object... args) {
+        if (metrics == null) {
+            return;
         }
-        return method.getDeclaringClass().getName().replace('.', '_') + "_" + method.getName();
+        try {
+            MethodLoop:
+            for (java.lang.reflect.Method method : metrics.getClass().getMethods()) {
+                if (!method.getName().equals(methodName) || method.getParameterTypes().length != args.length) {
+                    continue;
+                }
+                Class<?>[] paramTypes = method.getParameterTypes();
+                for (int i = 0; i < paramTypes.length; i++) {
+                    if (args[i] == null) {
+                        continue;
+                    }
+                    if (!wrap(paramTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
+                        continue MethodLoop;
+                    }
+                }
+                method.invoke(metrics, args);
+                return;
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private Class<?> wrap(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return type;
+        }
+        if (type == int.class) return Integer.class;
+        if (type == long.class) return Long.class;
+        if (type == boolean.class) return Boolean.class;
+        if (type == double.class) return Double.class;
+        return type;
     }
 }

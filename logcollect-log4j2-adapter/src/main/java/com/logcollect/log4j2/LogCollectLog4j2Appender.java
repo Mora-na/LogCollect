@@ -9,6 +9,7 @@ import com.logcollect.core.buffer.AsyncFlushExecutor;
 import com.logcollect.core.buffer.LogCollectBuffer;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.context.LogCollectContextManager;
+import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.security.DefaultLogMasker;
 import com.logcollect.core.security.DefaultLogSanitizer;
@@ -71,7 +72,7 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
 
             if (!isLevelAllowed(event.getLevel(), config.getLevel())) {
                 context.incrementDiscardedCount();
-                metricCall("incrementDiscarded", methodKey, "level_filter");
+                metricCall(context, "incrementDiscarded", methodKey, "level_filter");
                 return;
             }
 
@@ -79,13 +80,13 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             LogCollectHandler handler = context.getHandler();
             if (handler != null && !handler.shouldCollect(context, level, rawMessage)) {
                 context.incrementDiscardedCount();
-                metricCall("incrementDiscarded", methodKey, "handler_filter");
+                metricCall(context, "incrementDiscarded", methodKey, "handler_filter");
                 return;
             }
 
-            Object securityTimer = metricCallWithResult("startSecurityTimer");
-            String processed = securityProcess(config, methodKey, rawMessage);
-            metricCall("stopSecurityTimer", securityTimer, methodKey);
+            Object securityTimer = metricCallWithResult(context, "startSecurityTimer");
+            String processed = securityProcess(config, methodKey, rawMessage, context);
+            metricCall(context, "stopSecurityTimer", securityTimer, methodKey);
 
             LogEntry entry = new LogEntry(
                     context.getTraceId(),
@@ -95,13 +96,13 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                     event.getThreadName(),
                     event.getLoggerName());
 
-            metricCall("incrementCollected", methodKey, level, context.getCollectMode().name());
+            metricCall(context, "incrementCollected", methodKey, level, context.getCollectMode().name());
 
             Object buf = context.getBuffer();
             if (config.isUseBuffer() && buf instanceof LogCollectBuffer) {
                 boolean offered = ((LogCollectBuffer) buf).offer(context, entry);
                 if (!offered) {
-                    metricCall("incrementDiscarded", methodKey, "buffer_full");
+                    metricCall(context, "incrementDiscarded", methodKey, "buffer_full");
                 }
             } else {
                 handleDirect(context, entry, methodKey);
@@ -111,20 +112,20 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         }
     }
 
-    private String securityProcess(LogCollectConfig config, String methodKey, String rawMessage) {
+    private String securityProcess(LogCollectConfig config, String methodKey, String rawMessage, LogCollectContext context) {
         String content = rawMessage;
 
         LogSanitizer sanitizer = resolveSanitizer(config);
         String sanitized = sanitizer == null ? content : sanitizer.sanitize(content);
         if (sanitized != null && !sanitized.equals(content)) {
-            metricCall("incrementSanitizeHits", methodKey);
+            metricCall(context, "incrementSanitizeHits", methodKey);
         }
         content = sanitized == null ? "" : sanitized;
 
         LogMasker masker = resolveMasker(config);
         String masked = masker == null ? content : masker.mask(content);
         if (masked != null && !masked.equals(content)) {
-            metricCall("incrementMaskHits", methodKey);
+            metricCall(context, "incrementMaskHits", methodKey);
         }
         return masked == null ? "" : masked;
     }
@@ -174,34 +175,40 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         if (breaker != null && !breaker.allowWrite()) {
             context.incrementDiscardedCount();
             notifyDegrade(context, "circuit_open");
-            metricCall("incrementDiscarded", methodKey, "circuit_open");
+            metricCall(context, "incrementDiscarded", methodKey, "circuit_open");
+            DegradeFallbackHandler.handleDegraded(
+                    context, "circuit_open",
+                    java.util.Collections.singletonList(entry.getContent()),
+                    entry.getLevel());
             return;
         }
 
-        Object persistTimer = metricCallWithResult("startPersistTimer");
+        Object persistTimer = metricCallWithResult(context, "startPersistTimer");
         try {
-            if (context.getCollectMode() == CollectMode.AGGREGATE) {
-                String line;
-                try {
-                    line = handler.formatLogLine(entry);
-                } catch (Throwable t) {
-                    notifyError(context, t, "formatLogLine");
-                    line = entry.getContent();
+            executeWithTx(context, () -> {
+                if (context.getCollectMode() == CollectMode.AGGREGATE) {
+                    String line;
+                    try {
+                        line = handler.formatLogLine(entry);
+                    } catch (Throwable t) {
+                        notifyError(context, t, "formatLogLine");
+                        line = entry.getContent();
+                    }
+                    AggregatedLog agg = new AggregatedLog(
+                            line == null ? "" : line,
+                            1,
+                            line == null ? 0L : (long) line.length() * 2L,
+                            entry.getLevel(),
+                            entry.getTime(),
+                            entry.getTime(),
+                            false);
+                    handler.flushAggregatedLog(context, agg);
+                    metricCall(context, "incrementPersisted", methodKey, CollectMode.AGGREGATE.name());
+                } else {
+                    handler.appendLog(context, entry);
+                    metricCall(context, "incrementPersisted", methodKey, CollectMode.SINGLE.name());
                 }
-                AggregatedLog agg = new AggregatedLog(
-                        line == null ? "" : line,
-                        1,
-                        line == null ? 0L : (long) line.length() * 2L,
-                        entry.getLevel(),
-                        entry.getTime(),
-                        entry.getTime(),
-                        false);
-                handler.flushAggregatedLog(context, agg);
-                metricCall("incrementPersisted", methodKey, CollectMode.AGGREGATE.name());
-            } else {
-                handler.appendLog(context, entry);
-                metricCall("incrementPersisted", methodKey, CollectMode.SINGLE.name());
-            }
+            });
             if (breaker != null) {
                 breaker.recordSuccess();
             }
@@ -212,10 +219,14 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             context.incrementDiscardedCount();
             notifyError(context, t, "append");
             notifyDegrade(context, "handler_error");
-            metricCall("incrementPersistFailed", methodKey);
-            metricCall("incrementDegradeTriggered", "persist_failed", methodKey);
+            metricCall(context, "incrementPersistFailed", methodKey);
+            metricCall(context, "incrementDegradeTriggered", "persist_failed", methodKey);
+            DegradeFallbackHandler.handleDegraded(
+                    context, "persist_failed",
+                    java.util.Collections.singletonList(entry.getContent()),
+                    entry.getLevel());
         } finally {
-            metricCall("stopPersistTimer", persistTimer, methodKey, context.getCollectMode().name());
+            metricCall(context, "stopPersistTimer", persistTimer, methodKey, context.getCollectMode().name());
         }
     }
 
@@ -254,7 +265,10 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         }
     }
 
-    private void metricCall(String methodName, Object... args) {
+    private void metricCall(LogCollectContext context, String methodName, Object... args) {
+        if (context != null && context.getConfig() != null && !context.getConfig().isEnableMetrics()) {
+            return;
+        }
         Object target = metrics;
         if (target == null) {
             return;
@@ -262,12 +276,54 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         invokeReflective(target, methodName, args);
     }
 
-    private Object metricCallWithResult(String methodName, Object... args) {
+    private Object metricCallWithResult(LogCollectContext context, String methodName, Object... args) {
+        if (context != null && context.getConfig() != null && !context.getConfig().isEnableMetrics()) {
+            return null;
+        }
         Object target = metrics;
         if (target == null) {
             return null;
         }
         return invokeReflective(target, methodName, args);
+    }
+
+    private void executeWithTx(LogCollectContext context, Runnable action) {
+        if (context == null || context.getConfig() == null || !context.getConfig().isTransactionIsolation()) {
+            action.run();
+            return;
+        }
+        Object txWrapper = context.getAttribute("__txWrapper");
+        if (txWrapper == null) {
+            action.run();
+            return;
+        }
+        if (!invokeIfPresent(txWrapper, "executeInNewTransaction", action)) {
+            action.run();
+        }
+    }
+
+    private boolean invokeIfPresent(Object target, String methodName, Object... args) {
+        try {
+            MethodLoop:
+            for (java.lang.reflect.Method method : target.getClass().getMethods()) {
+                if (!method.getName().equals(methodName) || method.getParameterTypes().length != args.length) {
+                    continue;
+                }
+                Class<?>[] paramTypes = method.getParameterTypes();
+                for (int i = 0; i < paramTypes.length; i++) {
+                    if (args[i] == null) {
+                        continue;
+                    }
+                    if (!wrap(paramTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
+                        continue MethodLoop;
+                    }
+                }
+                method.invoke(target, args);
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     private Object invokeReflective(Object target, String methodName, Object... args) {

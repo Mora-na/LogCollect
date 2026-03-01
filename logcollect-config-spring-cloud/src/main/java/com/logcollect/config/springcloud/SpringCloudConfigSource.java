@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 public class SpringCloudConfigSource implements LogCollectConfigSource, InitializingBean {
 
@@ -25,7 +26,8 @@ public class SpringCloudConfigSource implements LogCollectConfigSource, Initiali
     private ConfigurableEnvironment environment;
 
     private volatile Properties cachedProperties = new Properties();
-    private final CopyOnWriteArrayList<Runnable> listeners = new CopyOnWriteArrayList<Runnable>();
+    private static final String DEFAULT_SOURCE_MARK = "logcollect-default";
+    private final CopyOnWriteArrayList<Consumer<String>> listeners = new CopyOnWriteArrayList<Consumer<String>>();
 
     @Override
     public void afterPropertiesSet() {
@@ -53,7 +55,22 @@ public class SpringCloudConfigSource implements LogCollectConfigSource, Initiali
     }
 
     @Override
-    public void addChangeListener(Runnable listener) {
+    public Map<String, String> getAllProperties() {
+        Properties properties = cachedProperties;
+        if (properties == null || properties.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, String> result = new LinkedHashMap<String, String>();
+        for (String key : properties.stringPropertyNames()) {
+            if (key.startsWith("logcollect.")) {
+                result.put(key, properties.getProperty(key));
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public void addChangeListener(Consumer<String> listener) {
         if (listener != null) {
             listeners.add(listener);
         }
@@ -71,7 +88,7 @@ public class SpringCloudConfigSource implements LogCollectConfigSource, Initiali
 
     @Override
     public int getOrder() {
-        return 120;
+        return 200;
     }
 
     @Override
@@ -82,6 +99,9 @@ public class SpringCloudConfigSource implements LogCollectConfigSource, Initiali
         try {
             Properties props = new Properties();
             for (PropertySource<?> source : environment.getPropertySources()) {
+                if (source.getName() != null && source.getName().contains(DEFAULT_SOURCE_MARK)) {
+                    continue;
+                }
                 if (!(source instanceof EnumerablePropertySource)) {
                     continue;
                 }
@@ -97,9 +117,9 @@ public class SpringCloudConfigSource implements LogCollectConfigSource, Initiali
                 }
             }
             cachedProperties = props;
-            for (Runnable listener : listeners) {
+            for (Consumer<String> listener : listeners) {
                 try {
-                    listener.run();
+                    listener.accept("spring-cloud");
                 } catch (Throwable ignored) {
                 }
             }
