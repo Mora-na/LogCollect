@@ -3,6 +3,7 @@ package com.logcollect.core.buffer;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.model.*;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
+import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 
 import java.time.LocalDateTime;
@@ -116,19 +117,15 @@ public class AggregateModeBuffer implements LogCollectBuffer {
 
     @Override
     public void triggerFlush(LogCollectContext context, boolean isFinal) {
-        if (!flushing.compareAndSet(false, true)) {
-            return;
-        }
-        try {
-            AggregatedLog agg = buildAggregatedLog(isFinal);
-            if (agg != null) {
-                flushAggregated(context, agg);
-                if (context != null) {
-                    context.incrementFlushCount();
-                }
-            }
-        } finally {
-            flushing.set(false);
+        Runnable flushTask = () -> doTriggerFlush(context, isFinal);
+        boolean asyncFlush = context != null
+                && context.getConfig() != null
+                && context.getConfig().isAsync()
+                && !isFinal;
+        if (asyncFlush) {
+            AsyncFlushExecutor.submitOrRun(flushTask);
+        } else {
+            flushTask.run();
         }
     }
 
@@ -140,6 +137,26 @@ public class AggregateModeBuffer implements LogCollectBuffer {
 
     private boolean shouldFlush() {
         return (maxCount > 0 && count.get() >= maxCount) || (maxBytes > 0 && bytes.get() >= maxBytes);
+    }
+
+    private void doTriggerFlush(LogCollectContext context, boolean isFinal) {
+        if (!flushing.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            AggregatedLog agg = buildAggregatedLog(isFinal);
+            if (agg != null) {
+                String methodKey = context == null ? "unknown" : context.getMethodSignature();
+                metricCall(context, "incrementFlush", methodKey, "AGGREGATE",
+                        isFinal ? "final" : "threshold");
+                flushAggregated(context, agg);
+                if (context != null) {
+                    context.incrementFlushCount();
+                }
+            }
+        } finally {
+            flushing.set(false);
+        }
     }
 
     private AggregatedLog buildAggregatedLog(boolean isFinal) {
@@ -193,21 +210,28 @@ public class AggregateModeBuffer implements LogCollectBuffer {
     }
 
     private void flushAggregated(LogCollectContext context, AggregatedLog agg) {
+        String methodKey = context == null ? "unknown" : context.getMethodSignature();
         LogCollectCircuitBreaker breaker = getBreaker(context);
         if (breaker != null && !breaker.allowWrite()) {
             if (context != null) {
                 context.incrementDiscardedCount(agg.getEntryCount());
             }
             notifyDegrade(context, "circuit_open");
+            metricCall(context, "incrementDegradeTriggered", "circuit_open", methodKey);
+            if (context != null) {
+                DegradeFallbackHandler.handleDegraded(context, "circuit_open",
+                        java.util.Collections.singletonList(agg.getContent()), agg.getMaxLevel());
+            }
             return;
         }
         try {
             if (handler != null) {
-                handler.flushAggregatedLog(context, agg);
+                executeWithTx(context, () -> handler.flushAggregatedLog(context, agg));
             }
             if (breaker != null) {
                 breaker.recordSuccess();
             }
+            metricCall(context, "incrementPersisted", methodKey, "AGGREGATE");
         } catch (Throwable t) {
             if (breaker != null) {
                 breaker.recordFailure();
@@ -217,6 +241,12 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             }
             notifyError(context, t, "flushAggregatedLog");
             notifyDegrade(context, "handler_error");
+            metricCall(context, "incrementPersistFailed", methodKey);
+            metricCall(context, "incrementDegradeTriggered", "persist_failed", methodKey);
+            if (context != null) {
+                DegradeFallbackHandler.handleDegraded(context, "handler_error",
+                        java.util.Collections.singletonList(agg.getContent()), agg.getMaxLevel());
+            }
         }
     }
 
@@ -288,5 +318,89 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         } catch (Throwable t) {
             LogCollectInternalLogger.warn("onError callback failed", t);
         }
+    }
+
+    private void metricCall(LogCollectContext context, String methodName, Object... args) {
+        if (context == null) {
+            return;
+        }
+        Object metrics = context.getAttribute("__metrics");
+        if (metrics == null) {
+            return;
+        }
+        invokeReflective(metrics, methodName, args);
+    }
+
+    private Object invokeReflective(Object target, String methodName, Object... args) {
+        try {
+            MethodLoop:
+            for (java.lang.reflect.Method method : target.getClass().getMethods()) {
+                if (!method.getName().equals(methodName) || method.getParameterTypes().length != args.length) {
+                    continue;
+                }
+                Class<?>[] paramTypes = method.getParameterTypes();
+                for (int i = 0; i < paramTypes.length; i++) {
+                    if (args[i] == null) {
+                        continue;
+                    }
+                    if (!wrap(paramTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
+                        continue MethodLoop;
+                    }
+                }
+                return method.invoke(target, args);
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private Class<?> wrap(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return type;
+        }
+        if (type == int.class) return Integer.class;
+        if (type == long.class) return Long.class;
+        if (type == boolean.class) return Boolean.class;
+        if (type == double.class) return Double.class;
+        return type;
+    }
+
+    private void executeWithTx(LogCollectContext context, Runnable action) {
+        if (context == null || context.getConfig() == null || !context.getConfig().isTransactionIsolation()) {
+            action.run();
+            return;
+        }
+        Object txWrapper = context.getAttribute("__txWrapper");
+        if (txWrapper == null) {
+            action.run();
+            return;
+        }
+        if (!invokeIfPresent(txWrapper, "executeInNewTransaction", action)) {
+            action.run();
+        }
+    }
+
+    private boolean invokeIfPresent(Object target, String methodName, Object... args) {
+        try {
+            MethodLoop:
+            for (java.lang.reflect.Method method : target.getClass().getMethods()) {
+                if (!method.getName().equals(methodName) || method.getParameterTypes().length != args.length) {
+                    continue;
+                }
+                Class<?>[] paramTypes = method.getParameterTypes();
+                for (int i = 0; i < paramTypes.length; i++) {
+                    if (args[i] == null) {
+                        continue;
+                    }
+                    if (!wrap(paramTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
+                        continue MethodLoop;
+                    }
+                }
+                method.invoke(target, args);
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 }

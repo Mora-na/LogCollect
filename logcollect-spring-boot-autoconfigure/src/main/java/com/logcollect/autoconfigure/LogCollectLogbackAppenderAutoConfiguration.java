@@ -4,7 +4,10 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.Appender;
+import com.logcollect.api.enums.LogFramework;
+import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
 import com.logcollect.core.internal.LogCollectInternalLogger;
+import com.logcollect.core.security.SecurityComponentRegistry;
 import com.logcollect.logback.LogCollectLogbackAppender;
 import org.slf4j.ILoggerFactory;
 import org.slf4j.LoggerFactory;
@@ -17,20 +20,28 @@ import java.util.Iterator;
 
 @Configuration
 @ConditionalOnClass({LoggerContext.class, LogCollectLogbackAppender.class})
-@ConditionalOnProperty(prefix = "logcollect", name = {"enabled", "logging.auto-register-appender"},
-        havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "logcollect.global", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class LogCollectLogbackAppenderAutoConfiguration implements InitializingBean {
 
     private static final String DEFAULT_APPENDER_NAME = "LOG_COLLECT";
 
     private final LogCollectProperties properties;
+    private final LogCollectMetrics metrics;
+    private final SecurityComponentRegistry securityRegistry;
 
-    public LogCollectLogbackAppenderAutoConfiguration(LogCollectProperties properties) {
+    public LogCollectLogbackAppenderAutoConfiguration(LogCollectProperties properties,
+                                                      org.springframework.beans.factory.ObjectProvider<LogCollectMetrics> metricsProvider,
+                                                      org.springframework.beans.factory.ObjectProvider<SecurityComponentRegistry> securityRegistryProvider) {
         this.properties = properties;
+        this.metrics = metricsProvider.getIfAvailable();
+        this.securityRegistry = securityRegistryProvider.getIfAvailable();
     }
 
     @Override
     public void afterPropertiesSet() {
+        if (properties != null && properties.getGlobal().getLogFramework() == LogFramework.LOG4J2) {
+            return;
+        }
         if (properties != null
                 && properties.getLogging() != null
                 && !properties.getLogging().isAutoRegisterAppender()) {
@@ -54,6 +65,8 @@ public class LogCollectLogbackAppenderAutoConfiguration implements InitializingB
             Appender<ILoggingEvent> appenderByName = root.getAppender(appenderName);
             if (appenderByName != null) {
                 if (appenderByName instanceof LogCollectLogbackAppender) {
+                    ((LogCollectLogbackAppender) appenderByName).setSecurityRegistry(securityRegistry);
+                    ((LogCollectLogbackAppender) appenderByName).setMetrics(metrics);
                     return;
                 }
                 LogCollectInternalLogger.warn(
@@ -69,6 +82,8 @@ public class LogCollectLogbackAppenderAutoConfiguration implements InitializingB
             LogCollectLogbackAppender appender = new LogCollectLogbackAppender();
             appender.setName(appenderName);
             appender.setContext(context);
+            appender.setSecurityRegistry(securityRegistry);
+            appender.setMetrics(metrics);
             appender.start();
             root.addAppender(appender);
             LogCollectInternalLogger.info("Auto-registered LogCollect Logback appender '{}' on ROOT logger.",

@@ -32,7 +32,11 @@ public class CircuitBreakerRegistry {
         return Collections.unmodifiableSet(registry.keySet());
     }
 
+    public boolean contains(String methodKey) {
+        return registry.containsKey(methodKey);
+    }
+
     public static String buildMethodKey(Method method) {
-        return method.getDeclaringClass().getName() + "#" + method.getName();
+        return method.getDeclaringClass().getName().replace('.', '_') + "_" + method.getName();
     }
 }

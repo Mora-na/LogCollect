@@ -6,6 +6,7 @@ import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
 import com.logcollect.api.model.LogEntry;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
+import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 
 import java.time.LocalDateTime;
@@ -87,19 +88,15 @@ public class SingleModeBuffer implements LogCollectBuffer {
 
     @Override
     public void triggerFlush(LogCollectContext context, boolean isFinal) {
-        if (!flushing.compareAndSet(false, true)) {
-            return;
-        }
-        try {
-            List<LogEntry> batch = drain();
-            if (!batch.isEmpty()) {
-                flushBatch(context, batch);
-                if (context != null) {
-                    context.incrementFlushCount();
-                }
-            }
-        } finally {
-            flushing.set(false);
+        Runnable flushTask = () -> doTriggerFlush(context, isFinal);
+        boolean asyncFlush = context != null
+                && context.getConfig() != null
+                && context.getConfig().isAsync()
+                && !isFinal;
+        if (asyncFlush) {
+            AsyncFlushExecutor.submitOrRun(flushTask);
+        } else {
+            flushTask.run();
         }
     }
 
@@ -111,6 +108,26 @@ public class SingleModeBuffer implements LogCollectBuffer {
 
     private boolean shouldFlush() {
         return (maxCount > 0 && count.get() >= maxCount) || (maxBytes > 0 && bytes.get() >= maxBytes);
+    }
+
+    private void doTriggerFlush(LogCollectContext context, boolean isFinal) {
+        if (!flushing.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            List<LogEntry> batch = drain();
+            if (!batch.isEmpty()) {
+                String methodKey = context == null ? "unknown" : context.getMethodSignature();
+                metricCall(context, "incrementFlush", methodKey, "SINGLE",
+                        isFinal ? "final" : "threshold");
+                flushBatch(context, batch);
+                if (context != null) {
+                    context.incrementFlushCount();
+                }
+            }
+        } finally {
+            flushing.set(false);
+        }
     }
 
     private List<LogEntry> drain() {
@@ -139,22 +156,28 @@ public class SingleModeBuffer implements LogCollectBuffer {
 
     private void flushBatch(LogCollectContext context, List<LogEntry> batch) {
         LogCollectHandler handler = context == null ? null : context.getHandler();
+        String methodKey = context == null ? "unknown" : context.getMethodSignature();
         LogCollectCircuitBreaker breaker = getBreaker(context);
         if (breaker != null && !breaker.allowWrite()) {
             if (context != null) {
                 context.incrementDiscardedCount(batch.size());
             }
             notifyDegrade(context, "circuit_open");
+            metricCall(context, "incrementDegradeTriggered", "circuit_open", methodKey);
+            if (context != null) {
+                DegradeFallbackHandler.handleDegraded(context, "circuit_open", toLines(batch), maxLevel(batch));
+            }
             return;
         }
         for (LogEntry entry : batch) {
             try {
                 if (handler != null) {
-                    handler.appendLog(context, entry);
+                    executeWithTx(context, () -> handler.appendLog(context, entry));
                 }
                 if (breaker != null) {
                     breaker.recordSuccess();
                 }
+                metricCall(context, "incrementPersisted", methodKey, "SINGLE");
             } catch (Throwable t) {
                 if (breaker != null) {
                     breaker.recordFailure();
@@ -164,6 +187,13 @@ public class SingleModeBuffer implements LogCollectBuffer {
                 }
                 notifyError(context, t, "appendLog");
                 notifyDegrade(context, "handler_error");
+                metricCall(context, "incrementPersistFailed", methodKey);
+                metricCall(context, "incrementDegradeTriggered", "persist_failed", methodKey);
+                if (context != null) {
+                    java.util.List<String> lines = new java.util.ArrayList<String>();
+                    lines.add(entry.getContent());
+                    DegradeFallbackHandler.handleDegraded(context, "handler_error", lines, entry.getLevel());
+                }
             }
         }
     }
@@ -218,5 +248,122 @@ public class SingleModeBuffer implements LogCollectBuffer {
         } catch (Throwable t) {
             LogCollectInternalLogger.warn("onError callback failed", t);
         }
+    }
+
+    private java.util.List<String> toLines(List<LogEntry> entries) {
+        java.util.List<String> lines = new java.util.ArrayList<String>();
+        for (LogEntry entry : entries) {
+            lines.add(entry.getContent());
+        }
+        return lines;
+    }
+
+    private String maxLevel(List<LogEntry> entries) {
+        String max = "TRACE";
+        for (LogEntry entry : entries) {
+            max = higherLevel(max, entry.getLevel());
+        }
+        return max;
+    }
+
+    private String higherLevel(String left, String right) {
+        return levelRank(right) > levelRank(left) ? right : left;
+    }
+
+    private int levelRank(String level) {
+        if (level == null) {
+            return 0;
+        }
+        String v = level.toUpperCase();
+        if ("FATAL".equals(v)) return 5;
+        if ("ERROR".equals(v)) return 4;
+        if ("WARN".equals(v)) return 3;
+        if ("INFO".equals(v)) return 2;
+        if ("DEBUG".equals(v)) return 1;
+        return 0;
+    }
+
+    private void metricCall(LogCollectContext context, String methodName, Object... args) {
+        if (context == null) {
+            return;
+        }
+        Object metrics = context.getAttribute("__metrics");
+        if (metrics == null) {
+            return;
+        }
+        invokeReflective(metrics, methodName, args);
+    }
+
+    private Object invokeReflective(Object target, String methodName, Object... args) {
+        try {
+            MethodLoop:
+            for (java.lang.reflect.Method method : target.getClass().getMethods()) {
+                if (!method.getName().equals(methodName) || method.getParameterTypes().length != args.length) {
+                    continue;
+                }
+                Class<?>[] paramTypes = method.getParameterTypes();
+                for (int i = 0; i < paramTypes.length; i++) {
+                    if (args[i] == null) {
+                        continue;
+                    }
+                    if (!wrap(paramTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
+                        continue MethodLoop;
+                    }
+                }
+                return method.invoke(target, args);
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private Class<?> wrap(Class<?> type) {
+        if (!type.isPrimitive()) {
+            return type;
+        }
+        if (type == int.class) return Integer.class;
+        if (type == long.class) return Long.class;
+        if (type == boolean.class) return Boolean.class;
+        if (type == double.class) return Double.class;
+        return type;
+    }
+
+    private void executeWithTx(LogCollectContext context, Runnable action) {
+        if (context == null || context.getConfig() == null || !context.getConfig().isTransactionIsolation()) {
+            action.run();
+            return;
+        }
+        Object txWrapper = context.getAttribute("__txWrapper");
+        if (txWrapper == null) {
+            action.run();
+            return;
+        }
+        if (!invokeIfPresent(txWrapper, "executeInNewTransaction", action)) {
+            action.run();
+        }
+    }
+
+    private boolean invokeIfPresent(Object target, String methodName, Object... args) {
+        try {
+            MethodLoop:
+            for (java.lang.reflect.Method method : target.getClass().getMethods()) {
+                if (!method.getName().equals(methodName) || method.getParameterTypes().length != args.length) {
+                    continue;
+                }
+                Class<?>[] paramTypes = method.getParameterTypes();
+                for (int i = 0; i < paramTypes.length; i++) {
+                    if (args[i] == null) {
+                        continue;
+                    }
+                    if (!wrap(paramTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
+                        continue MethodLoop;
+                    }
+                }
+                method.invoke(target, args);
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 }

@@ -1,14 +1,12 @@
 package com.logcollect.autoconfigure.jdbc;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.concurrent.Callable;
 
-@Component
 public class TransactionalLogCollectHandlerWrapper {
 
     @Autowired(required = false)
@@ -30,6 +28,13 @@ public class TransactionalLogCollectHandlerWrapper {
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
+        });
+    }
+
+    public void executeInNewTransaction(Runnable action) {
+        executeInNewTransaction(() -> {
+            action.run();
+            return null;
         });
     }
 }

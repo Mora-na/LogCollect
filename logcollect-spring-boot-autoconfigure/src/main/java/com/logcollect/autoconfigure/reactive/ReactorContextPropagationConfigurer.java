@@ -4,6 +4,8 @@ import com.logcollect.api.model.LogCollectContextSnapshot;
 import com.logcollect.core.context.LogCollectContextManager;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import org.reactivestreams.Subscription;
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.context.annotation.Configuration;
 import reactor.core.CoreSubscriber;
@@ -11,16 +13,13 @@ import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Operators;
 import reactor.util.context.Context;
 
-import javax.annotation.PostConstruct;
-import javax.annotation.PreDestroy;
-
 @Configuration
 @ConditionalOnClass(name = "reactor.core.publisher.Hooks")
-public class ReactorContextPropagationConfigurer {
+public class ReactorContextPropagationConfigurer implements InitializingBean, DisposableBean {
     private static final String HOOK_KEY = "logcollect-context-propagation";
 
-    @PostConstruct
-    public void configure() {
+    @Override
+    public void afterPropertiesSet() {
         try {
             if (hasAutomaticPropagation()) {
                 enableAutomaticPropagation();
@@ -33,8 +32,8 @@ public class ReactorContextPropagationConfigurer {
         }
     }
 
-    @PreDestroy
-    public void cleanup() {
+    @Override
+    public void destroy() {
         try {
             Hooks.resetOnEachOperator(HOOK_KEY);
         } catch (Throwable ignore) {

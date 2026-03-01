@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>logcollect-spring-boot-starter</artifactId>
-    <packaging>jar</packaging>
+    <packaging>pom</packaging>
     <name>logcollect-spring-boot-starter</name>
 
     <dependencies>

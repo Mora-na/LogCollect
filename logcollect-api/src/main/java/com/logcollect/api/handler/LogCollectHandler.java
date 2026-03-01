@@ -60,8 +60,7 @@ public interface LogCollectHandler {
      * @param entry   单条日志对象（内容已完成净化与脱敏）
      */
     default void appendLog(LogCollectContext context, LogEntry entry) {
-        throw new UnsupportedOperationException(
-                "使用 SINGLE 模式必须实现 appendLog。");
+        throw new UnsupportedOperationException("当前使用 SINGLE 模式，须实现 appendLog()。如需聚合模式，请实现 flushAggregatedLog() 并设置 collectMode=AGGREGATE");
     }
 
     // =====================================================================
@@ -81,8 +80,7 @@ public interface LogCollectHandler {
      * @param aggregatedLog 聚合日志块（已拼接完成）
      */
     default void flushAggregatedLog(LogCollectContext context, AggregatedLog aggregatedLog) {
-        throw new UnsupportedOperationException(
-                "使用 AGGREGATE 模式必须实现 flushAggregatedLog。");
+        throw new UnsupportedOperationException("当前使用 AGGREGATE 模式，须实现 flushAggregatedLog()。如需单条模式，请实现 appendLog() 并设置 collectMode=SINGLE");
     }
 
     // =====================================================================

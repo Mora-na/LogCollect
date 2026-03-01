@@ -1,6 +1,9 @@
 package com.logcollect.autoconfigure;
 
+import com.logcollect.api.enums.LogFramework;
+import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
 import com.logcollect.core.internal.LogCollectInternalLogger;
+import com.logcollect.core.security.SecurityComponentRegistry;
 import com.logcollect.log4j2.LogCollectLog4j2Appender;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.Appender;
@@ -15,20 +18,28 @@ import java.util.Map;
 
 @Configuration
 @ConditionalOnClass({LoggerContext.class, LogCollectLog4j2Appender.class})
-@ConditionalOnProperty(prefix = "logcollect", name = {"enabled", "logging.auto-register-appender"},
-        havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "logcollect.global", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class LogCollectLog4j2AppenderAutoConfiguration implements InitializingBean {
 
     private static final String DEFAULT_APPENDER_NAME = "LOG_COLLECT";
 
     private final LogCollectProperties properties;
+    private final LogCollectMetrics metrics;
+    private final SecurityComponentRegistry securityRegistry;
 
-    public LogCollectLog4j2AppenderAutoConfiguration(LogCollectProperties properties) {
+    public LogCollectLog4j2AppenderAutoConfiguration(LogCollectProperties properties,
+                                                     org.springframework.beans.factory.ObjectProvider<LogCollectMetrics> metricsProvider,
+                                                     org.springframework.beans.factory.ObjectProvider<SecurityComponentRegistry> securityRegistryProvider) {
         this.properties = properties;
+        this.metrics = metricsProvider.getIfAvailable();
+        this.securityRegistry = securityRegistryProvider.getIfAvailable();
     }
 
     @Override
     public void afterPropertiesSet() {
+        if (properties != null && properties.getGlobal().getLogFramework() == LogFramework.LOGBACK) {
+            return;
+        }
         if (properties != null
                 && properties.getLogging() != null
                 && !properties.getLogging().isAutoRegisterAppender()) {
@@ -59,14 +70,24 @@ public class LogCollectLog4j2AppenderAutoConfiguration implements InitializingBe
                         appenderName);
                 return;
             }
+            if (existingByName instanceof LogCollectLog4j2Appender) {
+                ((LogCollectLog4j2Appender) existingByName).setSecurityRegistry(securityRegistry);
+                ((LogCollectLog4j2Appender) existingByName).setMetrics(metrics);
+            }
 
             Appender logCollectAppender = findLogCollectAppender(log4jConfiguration.getAppenders());
+            if (logCollectAppender instanceof LogCollectLog4j2Appender) {
+                ((LogCollectLog4j2Appender) logCollectAppender).setSecurityRegistry(securityRegistry);
+                ((LogCollectLog4j2Appender) logCollectAppender).setMetrics(metrics);
+            }
             if (logCollectAppender == null) {
                 LogCollectLog4j2Appender created = LogCollectLog4j2Appender.createAppender(appenderName, null);
                 if (created == null) {
                     LogCollectInternalLogger.warn("Create LogCollect Log4j2 appender failed.");
                     return;
                 }
+                created.setSecurityRegistry(securityRegistry);
+                created.setMetrics(metrics);
                 created.start();
                 log4jConfiguration.addAppender(created);
                 logCollectAppender = created;

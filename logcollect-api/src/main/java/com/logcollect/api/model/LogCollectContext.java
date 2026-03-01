@@ -5,9 +5,7 @@ import com.logcollect.api.handler.LogCollectHandler;
 
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
-import java.util.ArrayDeque;
 import java.util.Arrays;
-import java.util.Deque;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -24,14 +22,6 @@ import java.util.concurrent.atomic.AtomicLong;
  * 不可变元数据使用 {@code final}；可变状态使用 {@code volatile}、原子计数器或并发容器维护。
  */
 public class LogCollectContext {
-    /**
-     * 供静态访问器使用的线程内上下文栈。
-     *
-     * <p>支持嵌套 {@code @LogCollect}：内层调用压栈、结束后弹栈并恢复外层上下文。
-     */
-    private static final ThreadLocal<Deque<LogCollectContext>> CONTEXT_STACK =
-            ThreadLocal.withInitial(ArrayDeque::new);
-
     /** 本次调用的唯一追踪 ID（通常为 UUID）。 */
     private final String traceId;
     /** 被拦截方法的全限定签名，格式：{@code 全限定类名#方法名}。 */
@@ -375,8 +365,7 @@ public class LogCollectContext {
      * @return 栈顶上下文；若当前不在 {@code @LogCollect} 作用范围内则返回 null
      */
     public static LogCollectContext current() {
-        Deque<LogCollectContext> stack = CONTEXT_STACK.get();
-        return stack.isEmpty() ? null : stack.peek();
+        return invokeManagerCurrent();
     }
 
     /**
@@ -500,7 +489,7 @@ public class LogCollectContext {
      * @param ctx 上下文
      */
     static void push(LogCollectContext ctx) {
-        CONTEXT_STACK.get().push(ctx);
+        invokeManager("push", new Class[]{LogCollectContext.class}, new Object[]{ctx});
     }
 
     /**
@@ -509,10 +498,21 @@ public class LogCollectContext {
      * <p>当栈空时主动调用 {@link ThreadLocal#remove()}，避免线程复用场景下内存泄漏。
      */
     static void pop() {
-        Deque<LogCollectContext> stack = CONTEXT_STACK.get();
-        stack.poll();
-        if (stack.isEmpty()) {
-            CONTEXT_STACK.remove(); // 防止 ThreadLocal 泄漏
+        invokeManager("pop", new Class[]{}, new Object[]{});
+    }
+
+    private static LogCollectContext invokeManagerCurrent() {
+        Object value = invokeManager("current", new Class[]{}, new Object[]{});
+        return value instanceof LogCollectContext ? (LogCollectContext) value : null;
+    }
+
+    private static Object invokeManager(String methodName, Class<?>[] paramTypes, Object[] args) {
+        try {
+            Class<?> manager = Class.forName("com.logcollect.core.context.LogCollectContextManager");
+            java.lang.reflect.Method method = manager.getMethod(methodName, paramTypes);
+            return method.invoke(null, args);
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 }

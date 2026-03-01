@@ -7,6 +7,7 @@ import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
 import com.logcollect.autoconfigure.circuitbreaker.CircuitBreakerRegistry;
 import com.logcollect.autoconfigure.jdbc.TransactionalLogCollectHandlerWrapper;
+import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
 import com.logcollect.core.buffer.AggregateModeBuffer;
 import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.buffer.LogCollectBuffer;
@@ -14,6 +15,7 @@ import com.logcollect.core.buffer.SingleModeBuffer;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.config.LogCollectConfigResolver;
 import com.logcollect.core.context.LogCollectContextManager;
+import com.logcollect.core.degrade.DegradeFileManager;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.mdc.MDCAdapter;
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -54,6 +56,12 @@ public class LogCollectAspect {
     @Autowired(required = false)
     private GlobalBufferMemoryManager globalBufferManager;
 
+    @Autowired(required = false)
+    private LogCollectMetrics metrics;
+
+    @Autowired(required = false)
+    private DegradeFileManager degradeFileManager;
+
     private static volatile GlobalBufferMemoryManager fallbackGlobalBufferManager;
 
     private final ConcurrentHashMap<String, LogCollectCircuitBreaker> breakerCache =
@@ -82,11 +90,15 @@ public class LogCollectAspect {
         LogCollectCircuitBreaker breaker = getOrCreateBreaker(methodKey, config);
 
         String traceId = UUID.randomUUID().toString();
-        LogCollectHandler handler = resolveHandler(logCollect);
+        LogCollectHandler handler = resolveHandler(logCollect, config);
         CollectMode collectMode = resolveCollectMode(logCollect, handler);
         LogCollectContext ctx = null;
         try {
             ctx = buildContext(traceId, method, pjp.getArgs(), config, handler, breaker, collectMode);
+            if (metrics != null && config.isEnableMetrics()) {
+                metrics.recordActiveCollectionStart();
+                metrics.registerCircuitBreakerGauge(methodKey, breaker);
+            }
             if (LogCollectContextManager.depth() >= config.getMaxNestingDepth()) {
                 LogCollectInternalLogger.warn("Max nesting depth {} reached, skip", config.getMaxNestingDepth());
                 return pjp.proceed();
@@ -94,6 +106,7 @@ public class LogCollectAspect {
             LogCollectContextManager.push(ctx);
             final LogCollectContext finalCtx = ctx;
             final LogCollectHandler finalHandler = handler;
+            long beforeStart = System.currentTimeMillis();
             safeInvoke(new Callable<Object>() {
                 @Override
                 public Object call() {
@@ -101,11 +114,14 @@ public class LogCollectAspect {
                     return null;
                 }
             }, config.getHandlerTimeoutMs(), config.isTransactionIsolation(), finalCtx, "before");
+            if (metrics != null && config.isEnableMetrics()) {
+                metrics.recordHandlerDuration(methodKey, "before", System.currentTimeMillis() - beforeStart);
+            }
         } catch (Throwable t) {
             LogCollectInternalLogger.error("LogCollect before phase error", t);
             notifyHandlerError(ctx, t, "before");
             if (ctx != null) {
-                LogCollectContextManager.pop(traceId);
+                LogCollectContextManager.pop();
             }
             return pjp.proceed();
         }
@@ -126,10 +142,19 @@ public class LogCollectAspect {
 
         try {
             if (ctx != null) {
-                closeBuffer(ctx);
+                if (config.isTransactionIsolation() && txWrapper != null) {
+                    final LogCollectContext flushCtx = ctx;
+                    txWrapper.executeInNewTransaction(() -> {
+                        closeBuffer(flushCtx);
+                        return null;
+                    });
+                } else {
+                    closeBuffer(ctx);
+                }
             }
             final LogCollectContext finalCtx = ctx;
             final LogCollectHandler finalHandler = handler;
+            long afterStart = System.currentTimeMillis();
             safeInvoke(new Callable<Object>() {
                 @Override
                 public Object call() {
@@ -137,15 +162,22 @@ public class LogCollectAspect {
                     return null;
                 }
             }, config.getHandlerTimeoutMs(), config.isTransactionIsolation(), finalCtx, "after");
+            if (metrics != null && config.isEnableMetrics()) {
+                metrics.recordHandlerDuration(methodKey, "after", System.currentTimeMillis() - afterStart);
+            }
         } catch (Throwable t) {
             LogCollectInternalLogger.error("LogCollect after phase error", t);
             notifyHandlerError(ctx, t, "after");
         } finally {
             try {
-                LogCollectContextManager.pop(traceId);
+                LogCollectContextManager.pop();
             } catch (Throwable t) {
                 LogCollectInternalLogger.error("Context cleanup error", t);
                 MDCAdapter.remove("_logCollect_traceId");
+            } finally {
+                if (metrics != null && config.isEnableMetrics()) {
+                    metrics.recordActiveCollectionEnd();
+                }
             }
         }
 
@@ -171,7 +203,17 @@ public class LogCollectAspect {
                 buffer = new SingleModeBuffer(config.getMaxBufferSize(), config.getMaxBufferBytes(), manager);
             }
         }
-        return new LogCollectContext(traceId, method, args, config, handler, buffer, breaker, collectMode);
+        LogCollectContext context = new LogCollectContext(traceId, method, args, config, handler, buffer, breaker, collectMode);
+        if (degradeFileManager != null) {
+            context.setAttribute("__degradeFileManager", degradeFileManager);
+        }
+        if (metrics != null && config.isEnableMetrics()) {
+            context.setAttribute("__metrics", metrics);
+        }
+        if (txWrapper != null && config.isTransactionIsolation()) {
+            context.setAttribute("__txWrapper", txWrapper);
+        }
+        return context;
     }
 
     private GlobalBufferMemoryManager getGlobalBufferManager(LogCollectConfig config) {
@@ -188,8 +230,14 @@ public class LogCollectAspect {
         return fallbackGlobalBufferManager;
     }
 
-    private LogCollectHandler resolveHandler(LogCollect logCollect) {
+    private LogCollectHandler resolveHandler(LogCollect logCollect, LogCollectConfig config) {
         Class<? extends LogCollectHandler> handlerClass = logCollect.handler();
+        if ((handlerClass == null || handlerClass == LogCollectHandler.class)
+                && config != null
+                && config.getHandlerClass() != null
+                && config.getHandlerClass() != LogCollectHandler.class) {
+            handlerClass = config.getHandlerClass();
+        }
         if (handlerClass == null || handlerClass == LogCollectHandler.class) {
             try {
                 return applicationContext.getBean(LogCollectHandler.class);
@@ -243,6 +291,9 @@ public class LogCollectAspect {
         } catch (TimeoutException e) {
             LogCollectInternalLogger.warn("Handler execution timeout ({}ms)", timeoutMs);
             notifyHandlerError(context, e, phase);
+            if (metrics != null && context != null && context.getConfig() != null && context.getConfig().isEnableMetrics()) {
+                metrics.incrementHandlerTimeout(context.getMethodSignature());
+            }
             return null;
         } catch (Throwable t) {
             LogCollectInternalLogger.error("Handler execution error", t);
@@ -292,35 +343,15 @@ public class LogCollectAspect {
     }
 
     private CollectMode resolveCollectMode(LogCollect logCollect, LogCollectHandler handler) {
-        CollectMode mode = logCollect == null ? CollectMode.AUTO : logCollect.collectMode();
-        if (mode == null) {
-            mode = CollectMode.AUTO;
+        CollectMode annotationMode = logCollect == null ? CollectMode.AUTO : logCollect.collectMode();
+        if (annotationMode != null && annotationMode != CollectMode.AUTO) {
+            return annotationMode;
         }
-        if (mode == CollectMode.AUTO) {
-            CollectMode preferred = handler == null ? CollectMode.AUTO : handler.preferredMode();
-            if (preferred != null && preferred != CollectMode.AUTO) {
-                return preferred;
-            }
-            if (supportsAggregate(handler)) {
-                return CollectMode.AGGREGATE;
-            }
-            return CollectMode.SINGLE;
+        CollectMode preferred = handler == null ? CollectMode.AUTO : handler.preferredMode();
+        if (preferred != null && preferred != CollectMode.AUTO) {
+            return preferred;
         }
-        return mode;
-    }
-
-    private boolean supportsAggregate(LogCollectHandler handler) {
-        if (handler == null) {
-            return false;
-        }
-        try {
-            return handler.getClass()
-                    .getMethod("flushAggregatedLog", LogCollectContext.class,
-                            com.logcollect.api.model.AggregatedLog.class)
-                    .getDeclaringClass() != LogCollectHandler.class;
-        } catch (NoSuchMethodException e) {
-            return false;
-        }
+        return CollectMode.AGGREGATE;
     }
 
     static class NoopLogCollectHandler implements LogCollectHandler {

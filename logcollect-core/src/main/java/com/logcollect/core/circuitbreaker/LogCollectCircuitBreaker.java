@@ -3,7 +3,6 @@ package com.logcollect.core.circuitbreaker;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 
-import java.time.Instant;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -13,13 +12,19 @@ import java.util.function.Supplier;
 public class LogCollectCircuitBreaker {
     public enum State { CLOSED, OPEN, HALF_OPEN }
 
+    private static final int DEFAULT_FAIL_THRESHOLD = 5;
+    private static final long DEFAULT_RECOVER_INTERVAL_MS = 30_000L;
+    private static final long DEFAULT_MAX_RECOVER_INTERVAL_MS = 300_000L;
+    private static final int DEFAULT_HALF_OPEN_PASS_COUNT = 3;
+    private static final int DEFAULT_HALF_OPEN_SUCCESS_THRESHOLD = 3;
+
     private final AtomicReference<State> state = new AtomicReference<State>(State.CLOSED);
     private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
-    private final AtomicInteger halfOpenSuccesses = new AtomicInteger(0);
+    private final AtomicInteger halfOpenSuccessCount = new AtomicInteger(0);
+    private final AtomicInteger halfOpenPassedCount = new AtomicInteger(0);
     private final AtomicLong lastFailureTime = new AtomicLong(0);
-    private final AtomicLong currentRecoverInterval = new AtomicLong(0);
-    private final AtomicLong windowStartTime = new AtomicLong(System.currentTimeMillis());
-    private final AtomicInteger windowFailureCount = new AtomicInteger(0);
+    private final AtomicLong currentRecoverIntervalMs = new AtomicLong(DEFAULT_RECOVER_INTERVAL_MS);
+
     private final Supplier<LogCollectConfig> configSupplier;
 
     public LogCollectCircuitBreaker(Supplier<LogCollectConfig> configSupplier) {
@@ -27,88 +32,93 @@ public class LogCollectCircuitBreaker {
     }
 
     public boolean allowWrite() {
-        State s = state.get();
-        LogCollectConfig config = configSupplier.get();
-        if (s == State.CLOSED) {
+        LogCollectConfig config = safeConfig();
+        if (!config.isEnableDegrade()) {
             return true;
         }
-        if (s == State.OPEN) {
+
+        State current = state.get();
+        if (current == State.CLOSED) {
+            return true;
+        }
+
+        if (current == State.OPEN) {
             long now = System.currentTimeMillis();
-            long interval = currentRecoverInterval.get();
-            if (interval <= 0) {
-                interval = config.getRecoverIntervalSeconds() * 1000L;
-                currentRecoverInterval.set(interval);
-            }
-            long jitter = ThreadLocalRandom.current().nextLong(0, 200);
-            if (now - lastFailureTime.get() >= interval + jitter) {
+            long elapsed = now - lastFailureTime.get();
+            long interval = applyJitter(currentRecoverIntervalMs.get());
+            if (elapsed >= interval) {
                 if (state.compareAndSet(State.OPEN, State.HALF_OPEN)) {
-                    halfOpenSuccesses.set(0);
+                    halfOpenSuccessCount.set(0);
+                    halfOpenPassedCount.set(0);
+                    LogCollectInternalLogger.info("CircuitBreaker -> HALF_OPEN");
+                    return true;
                 }
+                return allowHalfOpen(config);
             }
             return false;
         }
-        int passCount = config.getHalfOpenPassCount();
-        return halfOpenSuccesses.get() < passCount;
+
+        return allowHalfOpen(config);
     }
 
     public void recordSuccess() {
-        State s = state.get();
-        if (s == State.CLOSED) {
+        State current = state.get();
+        if (current == State.CLOSED) {
             consecutiveFailures.set(0);
-            windowFailureCount.set(0);
-            windowStartTime.set(System.currentTimeMillis());
             return;
         }
-        if (s == State.HALF_OPEN) {
-            int successes = halfOpenSuccesses.incrementAndGet();
-            if (successes >= configSupplier.get().getHalfOpenSuccessThreshold()) {
-                state.set(State.CLOSED);
-                consecutiveFailures.set(0);
-                windowFailureCount.set(0);
-                currentRecoverInterval.set(0);
+
+        if (current == State.HALF_OPEN) {
+            int success = halfOpenSuccessCount.incrementAndGet();
+            if (success >= safeConfig().getHalfOpenSuccessThreshold()) {
+                if (state.compareAndSet(State.HALF_OPEN, State.CLOSED)) {
+                    consecutiveFailures.set(0);
+                    halfOpenSuccessCount.set(0);
+                    halfOpenPassedCount.set(0);
+                    currentRecoverIntervalMs.set(initialRecoverIntervalMs(safeConfig()));
+                    LogCollectInternalLogger.info("CircuitBreaker -> CLOSED");
+                }
             }
         }
     }
 
     public void recordFailure() {
-        LogCollectConfig config = configSupplier.get();
-        State s = state.get();
+        LogCollectConfig config = safeConfig();
         long now = System.currentTimeMillis();
-        if (s == State.CLOSED) {
-            long windowMs = config.getDegradeWindowSeconds() * 1000L;
-            if (now - windowStartTime.get() > windowMs) {
-                windowStartTime.set(now);
-                windowFailureCount.set(0);
-            }
-            int windowFailures = windowFailureCount.incrementAndGet();
-            int consecutive = consecutiveFailures.incrementAndGet();
-            if (windowFailures >= config.getFailureThreshold() || consecutive >= config.getFailureThreshold()) {
+        lastFailureTime.set(now);
+
+        State current = state.get();
+        if (current == State.CLOSED) {
+            int failures = consecutiveFailures.incrementAndGet();
+            if (failures >= config.getDegradeFailThreshold()) {
                 if (state.compareAndSet(State.CLOSED, State.OPEN)) {
-                    lastFailureTime.set(now);
-                    currentRecoverInterval.set(config.getRecoverIntervalSeconds() * 1000L);
-                    LogCollectInternalLogger.warn("Circuit opened by failures");
+                    currentRecoverIntervalMs.set(initialRecoverIntervalMs(config));
+                    LogCollectInternalLogger.warn("CircuitBreaker -> OPEN, failures={}", failures);
                 }
             }
             return;
         }
-        if (s == State.HALF_OPEN) {
-            state.set(State.OPEN);
-            lastFailureTime.set(now);
-            long interval = currentRecoverInterval.get();
-            if (interval <= 0) {
-                interval = config.getRecoverIntervalSeconds() * 1000L;
+
+        if (current == State.HALF_OPEN) {
+            if (state.compareAndSet(State.HALF_OPEN, State.OPEN)) {
+                long nextInterval = Math.min(
+                        currentRecoverIntervalMs.get() * 2,
+                        maxRecoverIntervalMs(config));
+                currentRecoverIntervalMs.set(nextInterval);
+                halfOpenSuccessCount.set(0);
+                halfOpenPassedCount.set(0);
+                LogCollectInternalLogger.warn("CircuitBreaker -> OPEN (probe failed), nextInterval={}ms", nextInterval);
             }
-            long next = Math.min(interval * 2, config.getMaxRecoverIntervalSeconds() * 1000L);
-            currentRecoverInterval.set(next);
         }
     }
 
     public void manualReset() {
         state.set(State.CLOSED);
         consecutiveFailures.set(0);
-        windowFailureCount.set(0);
-        halfOpenSuccesses.set(0);
-        currentRecoverInterval.set(configSupplier.get().getRecoverIntervalSeconds() * 1000L);
+        halfOpenSuccessCount.set(0);
+        halfOpenPassedCount.set(0);
+        currentRecoverIntervalMs.set(initialRecoverIntervalMs(safeConfig()));
+        lastFailureTime.set(0);
     }
 
     public State getState() {
@@ -119,12 +129,67 @@ public class LogCollectCircuitBreaker {
         return consecutiveFailures.get();
     }
 
+    public long getLastFailureTime() {
+        return lastFailureTime.get();
+    }
+
     public String getLastFailureTimeFormatted() {
         long ts = lastFailureTime.get();
-        return ts == 0 ? "never" : Instant.ofEpochMilli(ts).toString();
+        return ts == 0 ? "never" : java.time.Instant.ofEpochMilli(ts).toString();
     }
 
     public long getCurrentRecoverInterval() {
-        return currentRecoverInterval.get();
+        return currentRecoverIntervalMs.get();
+    }
+
+    private boolean allowHalfOpen(LogCollectConfig config) {
+        int passed = halfOpenPassedCount.incrementAndGet();
+        return passed <= config.getHalfOpenPassCount();
+    }
+
+    private long applyJitter(long baseMs) {
+        double jitter = 1.0 + (ThreadLocalRandom.current().nextDouble() * 0.4 - 0.2);
+        return (long) (baseMs * jitter);
+    }
+
+    private LogCollectConfig safeConfig() {
+        try {
+            LogCollectConfig config = configSupplier == null ? null : configSupplier.get();
+            if (config == null) {
+                config = LogCollectConfig.frameworkDefaults();
+            }
+            if (config.getDegradeFailThreshold() <= 0) {
+                config.setDegradeFailThreshold(DEFAULT_FAIL_THRESHOLD);
+            }
+            if (config.getRecoverIntervalSeconds() <= 0) {
+                config.setRecoverIntervalSeconds((int) (DEFAULT_RECOVER_INTERVAL_MS / 1000));
+            }
+            if (config.getRecoverMaxIntervalSeconds() <= 0) {
+                config.setRecoverMaxIntervalSeconds((int) (DEFAULT_MAX_RECOVER_INTERVAL_MS / 1000));
+            }
+            if (config.getHalfOpenPassCount() <= 0) {
+                config.setHalfOpenPassCount(DEFAULT_HALF_OPEN_PASS_COUNT);
+            }
+            if (config.getHalfOpenSuccessThreshold() <= 0) {
+                config.setHalfOpenSuccessThreshold(DEFAULT_HALF_OPEN_SUCCESS_THRESHOLD);
+            }
+            return config;
+        } catch (Throwable ignored) {
+            LogCollectConfig defaults = LogCollectConfig.frameworkDefaults();
+            defaults.setDegradeFailThreshold(DEFAULT_FAIL_THRESHOLD);
+            defaults.setRecoverIntervalSeconds((int) (DEFAULT_RECOVER_INTERVAL_MS / 1000));
+            defaults.setRecoverMaxIntervalSeconds((int) (DEFAULT_MAX_RECOVER_INTERVAL_MS / 1000));
+            defaults.setHalfOpenPassCount(DEFAULT_HALF_OPEN_PASS_COUNT);
+            defaults.setHalfOpenSuccessThreshold(DEFAULT_HALF_OPEN_SUCCESS_THRESHOLD);
+            return defaults;
+        }
+    }
+
+    private long initialRecoverIntervalMs(LogCollectConfig config) {
+        return Math.max(1L, config.getRecoverIntervalSeconds() * 1000L);
+    }
+
+    private long maxRecoverIntervalMs(LogCollectConfig config) {
+        return Math.max(initialRecoverIntervalMs(config), config.getRecoverMaxIntervalSeconds() * 1000L);
     }
 }

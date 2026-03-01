@@ -1,9 +1,10 @@
 package com.logcollect.core.context;
 
-import com.logcollect.api.model.LogCollectContextSnapshot;
+import com.logcollect.api.model.LogCollectContext;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.function.Supplier;
@@ -30,11 +31,18 @@ public final class LogCollectContextUtils {
         if (runnable instanceof LogCollectRunnableWrapper) {
             return runnable;
         }
-        LogCollectContextSnapshot snapshot = LogCollectContextManager.captureSnapshot();
+        Deque<LogCollectContext> snapshot = LogCollectContextManager.snapshot();
         if (snapshot == null || snapshot.isEmpty()) {
             return runnable;
         }
-        return new LogCollectRunnableWrapper(runnable, snapshot);
+        return () -> {
+            LogCollectContextManager.restore(snapshot);
+            try {
+                runnable.run();
+            } finally {
+                LogCollectContextManager.clear();
+            }
+        };
     }
 
     /**
@@ -51,11 +59,18 @@ public final class LogCollectContextUtils {
         if (callable instanceof LogCollectCallableWrapper) {
             return callable;
         }
-        LogCollectContextSnapshot snapshot = LogCollectContextManager.captureSnapshot();
+        Deque<LogCollectContext> snapshot = LogCollectContextManager.snapshot();
         if (snapshot == null || snapshot.isEmpty()) {
             return callable;
         }
-        return new LogCollectCallableWrapper<V>(callable, snapshot);
+        return () -> {
+            LogCollectContextManager.restore(snapshot);
+            try {
+                return callable.call();
+            } finally {
+                LogCollectContextManager.clear();
+            }
+        };
     }
 
     /**
@@ -189,18 +204,18 @@ public final class LogCollectContextUtils {
         if (supplier == null) {
             return null;
         }
-        final LogCollectContextSnapshot snapshot = LogCollectContextManager.captureSnapshot();
+        final Deque<LogCollectContext> snapshot = LogCollectContextManager.snapshot();
         if (snapshot == null || snapshot.isEmpty()) {
             return supplier;
         }
         return new Supplier<U>() {
             @Override
             public U get() {
-                LogCollectContextManager.restoreSnapshot(snapshot);
+                LogCollectContextManager.restore(snapshot);
                 try {
                     return supplier.get();
                 } finally {
-                    LogCollectContextManager.clearSnapshotContext();
+                    LogCollectContextManager.clear();
                 }
             }
         };

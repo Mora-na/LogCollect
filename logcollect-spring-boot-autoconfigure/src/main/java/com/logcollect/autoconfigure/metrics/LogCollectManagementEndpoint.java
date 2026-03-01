@@ -1,7 +1,7 @@
 package com.logcollect.autoconfigure.metrics;
 
 import com.logcollect.api.config.LogCollectConfigSource;
-import com.logcollect.api.config.Refreshable;
+import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.autoconfigure.circuitbreaker.CircuitBreakerRegistry;
 import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
@@ -10,6 +10,7 @@ import com.logcollect.core.degrade.DegradeFileManager;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.SpringBootVersion;
 import org.springframework.boot.actuate.endpoint.web.annotation.RestControllerEndpoint;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -39,6 +40,7 @@ public class LogCollectManagementEndpoint {
     private final DegradeFileManager degradeFileManager;
     private final GlobalBufferMemoryManager bufferMemoryManager;
     private final AtomicBoolean globalEnabled;
+    private final LogCollectMetrics metrics;
 
     private final AtomicLong lastRefreshTime = new AtomicLong(0);
     private final AtomicLong lastForceCleanupTime = new AtomicLong(0);
@@ -49,13 +51,15 @@ public class LogCollectManagementEndpoint {
             @Autowired(required = false) List<LogCollectConfigSource> configSources,
             @Autowired(required = false) DegradeFileManager degradeFileManager,
             @Autowired(required = false) GlobalBufferMemoryManager bufferMemoryManager,
-            @Qualifier("logCollectGlobalEnabled") AtomicBoolean globalEnabled) {
+            @Qualifier("logCollectGlobalEnabled") AtomicBoolean globalEnabled,
+            @Autowired(required = false) LogCollectMetrics metrics) {
         this.circuitBreakerRegistry = circuitBreakerRegistry;
         this.configResolver = configResolver;
         this.configSources = configSources != null ? configSources : Collections.<LogCollectConfigSource>emptyList();
         this.degradeFileManager = degradeFileManager;
         this.bufferMemoryManager = bufferMemoryManager;
         this.globalEnabled = globalEnabled;
+        this.metrics = metrics;
     }
 
     @GetMapping("/status")
@@ -75,7 +79,19 @@ public class LogCollectManagementEndpoint {
         });
         result.put("circuitBreakers", breakers);
 
-        result.put("registeredMethods", circuitBreakerRegistry.getAllMethodKeys());
+        Map<String, Object> registeredMethods = new LinkedHashMap<String, Object>();
+        for (String methodKey : circuitBreakerRegistry.getAllMethodKeys()) {
+            Map<String, Object> info = new LinkedHashMap<String, Object>();
+            LogCollectConfig cfg = configResolver.getCachedConfig(methodKey);
+            if (cfg != null) {
+                info.put("collectMode", cfg.getCollectMode().name());
+                info.put("level", cfg.getLevel());
+                info.put("async", cfg.isAsync());
+                info.put("enabled", cfg.isEnabled());
+            }
+            registeredMethods.put(methodKey, info);
+        }
+        result.put("registeredMethods", registeredMethods);
 
         if (bufferMemoryManager != null) {
             Map<String, Object> buffer = new LinkedHashMap<String, Object>();
@@ -110,6 +126,20 @@ public class LogCollectManagementEndpoint {
 
         result.put("configCacheSize", configResolver.getCacheSize());
         result.put("lastConfigRefreshTime", configResolver.getLastRefreshTimeFormatted());
+
+        if (metrics != null) {
+            result.put("activeCollections", metrics.getActiveCollections());
+            result.put("totalCollected", metrics.getTotalCollected());
+            result.put("totalPersisted", metrics.getTotalPersisted());
+            result.put("totalDiscarded", metrics.getTotalDiscarded());
+            result.put("totalFlushes", metrics.getTotalFlushes());
+            result.put("sanitizeHits", metrics.getTotalSanitizeHits());
+            result.put("maskHits", metrics.getTotalMaskHits());
+        }
+
+        result.put("logFramework", detectLogFramework());
+        result.put("contextPropagation", isContextPropagationAvailable());
+        result.put("springBootVersion", SpringBootVersion.getVersion());
 
         return result;
     }
@@ -191,9 +221,7 @@ public class LogCollectManagementEndpoint {
 
             try {
                 if (source.isAvailable()) {
-                    if (source instanceof Refreshable) {
-                        ((Refreshable) source).refresh();
-                    }
+                    source.refresh();
                     sr.put("status", "refreshed");
                 } else {
                     sr.put("status", "unavailable");
@@ -336,5 +364,28 @@ public class LogCollectManagementEndpoint {
             return String.format("%.1f MB", bytes / (1024.0 * 1024));
         }
         return String.format("%.2f GB", bytes / (1024.0 * 1024 * 1024));
+    }
+
+    private String detectLogFramework() {
+        try {
+            Class.forName("ch.qos.logback.classic.LoggerContext");
+            return "Logback";
+        } catch (ClassNotFoundException ignored) {
+        }
+        try {
+            Class.forName("org.apache.logging.log4j.core.LoggerContext");
+            return "Log4j2";
+        } catch (ClassNotFoundException ignored) {
+        }
+        return "Unknown";
+    }
+
+    private boolean isContextPropagationAvailable() {
+        try {
+            Class.forName("io.micrometer.context.ContextRegistry");
+            return true;
+        } catch (ClassNotFoundException ignored) {
+            return false;
+        }
     }
 }
