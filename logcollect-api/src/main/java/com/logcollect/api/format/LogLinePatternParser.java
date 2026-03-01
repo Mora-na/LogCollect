@@ -5,6 +5,7 @@ import com.logcollect.api.model.LogEntry;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Matcher;
@@ -12,60 +13,48 @@ import java.util.regex.Pattern;
 
 /**
  * 轻量级日志行 Pattern 解析器。
- *
- * <p>解析类似 Logback/Log4j2 的格式占位符，仅支持 LogEntry 字段可覆盖的子集。
- * 零外部依赖，纯 JDK 实现。
  */
 public final class LogLinePatternParser {
 
-    /**
-     * 匹配格式占位符：%[-][minWidth][.maxWidth]conversion[{argument}]
-     */
     private static final Pattern TOKEN_PATTERN = Pattern.compile(
             "%(-)?(\\d+)?(?:\\.(\\d+))?"
-                    + "(d|p|level|t|thread|c|logger|C|loggerFull|m|msg|ex|throwable|n|wEx)"
-                    + "(?:\\{([^}]*)\\})?"
-    );
+                    + "(d|p|level|t|thread|c|logger|C|loggerFull|m|msg|ex|throwable|wEx|n|X)"
+                    + "(?:\\{([^}]*)\\})?");
 
-    /** pattern -> 解析结果缓存 */
-    private static final ConcurrentMap<String, List<Segment>> PARSE_CACHE =
-            new ConcurrentHashMap<String, List<Segment>>(8);
+    private static final ConcurrentMap<String, List<PatternToken>> CACHE =
+            new ConcurrentHashMap<String, List<PatternToken>>(8);
 
-    /** DateTimeFormatter 缓存 */
     private static final ConcurrentMap<String, DateTimeFormatter> DTF_CACHE =
             new ConcurrentHashMap<String, DateTimeFormatter>(4);
 
     private LogLinePatternParser() {
     }
 
-    /**
-     * 按指定 pattern 格式化 LogEntry。
-     */
     public static String format(LogEntry entry, String pattern) {
         if (entry == null) {
             return "";
         }
         String safePattern = (pattern == null || pattern.isEmpty())
-                ? LogLineDefaults.getDetectedPattern()
+                ? LogLineDefaults.getEffectivePattern()
                 : pattern;
 
-        List<Segment> segments = PARSE_CACHE.computeIfAbsent(safePattern, LogLinePatternParser::parse);
-
-        StringBuilder sb = new StringBuilder(256);
-        for (Segment seg : segments) {
-            seg.render(entry, sb);
-        }
-        return sb.toString();
+        List<PatternToken> tokens = CACHE.computeIfAbsent(safePattern, LogLinePatternParser::compile);
+        return render(entry, tokens);
     }
 
-    private static List<Segment> parse(String pattern) {
-        List<Segment> segments = new ArrayList<Segment>();
+    public static void invalidateCache() {
+        CACHE.clear();
+        DTF_CACHE.clear();
+    }
+
+    private static List<PatternToken> compile(String pattern) {
+        List<PatternToken> tokens = new ArrayList<PatternToken>();
         Matcher matcher = TOKEN_PATTERN.matcher(pattern);
         int lastEnd = 0;
 
         while (matcher.find()) {
             if (matcher.start() > lastEnd) {
-                segments.add(new LiteralSegment(pattern.substring(lastEnd, matcher.start())));
+                tokens.add(new LiteralToken(pattern.substring(lastEnd, matcher.start())));
             }
 
             boolean leftAlign = "-".equals(matcher.group(1));
@@ -73,58 +62,65 @@ public final class LogLinePatternParser {
             int maxWidth = parseIntOrZero(matcher.group(3));
             String conversion = matcher.group(4);
             String argument = matcher.group(5);
-
-            segments.add(new PlaceholderSegment(conversion, argument, leftAlign, minWidth, maxWidth));
+            tokens.add(new PlaceholderToken(conversion, argument, leftAlign, minWidth, maxWidth));
             lastEnd = matcher.end();
         }
 
         if (lastEnd < pattern.length()) {
-            segments.add(new LiteralSegment(pattern.substring(lastEnd)));
+            tokens.add(new LiteralToken(pattern.substring(lastEnd)));
         }
 
-        return segments;
+        return java.util.Collections.unmodifiableList(tokens);
     }
 
-    private static int parseIntOrZero(String s) {
-        if (s == null || s.isEmpty()) {
+    private static String render(LogEntry entry, List<PatternToken> tokens) {
+        StringBuilder sb = new StringBuilder(256);
+        for (PatternToken token : tokens) {
+            token.appendTo(sb, entry);
+        }
+        return sb.toString();
+    }
+
+    private static int parseIntOrZero(String value) {
+        if (value == null || value.isEmpty()) {
             return 0;
         }
         try {
-            return Integer.parseInt(s);
+            return Integer.parseInt(value);
         } catch (NumberFormatException ignore) {
             return 0;
         }
     }
 
-    private interface Segment {
-        void render(LogEntry entry, StringBuilder sb);
+    interface PatternToken {
+        void appendTo(StringBuilder sb, LogEntry entry);
     }
 
-    private static final class LiteralSegment implements Segment {
+    private static final class LiteralToken implements PatternToken {
         private final String text;
 
-        private LiteralSegment(String text) {
+        private LiteralToken(String text) {
             this.text = text;
         }
 
         @Override
-        public void render(LogEntry entry, StringBuilder sb) {
+        public void appendTo(StringBuilder sb, LogEntry entry) {
             sb.append(text);
         }
     }
 
-    private static final class PlaceholderSegment implements Segment {
+    private static final class PlaceholderToken implements PatternToken {
         private final String conversion;
         private final String argument;
         private final boolean leftAlign;
         private final int minWidth;
         private final int maxWidth;
 
-        private PlaceholderSegment(String conversion,
-                                   String argument,
-                                   boolean leftAlign,
-                                   int minWidth,
-                                   int maxWidth) {
+        private PlaceholderToken(String conversion,
+                                 String argument,
+                                 boolean leftAlign,
+                                 int minWidth,
+                                 int maxWidth) {
             this.conversion = conversion;
             this.argument = argument;
             this.leftAlign = leftAlign;
@@ -133,37 +129,12 @@ public final class LogLinePatternParser {
         }
 
         @Override
-        public void render(LogEntry entry, StringBuilder sb) {
+        public void appendTo(StringBuilder sb, LogEntry entry) {
             String value = resolveValue(entry);
             if (value == null) {
                 value = "";
             }
             applyWidth(sb, value);
-        }
-
-        private void applyWidth(StringBuilder sb, String value) {
-            // 最大宽度截断（从左侧截断，保留右侧）
-            if (maxWidth > 0 && value.length() > maxWidth) {
-                value = value.substring(value.length() - maxWidth);
-            }
-
-            // 最小宽度填充
-            if (minWidth > 0 && value.length() < minWidth) {
-                int padding = minWidth - value.length();
-                if (leftAlign) {
-                    sb.append(value);
-                    for (int i = 0; i < padding; i++) {
-                        sb.append(' ');
-                    }
-                } else {
-                    for (int i = 0; i < padding; i++) {
-                        sb.append(' ');
-                    }
-                    sb.append(value);
-                }
-            } else {
-                sb.append(value);
-            }
         }
 
         private String resolveValue(LogEntry entry) {
@@ -191,22 +162,31 @@ public final class LogLinePatternParser {
                     return resolveThrowable(entry);
                 case "n":
                     return System.lineSeparator();
+                case "X":
+                    return resolveMdc(entry);
                 default:
                     return "%" + conversion;
             }
         }
 
-        private String formatTime(LogEntry entry) {
-            if (entry.getTime() == null) {
+        private String resolveMdc(LogEntry entry) {
+            Map<String, String> mdc = entry.getMdcContext();
+            if (mdc == null || mdc.isEmpty()) {
                 return "";
             }
+            if (argument == null || argument.isEmpty()) {
+                return mdc.toString();
+            }
+            String value = mdc.get(argument);
+            return value == null ? "" : value;
+        }
+
+        private String formatTime(LogEntry entry) {
             String datePattern = (argument != null && !argument.isEmpty())
                     ? argument
                     : "yyyy-MM-dd HH:mm:ss.SSS";
             try {
-                DateTimeFormatter formatter = DTF_CACHE.computeIfAbsent(
-                        datePattern,
-                        DateTimeFormatter::ofPattern);
+                DateTimeFormatter formatter = DTF_CACHE.computeIfAbsent(datePattern, DateTimeFormatter::ofPattern);
                 return entry.getTime().format(formatter);
             } catch (Exception e) {
                 return entry.getTime().toString();
@@ -219,14 +199,32 @@ public final class LogLinePatternParser {
             }
             return "\n" + entry.getThrowableString();
         }
+
+        private void applyWidth(StringBuilder sb, String value) {
+            if (maxWidth > 0 && value.length() > maxWidth) {
+                value = value.substring(value.length() - maxWidth);
+            }
+            if (minWidth > 0 && value.length() < minWidth) {
+                int padding = minWidth - value.length();
+                if (leftAlign) {
+                    sb.append(value);
+                    appendSpaces(sb, padding);
+                } else {
+                    appendSpaces(sb, padding);
+                    sb.append(value);
+                }
+                return;
+            }
+            sb.append(value);
+        }
+
+        private void appendSpaces(StringBuilder sb, int count) {
+            for (int i = 0; i < count; i++) {
+                sb.append(' ');
+            }
+        }
     }
 
-    /**
-     * 缩写 Logger 全限定名。
-     *
-     * <p>当全名长度超过 targetLength 时，从左侧开始逐段缩写为首字母，
-     * 保持最右侧的类名始终完整。
-     */
     static String abbreviateLoggerName(String loggerName, int targetLength) {
         if (loggerName == null) {
             return "";

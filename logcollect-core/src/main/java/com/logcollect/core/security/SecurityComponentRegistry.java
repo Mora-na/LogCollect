@@ -24,6 +24,12 @@ public class SecurityComponentRegistry {
         }
         Class<? extends LogSanitizer> clazz = config.getSanitizerClass();
         if (clazz == null || clazz == LogSanitizer.class) {
+            if (applicationContext != null) {
+                try {
+                    return applicationContext.getBean(LogSanitizer.class);
+                } catch (NoSuchBeanDefinitionException ignored) {
+                }
+            }
             return new DefaultLogSanitizer();
         }
         return (LogSanitizer) sanitizerCache.computeIfAbsent(clazz, this::instantiate);
@@ -35,6 +41,12 @@ public class SecurityComponentRegistry {
         }
         Class<? extends LogMasker> clazz = config.getMaskerClass();
         if (clazz == null || clazz == LogMasker.class) {
+            if (applicationContext != null) {
+                try {
+                    return applicationContext.getBean(LogMasker.class);
+                } catch (NoSuchBeanDefinitionException ignored) {
+                }
+            }
             return new DefaultLogMasker();
         }
         return (LogMasker) maskerCache.computeIfAbsent(clazz, this::instantiate);

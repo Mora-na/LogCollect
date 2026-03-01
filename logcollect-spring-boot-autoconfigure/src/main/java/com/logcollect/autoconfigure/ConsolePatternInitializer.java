@@ -1,10 +1,14 @@
 package com.logcollect.autoconfigure;
 
 import com.logcollect.api.format.LogLineDefaults;
+import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.format.ConsolePatternDetector;
 import com.logcollect.core.format.PatternCleaner;
+import com.logcollect.core.format.PatternValidator;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -27,7 +31,10 @@ final class ConsolePatternInitializer {
             return;
         }
 
-        for (ConsolePatternDetector detector : detectors) {
+        List<ConsolePatternDetector> ordered = new ArrayList<ConsolePatternDetector>(detectors);
+        ordered.sort(Comparator.comparingInt(ConsolePatternDetector::getOrder));
+
+        for (ConsolePatternDetector detector : ordered) {
             if (detector == null || !detector.isAvailable()) {
                 continue;
             }
@@ -41,19 +48,21 @@ final class ConsolePatternInitializer {
                 if (cleanedPattern == null || cleanedPattern.isEmpty()) {
                     continue;
                 }
+                LogCollectDiag.debug("Pattern detected: %s -> cleaned: %s", rawPattern, cleanedPattern);
+                String validatedPattern = PatternValidator.validateAndClean(cleanedPattern);
 
                 // 至少要能输出消息占位符
-                if (!containsMessagePlaceholder(cleanedPattern)) {
+                if (!containsMessagePlaceholder(validatedPattern)) {
                     LogCollectInternalLogger.warn(
                             "Detected pattern missing message placeholder, ignoring: {}",
-                            cleanedPattern);
+                            validatedPattern);
                     continue;
                 }
 
-                LogLineDefaults.setDetectedPattern(cleanedPattern);
+                LogLineDefaults.setDetectedPattern(validatedPattern);
                 LogCollectInternalLogger.info(
                         "Console log pattern detected and set: [{}] (raw: [{}])",
-                        cleanedPattern,
+                        validatedPattern,
                         rawPattern);
                 return;
             } catch (Exception e) {

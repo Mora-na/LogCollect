@@ -11,6 +11,8 @@ import java.util.Map;
 @ConfigurationProperties(prefix = "logcollect")
 public class LogCollectProperties {
 
+    private boolean debug = false;
+
     @NestedConfigurationProperty
     private Global global = new Global();
 
@@ -24,6 +26,14 @@ public class LogCollectProperties {
     private Logging logging = new Logging();
 
     private Map<String, MethodConfig> methods = new LinkedHashMap<String, MethodConfig>();
+
+    public boolean isDebug() {
+        return debug;
+    }
+
+    public void setDebug(boolean debug) {
+        this.debug = debug;
+    }
 
     public Global getGlobal() {
         return global;
@@ -80,6 +90,9 @@ public class LogCollectProperties {
 
         @NestedConfigurationProperty
         private Security security = new Security();
+
+        @NestedConfigurationProperty
+        private Guard guard = new Guard();
 
         private int handlerTimeoutMs = 5000;
         private int maxNestingDepth = 10;
@@ -151,6 +164,14 @@ public class LogCollectProperties {
             this.security = security;
         }
 
+        public Guard getGuard() {
+            return guard;
+        }
+
+        public void setGuard(Guard guard) {
+            this.guard = guard;
+        }
+
         public int getHandlerTimeoutMs() {
             return handlerTimeoutMs;
         }
@@ -180,6 +201,7 @@ public class LogCollectProperties {
         private boolean enabled = true;
         private int maxSize = 100;
         private String maxBytes = "1MB";
+        private String overflowStrategy = "FLUSH_EARLY";
         private String totalMaxBytes = "100MB";
 
         public boolean isEnabled() {
@@ -212,6 +234,14 @@ public class LogCollectProperties {
 
         public void setTotalMaxBytes(String totalMaxBytes) {
             this.totalMaxBytes = totalMaxBytes;
+        }
+
+        public String getOverflowStrategy() {
+            return overflowStrategy;
+        }
+
+        public void setOverflowStrategy(String overflowStrategy) {
+            this.overflowStrategy = overflowStrategy;
         }
 
         public long getMaxBytesValue() {
@@ -406,6 +436,27 @@ public class LogCollectProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+    }
+
+    public static class Guard {
+        private int maxContentLength = 32768;
+        private int maxThrowableLength = 65536;
+
+        public int getMaxContentLength() {
+            return maxContentLength;
+        }
+
+        public void setMaxContentLength(int maxContentLength) {
+            this.maxContentLength = maxContentLength;
+        }
+
+        public int getMaxThrowableLength() {
+            return maxThrowableLength;
+        }
+
+        public void setMaxThrowableLength(int maxThrowableLength) {
+            this.maxThrowableLength = maxThrowableLength;
         }
     }
 

@@ -18,4 +18,8 @@ public interface ConsolePatternDetector {
      * 当前检测器是否可用（对应的日志框架是否在 classpath 中）。
      */
     boolean isAvailable();
+
+    default int getOrder() {
+        return 0;
+    }
 }

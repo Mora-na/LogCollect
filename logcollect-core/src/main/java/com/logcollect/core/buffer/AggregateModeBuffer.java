@@ -1,12 +1,17 @@
 package com.logcollect.core.buffer;
 
+import com.logcollect.api.format.LogLineDefaults;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.model.*;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.degrade.DegradeFallbackHandler;
+import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.Collections;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,24 +31,28 @@ public class AggregateModeBuffer implements LogCollectBuffer {
     private final GlobalBufferMemoryManager globalManager;
     private final LogCollectHandler handler;
     private final String separator;
+    private final BoundedBufferPolicy policy;
+    private final ResilientFlusher resilientFlusher = new ResilientFlusher();
+
+    private volatile int currentPatternVersion = LogLineDefaults.getVersion();
 
     private static class LogSegment {
         final String formattedLine;
         final String level;
-        final LocalDateTime time;
         final long timestamp;
         final long estimatedBytes;
+        final int patternVersion;
 
         LogSegment(String formattedLine,
                    String level,
-                   LocalDateTime time,
                    long timestamp,
-                   long estimatedBytes) {
+                   long estimatedBytes,
+                   int patternVersion) {
             this.formattedLine = formattedLine;
             this.level = level;
-            this.time = time;
             this.timestamp = timestamp;
             this.estimatedBytes = estimatedBytes;
+            this.patternVersion = patternVersion;
         }
     }
 
@@ -51,12 +60,24 @@ public class AggregateModeBuffer implements LogCollectBuffer {
                                long maxBytes,
                                GlobalBufferMemoryManager globalManager,
                                LogCollectHandler handler) {
+        this(maxCount, maxBytes, globalManager, handler,
+                new BoundedBufferPolicy(maxBytes, maxCount, BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY));
+    }
+
+    public AggregateModeBuffer(int maxCount,
+                               long maxBytes,
+                               GlobalBufferMemoryManager globalManager,
+                               LogCollectHandler handler,
+                               BoundedBufferPolicy policy) {
         this.maxCount = maxCount;
         this.maxBytes = maxBytes;
         this.globalManager = globalManager;
         this.handler = handler;
         String sep = handler == null ? null : handler.aggregatedLogSeparator();
         this.separator = sep == null ? DEFAULT_SEPARATOR : sep;
+        this.policy = policy == null
+                ? new BoundedBufferPolicy(maxBytes, maxCount, BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY)
+                : policy;
     }
 
     @Override
@@ -72,6 +93,12 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             return false;
         }
 
+        int patternVersion = LogLineDefaults.getVersion();
+        if (patternVersion != currentPatternVersion && count.get() > 0) {
+            triggerFlush(context, false);
+            currentPatternVersion = patternVersion;
+        }
+
         String formattedLine;
         try {
             formattedLine = handler == null ? entry.getContent() : handler.formatLogLine(entry);
@@ -84,22 +111,17 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         }
 
         long lineBytes = estimateStringBytes(formattedLine);
-        LogSegment seg = new LogSegment(
-                formattedLine,
-                entry.getLevel(),
-                entry.getTime(),
-                entry.getTimestamp(),
-                lineBytes);
-        if (maxBytes > 0 && seg.estimatedBytes > maxBytes) {
+        if (maxBytes > 0 && lineBytes > maxBytes) {
             if (context != null) {
                 context.incrementDiscardedCount();
             }
             notifyDegrade(context, "buffer_entry_too_large");
             return false;
         }
-        if (globalManager != null && !globalManager.tryAllocate(seg.estimatedBytes)) {
+
+        if (globalManager != null && !globalManager.tryAllocate(lineBytes)) {
             if (isHighLevel(entry.getLevel())) {
-                globalManager.forceAllocate(seg.estimatedBytes);
+                globalManager.forceAllocate(lineBytes);
             } else {
                 if (context != null) {
                     context.incrementDiscardedCount();
@@ -109,9 +131,28 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             }
         }
 
-        if (maxBytes > 0 && bytes.get() + seg.estimatedBytes > maxBytes && count.get() > 0) {
-            triggerFlush(context, false);
+        if (policy.getStrategy() == BoundedBufferPolicy.OverflowStrategy.DROP_OLDEST) {
+            evictOldestUntilFit(context, lineBytes);
         }
+
+        boolean accepted = policy.beforeAdd(lineBytes, () -> triggerFlush(context, false));
+        if (!accepted) {
+            if (globalManager != null) {
+                globalManager.release(lineBytes);
+            }
+            if (context != null) {
+                context.incrementDiscardedCount();
+            }
+            notifyDegrade(context, "buffer_overflow_drop_newest");
+            return false;
+        }
+
+        LogSegment seg = new LogSegment(
+                formattedLine,
+                entry.getLevel(),
+                entry.getTimestamp(),
+                lineBytes,
+                patternVersion);
 
         segments.offer(seg);
         count.incrementAndGet();
@@ -125,6 +166,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             triggerFlush(context, false);
         }
         updateUtilization(context);
+        LogCollectDiag.debug("Buffer add: bytes=%d count=%d", bytes.get(), count.get());
         return true;
     }
 
@@ -148,6 +190,23 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         triggerFlush(context, true);
     }
 
+    @Override
+    public void forceFlush() {
+        triggerFlush(null, true);
+    }
+
+    @Override
+    public String dumpAsString() {
+        StringBuilder sb = new StringBuilder();
+        for (LogSegment segment : segments) {
+            if (sb.length() > 0) {
+                sb.append(separator);
+            }
+            sb.append(segment.formattedLine);
+        }
+        return sb.toString();
+    }
+
     private boolean shouldFlush() {
         return (maxCount > 0 && count.get() >= maxCount) || (maxBytes > 0 && bytes.get() >= maxBytes);
     }
@@ -166,6 +225,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
                 if (context != null) {
                     context.incrementFlushCount();
                 }
+                LogCollectDiag.debug("Flush triggered: segments=%d", agg.getEntryCount());
             }
             updateUtilization(context);
         } finally {
@@ -190,10 +250,11 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             sb.append(seg.formattedLine);
             drainedCount++;
             drainedBytes += seg.estimatedBytes;
+            LocalDateTime time = LocalDateTime.ofInstant(Instant.ofEpochMilli(seg.timestamp), ZoneId.systemDefault());
             if (firstTime == null) {
-                firstTime = seg.time;
+                firstTime = time;
             }
-            lastTime = seg.time;
+            lastTime = time;
             localMaxLevel = higherLevel(localMaxLevel, seg.level);
         }
 
@@ -212,6 +273,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         if (globalManager != null) {
             globalManager.release(drainedBytes);
         }
+        policy.afterDrain(drainedBytes, drainedCount);
 
         return new AggregatedLog(
                 sb.toString(),
@@ -221,13 +283,6 @@ public class AggregateModeBuffer implements LogCollectBuffer {
                 firstTime,
                 lastTime,
                 isFinal);
-    }
-
-    private long estimateStringBytes(String value) {
-        if (value == null) {
-            return 0L;
-        }
-        return 40L + (long) value.length() * 2L;
     }
 
     private void flushAggregated(LogCollectContext context, AggregatedLog agg) {
@@ -241,34 +296,70 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             metricCall(context, "incrementDegradeTriggered", "circuit_open", methodKey);
             if (context != null) {
                 DegradeFallbackHandler.handleDegraded(context, "circuit_open",
-                        java.util.Collections.singletonList(agg.getContent()), agg.getMaxLevel());
+                        Collections.singletonList(agg.getContent()), agg.getMaxLevel());
             }
             return;
         }
-        try {
+
+        boolean success = resilientFlusher.flush(() -> {
             if (handler != null) {
                 executeWithTx(context, () -> handler.flushAggregatedLog(context, agg));
             }
+        }, agg::getContent);
+
+        if (success) {
             if (breaker != null) {
                 breaker.recordSuccess();
             }
             metricCall(context, "incrementPersisted", methodKey, "AGGREGATE");
-        } catch (Throwable t) {
-            if (breaker != null) {
-                breaker.recordFailure();
+            return;
+        }
+
+        if (breaker != null) {
+            breaker.recordFailure();
+        }
+        if (context != null) {
+            context.incrementDiscardedCount(agg.getEntryCount());
+        }
+        notifyDegrade(context, "handler_error");
+        metricCall(context, "incrementPersistFailed", methodKey);
+        metricCall(context, "incrementDegradeTriggered", "persist_failed", methodKey);
+        if (context != null) {
+            DegradeFallbackHandler.handleDegraded(context, "handler_error",
+                    Collections.singletonList(agg.getContent()), agg.getMaxLevel());
+        }
+    }
+
+    private void evictOldestUntilFit(LogCollectContext context, long incomingBytes) {
+        while (policy.isOverflow(incomingBytes)) {
+            LogSegment evicted = segments.poll();
+            if (evicted == null) {
+                break;
             }
-            if (context != null) {
-                context.incrementDiscardedCount(agg.getEntryCount());
+            int remainingCount = count.decrementAndGet();
+            if (remainingCount < 0) {
+                count.set(0);
             }
-            notifyError(context, t, "flushAggregatedLog");
-            notifyDegrade(context, "handler_error");
-            metricCall(context, "incrementPersistFailed", methodKey);
-            metricCall(context, "incrementDegradeTriggered", "persist_failed", methodKey);
+            long remainingBytes = bytes.addAndGet(-evicted.estimatedBytes);
+            if (remainingBytes < 0) {
+                bytes.set(0);
+            }
+            if (globalManager != null) {
+                globalManager.release(evicted.estimatedBytes);
+            }
+            policy.afterDrain(evicted.estimatedBytes, 1);
+            policy.recordDropped();
             if (context != null) {
-                DegradeFallbackHandler.handleDegraded(context, "handler_error",
-                        java.util.Collections.singletonList(agg.getContent()), agg.getMaxLevel());
+                context.incrementDiscardedCount();
             }
         }
+    }
+
+    private long estimateStringBytes(String value) {
+        if (value == null) {
+            return 0L;
+        }
+        return 48L + ((long) value.length() << 1);
     }
 
     private String higherLevel(String left, String right) {
@@ -285,7 +376,6 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         if ("WARN".equals(v)) return 3;
         if ("INFO".equals(v)) return 2;
         if ("DEBUG".equals(v)) return 1;
-        if ("TRACE".equals(v)) return 0;
         return 0;
     }
 

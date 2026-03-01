@@ -11,7 +11,7 @@
     </parent>
 
     <artifactId>logcollect-spring-boot-starter</artifactId>
-    <packaging>pom</packaging>
+    <packaging>jar</packaging>
     <name>logcollect-spring-boot-starter</name>
 
     <dependencies>
@@ -26,10 +26,12 @@
         <dependency>
             <groupId>com.logcollect</groupId>
             <artifactId>logcollect-logback-adapter</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>com.logcollect</groupId>
             <artifactId>logcollect-log4j2-adapter</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>

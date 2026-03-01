@@ -33,4 +33,18 @@ public interface LogCollectBuffer {
      * @param context 当前调用上下文
      */
     void closeAndFlush(LogCollectContext context);
+
+    /**
+     * 生命周期强制刷盘入口。
+     */
+    default void forceFlush() {
+        triggerFlush(null, true);
+    }
+
+    /**
+     * 调试/降级用文本快照。
+     */
+    default String dumpAsString() {
+        return "";
+    }
 }

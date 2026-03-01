@@ -28,9 +28,9 @@ public interface LogCollectHandler {
     // =====================================================================
 
     default void appendLog(LogCollectContext context, LogEntry entry) {
-        throw new UnsupportedOperationException(
-                "当前使用 SINGLE 模式，须实现 appendLog()。"
-                        + "如需聚合模式，请实现 flushAggregatedLog() 并设置 collectMode=AGGREGATE");
+        System.err.println("[LogCollect-WARN] appendLog not implemented in "
+                + getClass().getSimpleName()
+                + ", log entry dropped. Consider implementing appendLog or using AGGREGATE mode.");
     }
 
     // =====================================================================
@@ -58,7 +58,7 @@ public interface LogCollectHandler {
      * logcollect.global.format.log-line-pattern=...
      */
     default String logLinePattern() {
-        return LogLineDefaults.getDetectedPattern();
+        return LogLineDefaults.getEffectivePattern();
     }
 
     /**

@@ -16,6 +16,11 @@ import java.util.Map;
 public class Log4j2ConsolePatternDetector implements ConsolePatternDetector {
 
     @Override
+    public int getOrder() {
+        return 20;
+    }
+
+    @Override
     public boolean isAvailable() {
         try {
             Class.forName("org.apache.logging.log4j.core.LoggerContext");

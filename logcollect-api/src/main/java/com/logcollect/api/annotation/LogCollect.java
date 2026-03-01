@@ -5,8 +5,6 @@ import com.logcollect.api.enums.DegradeStorage;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.masker.LogMasker;
 import com.logcollect.api.sanitizer.LogSanitizer;
-import com.logcollect.api.security.DefaultLogMasker;
-import com.logcollect.api.security.DefaultLogSanitizer;
 
 import java.lang.annotation.*;
 
@@ -18,7 +16,8 @@ public @interface LogCollect {
     // ===== 基础配置 =====
     Class<? extends LogCollectHandler> handler() default LogCollectHandler.class;
     boolean async() default true;
-    String level() default "INFO";
+    String minLevel() default "TRACE";
+    String[] excludeLoggers() default {};
     CollectMode collectMode() default CollectMode.AUTO;
 
     // ===== 缓冲区配置 =====
@@ -38,9 +37,9 @@ public @interface LogCollect {
 
     // ===== 安全防护配置 =====
     boolean enableSanitize() default true;
-    Class<? extends LogSanitizer> sanitizer() default DefaultLogSanitizer.class;
+    Class<? extends LogSanitizer> sanitizer() default LogSanitizer.class;
     boolean enableMask() default true;
-    Class<? extends LogMasker> masker() default DefaultLogMasker.class;
+    Class<? extends LogMasker> masker() default LogMasker.class;
 
     // ===== 高级配置 =====
     int handlerTimeoutMs() default 5000;

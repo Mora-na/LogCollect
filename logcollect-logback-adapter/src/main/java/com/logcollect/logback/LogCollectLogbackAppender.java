@@ -15,15 +15,16 @@ import com.logcollect.core.buffer.LogCollectBuffer;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.context.LogCollectContextManager;
 import com.logcollect.core.degrade.DegradeFallbackHandler;
+import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.pipeline.SecurityPipeline;
 import com.logcollect.core.security.DefaultLogMasker;
 import com.logcollect.core.security.DefaultLogSanitizer;
 import com.logcollect.core.security.SecurityComponentRegistry;
+import com.logcollect.core.security.StringLengthGuard;
 
-import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.util.Collections;
 import java.util.Map;
 
 public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggingEvent> {
@@ -56,11 +57,18 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
 
             LogCollectConfig config = context.getConfig();
             String methodKey = context.getMethodSignature();
+            String loggerName = event.getLoggerName();
             String level = event.getLevel() == null ? "INFO" : event.getLevel().toString();
+            LogCollectDiag.debug("Appender received event: logger=%s level=%s", loggerName, level);
 
-            if (!isLevelAllowed(event.getLevel(), config.getLevel())) {
+            if (!isLevelAllowed(event.getLevel(), context.getMinLevelInt())) {
                 context.incrementDiscardedCount();
                 metricCall(context, "incrementDiscarded", methodKey, "level_filter");
+                return;
+            }
+            if (context.isLoggerExcluded(loggerName)) {
+                context.incrementDiscardedCount();
+                metricCall(context, "incrementDiscarded", methodKey, "logger_filter");
                 return;
             }
 
@@ -77,15 +85,19 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             }
 
             long eventTimestamp = event.getTimeStamp();
+            String content = StringLengthGuard.guardContent(rawMessage, config.getGuardMaxContentLength());
+            String throwable = StringLengthGuard.guardThrowable(
+                    extractThrowableString(event), config.getGuardMaxThrowableLength());
+
             LogEntry rawEntry = LogEntry.builder()
                     .traceId(context.getTraceId())
-                    .content(rawMessage)
+                    .content(content)
                     .level(level)
-                    .time(LocalDateTime.ofInstant(Instant.ofEpochMilli(eventTimestamp), ZoneId.systemDefault()))
                     .timestamp(eventTimestamp)
                     .threadName(event.getThreadName())
-                    .loggerName(event.getLoggerName())
-                    .throwableString(extractThrowableString(event))
+                    .loggerName(loggerName)
+                    .throwableString(throwable)
+                    .mdcContext(mdc)
                     .build();
 
             Object securityTimer = metricCallWithResult(context, "startSecurityTimer");
@@ -104,49 +116,40 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                 handleDirect(context, entry, methodKey);
             }
         } catch (Throwable t) {
+            addError("LogCollect appender error", t);
             LogCollectInternalLogger.error("Logback appender error", t);
         }
     }
 
-    private LogEntry securityProcess(LogCollectConfig config, String methodKey, LogEntry rawEntry, LogCollectContext context) {
+    private LogEntry securityProcess(LogCollectConfig config,
+                                     String methodKey,
+                                     LogEntry rawEntry,
+                                     LogCollectContext context) {
         LogSanitizer sanitizer = resolveSanitizer(config);
         LogMasker masker = resolveMasker(config);
 
-        String rawContent = rawEntry.getContent();
-        String rawThrowable = rawEntry.getThrowableString();
+        SecurityPipeline pipeline = new SecurityPipeline(sanitizer, masker);
+        return pipeline.process(rawEntry, new SecurityPipeline.SecurityMetrics() {
+            @Override
+            public void onContentSanitized() {
+                metricCall(context, "incrementSanitizeHits", methodKey);
+            }
 
-        String sanitizedContent = sanitizer == null ? rawContent : sanitizer.sanitize(rawContent);
-        String sanitizedThrowable = rawThrowable;
-        if (sanitizer != null && rawThrowable != null) {
-            sanitizedThrowable = sanitizer.sanitizeThrowable(rawThrowable);
-        }
+            @Override
+            public void onThrowableSanitized() {
+                metricCall(context, "incrementSanitizeHits", methodKey);
+            }
 
-        LogEntry secured = new SecurityPipeline(sanitizer, masker).process(rawEntry);
-        String securedContent = secured.getContent() == null ? "" : secured.getContent();
-        secured = LogEntry.builder()
-                .traceId(secured.getTraceId())
-                .content(securedContent)
-                .level(secured.getLevel())
-                .time(secured.getTime())
-                .timestamp(secured.getTimestamp())
-                .threadName(secured.getThreadName())
-                .loggerName(secured.getLoggerName())
-                .throwableString(secured.getThrowableString())
-                .build();
+            @Override
+            public void onContentMasked() {
+                metricCall(context, "incrementMaskHits", methodKey);
+            }
 
-        boolean sanitizeHit = sanitizer != null
-                && (!safeEquals(rawContent, sanitizedContent) || !safeEquals(rawThrowable, sanitizedThrowable));
-        if (sanitizeHit) {
-            metricCall(context, "incrementSanitizeHits", methodKey);
-        }
-
-        boolean maskHit = masker != null
-                && (!safeEquals(sanitizedContent, securedContent)
-                || !safeEquals(sanitizedThrowable, secured.getThrowableString()));
-        if (maskHit) {
-            metricCall(context, "incrementMaskHits", methodKey);
-        }
-        return secured;
+            @Override
+            public void onThrowableMasked() {
+                metricCall(context, "incrementMaskHits", methodKey);
+            }
+        });
     }
 
     private String extractThrowableString(ILoggingEvent event) {
@@ -177,9 +180,22 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         return new DefaultLogMasker();
     }
 
-    private boolean isLevelAllowed(Level eventLevel, String minLevel) {
-        Level min = Level.toLevel(minLevel, Level.INFO);
-        return eventLevel != null && eventLevel.isGreaterOrEqual(min);
+    private boolean isLevelAllowed(Level eventLevel, int minLevelInt) {
+        return eventLevel != null && toLevelRank(eventLevel.toString()) >= minLevelInt;
+    }
+
+    private int toLevelRank(String level) {
+        if (level == null) {
+            return 0;
+        }
+        String v = level.toUpperCase();
+        if ("FATAL".equals(v)) return 5;
+        if ("ERROR".equals(v)) return 4;
+        if ("WARN".equals(v)) return 3;
+        if ("INFO".equals(v)) return 2;
+        if ("DEBUG".equals(v)) return 1;
+        if ("TRACE".equals(v)) return 0;
+        return 0;
     }
 
     private void handleDirect(LogCollectContext context, LogEntry entry, String methodKey) {
@@ -205,7 +221,7 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             metricCall(context, "incrementDiscarded", methodKey, "circuit_open");
             DegradeFallbackHandler.handleDegraded(
                     context, "circuit_open",
-                    java.util.Collections.singletonList(entry.getContent()),
+                    Collections.singletonList(entry.getContent()),
                     entry.getLevel());
             return;
         }
@@ -250,7 +266,7 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             metricCall(context, "incrementDegradeTriggered", "persist_failed", methodKey);
             DegradeFallbackHandler.handleDegraded(
                     context, "persist_failed",
-                    java.util.Collections.singletonList(entry.getContent()),
+                    Collections.singletonList(entry.getContent()),
                     entry.getLevel());
         } finally {
             metricCall(context, "stopPersistTimer", persistTimer, methodKey, context.getCollectMode().name());
@@ -296,11 +312,7 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         if (value == null) {
             return 0L;
         }
-        return 40L + (long) value.length() * 2L;
-    }
-
-    private boolean safeEquals(String left, String right) {
-        return left == null ? right == null : left.equals(right);
+        return 48L + ((long) value.length() << 1);
     }
 
     private void metricCall(LogCollectContext context, String methodName, Object... args) {

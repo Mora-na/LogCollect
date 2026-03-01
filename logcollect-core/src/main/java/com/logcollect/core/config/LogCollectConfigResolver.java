@@ -7,6 +7,8 @@ import com.logcollect.api.enums.DegradeStorage;
 import com.logcollect.api.enums.LogFramework;
 import com.logcollect.api.format.LogLineDefaults;
 import com.logcollect.api.model.LogCollectConfig;
+import com.logcollect.core.format.PatternCleaner;
+import com.logcollect.core.format.PatternValidator;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.runtime.LogCollectGlobalSwitch;
 import com.logcollect.core.util.DataSizeParser;
@@ -268,8 +270,11 @@ public class LogCollectConfigResolver {
         if (!annotation.async()) {
             config.setAsync(false);
         }
-        if (!"INFO".equals(annotation.level())) {
-            config.setLevel(annotation.level());
+        if (!"TRACE".equals(annotation.minLevel())) {
+            config.setLevel(annotation.minLevel());
+        }
+        if (annotation.excludeLoggers() != null && annotation.excludeLoggers().length > 0) {
+            config.setExcludeLoggerPrefixes(annotation.excludeLoggers());
         }
         if (annotation.collectMode() != CollectMode.AUTO) {
             config.setCollectMode(annotation.collectMode());
@@ -313,13 +318,13 @@ public class LogCollectConfigResolver {
         if (!annotation.enableSanitize()) {
             config.setEnableSanitize(false);
         }
-        if (annotation.sanitizer() != com.logcollect.api.security.DefaultLogSanitizer.class) {
+        if (annotation.sanitizer() != com.logcollect.api.sanitizer.LogSanitizer.class) {
             config.setSanitizerClass(annotation.sanitizer());
         }
         if (!annotation.enableMask()) {
             config.setEnableMask(false);
         }
-        if (annotation.masker() != com.logcollect.api.security.DefaultLogMasker.class) {
+        if (annotation.masker() != com.logcollect.api.masker.LogMasker.class) {
             config.setMaskerClass(annotation.masker());
         }
 
@@ -347,12 +352,14 @@ public class LogCollectConfigResolver {
 
         applyBoolean(props, "async", config::setAsync);
         applyString(props, "level", config::setLevel);
+        applyCsv(props, "exclude-loggers", values -> config.setExcludeLoggerPrefixes(values.toArray(new String[0])));
         applyEnum(props, "log-framework", LogFramework.class, config::setLogFramework);
         applyEnum(props, "collect-mode", CollectMode.class, config::setCollectMode);
 
         applyBoolean(props, "buffer.enabled", config::setUseBuffer);
         applyInt(props, "buffer.max-size", config::setMaxBufferSize);
         applyDataSize(props, "buffer.max-bytes", config::setMaxBufferBytes);
+        applyString(props, "buffer.overflow-strategy", config::setBufferOverflowStrategy);
         applyDataSize(props, "buffer.total-max-bytes", config::setGlobalBufferTotalMaxBytes);
 
         applyBoolean(props, "degrade.enabled", config::setEnableDegrade);
@@ -370,6 +377,8 @@ public class LogCollectConfigResolver {
 
         applyBoolean(props, "security.sanitize.enabled", config::setEnableSanitize);
         applyBoolean(props, "security.mask.enabled", config::setEnableMask);
+        applyInt(props, "guard.max-content-length", config::setGuardMaxContentLength);
+        applyInt(props, "guard.max-throwable-length", config::setGuardMaxThrowableLength);
 
         applyInt(props, "handler-timeout-ms", config::setHandlerTimeoutMs);
         applyBoolean(props, "transaction-isolation", config::setTransactionIsolation);
@@ -402,10 +411,15 @@ public class LogCollectConfigResolver {
         try {
             Map<String, String> globals = loadGlobalProperties();
             if (globals == null || globals.isEmpty()) {
-                LogLineDefaults.setConfiguredPattern(null);
                 return;
             }
-            LogLineDefaults.setConfiguredPattern(globals.get("format.log-line-pattern"));
+            String rawPattern = globals.get("format.log-line-pattern");
+            if (rawPattern == null || rawPattern.trim().isEmpty()) {
+                return;
+            }
+            String cleaned = PatternCleaner.clean(rawPattern);
+            String validated = PatternValidator.validateAndClean(cleaned);
+            LogLineDefaults.setDetectedPattern(validated);
         } catch (Throwable t) {
             LogCollectInternalLogger.debug("Sync global log-line-pattern failed: {}", t.getMessage());
         }
@@ -464,6 +478,24 @@ public class LogCollectConfigResolver {
         String value = props.get(key);
         if (value != null) {
             consumer.accept(value);
+        }
+    }
+
+    private void applyCsv(Map<String, String> props, String key, java.util.function.Consumer<List<String>> consumer) {
+        String value = props.get(key);
+        if (value == null || value.trim().isEmpty()) {
+            return;
+        }
+        String[] parts = value.split(",");
+        List<String> values = new ArrayList<String>(parts.length);
+        for (String part : parts) {
+            String trimmed = part == null ? null : part.trim();
+            if (trimmed != null && !trimmed.isEmpty()) {
+                values.add(trimmed);
+            }
+        }
+        if (!values.isEmpty()) {
+            consumer.accept(values);
         }
     }
 

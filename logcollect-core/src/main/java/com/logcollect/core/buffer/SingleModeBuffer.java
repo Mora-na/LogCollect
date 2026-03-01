@@ -7,6 +7,7 @@ import com.logcollect.api.model.LogCollectContext;
 import com.logcollect.api.model.LogEntry;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.degrade.DegradeFallbackHandler;
+import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 
 import java.time.LocalDateTime;
@@ -27,11 +28,24 @@ public class SingleModeBuffer implements LogCollectBuffer {
     private final int maxCount;
     private final long maxBytes;
     private final GlobalBufferMemoryManager globalManager;
+    private final BoundedBufferPolicy policy;
+    private final ResilientFlusher resilientFlusher = new ResilientFlusher();
 
     public SingleModeBuffer(int maxCount, long maxBytes, GlobalBufferMemoryManager globalManager) {
+        this(maxCount, maxBytes, globalManager,
+                new BoundedBufferPolicy(maxBytes, maxCount, BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY));
+    }
+
+    public SingleModeBuffer(int maxCount,
+                            long maxBytes,
+                            GlobalBufferMemoryManager globalManager,
+                            BoundedBufferPolicy policy) {
         this.maxCount = maxCount;
         this.maxBytes = maxBytes;
         this.globalManager = globalManager;
+        this.policy = policy == null
+                ? new BoundedBufferPolicy(maxBytes, maxCount, BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY)
+                : policy;
     }
 
     @Override
@@ -68,8 +82,21 @@ public class SingleModeBuffer implements LogCollectBuffer {
             }
         }
 
-        if (maxBytes > 0 && bytes.get() + entryBytes > maxBytes && count.get() > 0) {
-            triggerFlush(context, false);
+        if (policy.getStrategy() == BoundedBufferPolicy.OverflowStrategy.DROP_OLDEST) {
+            evictOldestUntilFit(context, entryBytes);
+        }
+
+        boolean accepted = policy.beforeAdd(entryBytes, () -> triggerFlush(context, false));
+        if (!accepted) {
+            if (globalManager != null) {
+                globalManager.release(entryBytes);
+            }
+            if (context != null) {
+                context.incrementDiscardedCount();
+            }
+            notifyDegrade(context, "buffer_overflow_drop_newest");
+            LogCollectDiag.debug("Single buffer drop newest");
+            return false;
         }
 
         queue.offer(entry);
@@ -84,6 +111,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
             triggerFlush(context, false);
         }
         updateUtilization(context);
+        LogCollectDiag.debug("Buffer add: bytes=%d count=%d", bytes.get(), count.get());
         return true;
     }
 
@@ -107,6 +135,23 @@ public class SingleModeBuffer implements LogCollectBuffer {
         triggerFlush(context, true);
     }
 
+    @Override
+    public void forceFlush() {
+        triggerFlush(null, true);
+    }
+
+    @Override
+    public String dumpAsString() {
+        StringBuilder sb = new StringBuilder();
+        for (LogEntry entry : queue) {
+            if (sb.length() > 0) {
+                sb.append('\n');
+            }
+            sb.append(entry.getContent());
+        }
+        return sb.toString();
+    }
+
     private boolean shouldFlush() {
         return (maxCount > 0 && count.get() >= maxCount) || (maxBytes > 0 && bytes.get() >= maxBytes);
     }
@@ -125,6 +170,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
                 if (context != null) {
                     context.incrementFlushCount();
                 }
+                LogCollectDiag.debug("Flush triggered: segments=%d", batch.size());
             }
             updateUtilization(context);
         } finally {
@@ -141,7 +187,8 @@ public class SingleModeBuffer implements LogCollectBuffer {
             drainedBytes += entry.estimateBytes();
         }
         if (!batch.isEmpty()) {
-            int remaining = count.addAndGet(-batch.size());
+            int drainedCount = batch.size();
+            int remaining = count.addAndGet(-drainedCount);
             if (remaining < 0) {
                 count.set(0);
             }
@@ -152,6 +199,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
             if (globalManager != null) {
                 globalManager.release(drainedBytes);
             }
+            policy.afterDrain(drainedBytes, drainedCount);
         }
         return batch;
     }
@@ -171,31 +219,61 @@ public class SingleModeBuffer implements LogCollectBuffer {
             }
             return;
         }
+
         for (LogEntry entry : batch) {
-            try {
+            boolean success = resilientFlusher.flush(() -> {
                 if (handler != null) {
                     executeWithTx(context, () -> handler.appendLog(context, entry));
                 }
+            }, entry::getContent);
+
+            if (success) {
                 if (breaker != null) {
                     breaker.recordSuccess();
                 }
                 metricCall(context, "incrementPersisted", methodKey, "SINGLE");
-            } catch (Throwable t) {
-                if (breaker != null) {
-                    breaker.recordFailure();
-                }
-                if (context != null) {
-                    context.incrementDiscardedCount();
-                }
-                notifyError(context, t, "appendLog");
-                notifyDegrade(context, "handler_error");
-                metricCall(context, "incrementPersistFailed", methodKey);
-                metricCall(context, "incrementDegradeTriggered", "persist_failed", methodKey);
-                if (context != null) {
-                    java.util.List<String> lines = new java.util.ArrayList<String>();
-                    lines.add(entry.getContent());
-                    DegradeFallbackHandler.handleDegraded(context, "handler_error", lines, entry.getLevel());
-                }
+                continue;
+            }
+
+            if (breaker != null) {
+                breaker.recordFailure();
+            }
+            if (context != null) {
+                context.incrementDiscardedCount();
+            }
+            notifyDegrade(context, "handler_error");
+            metricCall(context, "incrementPersistFailed", methodKey);
+            metricCall(context, "incrementDegradeTriggered", "persist_failed", methodKey);
+            if (context != null) {
+                List<String> lines = new ArrayList<String>(1);
+                lines.add(entry.getContent());
+                DegradeFallbackHandler.handleDegraded(context, "handler_error", lines, entry.getLevel());
+            }
+        }
+    }
+
+    private void evictOldestUntilFit(LogCollectContext context, long incomingBytes) {
+        while (policy.isOverflow(incomingBytes)) {
+            LogEntry evicted = queue.poll();
+            if (evicted == null) {
+                break;
+            }
+            long evictedBytes = evicted.estimateBytes();
+            int remainingCount = count.decrementAndGet();
+            if (remainingCount < 0) {
+                count.set(0);
+            }
+            long remainingBytes = bytes.addAndGet(-evictedBytes);
+            if (remainingBytes < 0) {
+                bytes.set(0);
+            }
+            if (globalManager != null) {
+                globalManager.release(evictedBytes);
+            }
+            policy.afterDrain(evictedBytes, 1);
+            policy.recordDropped();
+            if (context != null) {
+                context.incrementDiscardedCount();
             }
         }
     }
@@ -237,23 +315,8 @@ public class SingleModeBuffer implements LogCollectBuffer {
         }
     }
 
-    private void notifyError(LogCollectContext context, Throwable error, String phase) {
-        if (context == null) {
-            return;
-        }
-        LogCollectHandler handler = context.getHandler();
-        if (handler == null) {
-            return;
-        }
-        try {
-            handler.onError(context, error, phase);
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn("onError callback failed", t);
-        }
-    }
-
-    private java.util.List<String> toLines(List<LogEntry> entries) {
-        java.util.List<String> lines = new java.util.ArrayList<String>();
+    private List<String> toLines(List<LogEntry> entries) {
+        List<String> lines = new ArrayList<String>(entries.size());
         for (LogEntry entry : entries) {
             lines.add(entry.getContent());
         }

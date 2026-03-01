@@ -51,6 +51,10 @@ public class LogCollectContext {
     private final Object buffer;
     /** 当前调用绑定的熔断器实例。 */
     private final Object circuitBreaker;
+    /** 当前最低采集级别。 */
+    private final int minLevelInt;
+    /** 当前排除的 logger 前缀。 */
+    private final String[] excludeLoggers;
 
     /** 业务方法正常结束时的返回值。 */
     private volatile Object returnValue;
@@ -114,6 +118,10 @@ public class LogCollectContext {
         this.handler = handler;
         this.buffer = buffer;
         this.circuitBreaker = circuitBreaker;
+        this.minLevelInt = toLevelInt(config == null ? "TRACE" : config.getLevel());
+        this.excludeLoggers = config == null
+                ? new String[0]
+                : config.getExcludeLoggerPrefixes();
     }
 
     /**
@@ -189,6 +197,26 @@ public class LogCollectContext {
      * @return 当前调用熔断器实例（内部对象，通常仅框架内部使用）
      */
     public Object getCircuitBreaker() { return circuitBreaker; }
+
+    /**
+     * @return 当前最低采集级别（数值）
+     */
+    public int getMinLevelInt() { return minLevelInt; }
+
+    /**
+     * 按前缀判断 logger 是否应排除。
+     */
+    public boolean isLoggerExcluded(String loggerName) {
+        if (loggerName == null || excludeLoggers.length == 0) {
+            return false;
+        }
+        for (String prefix : excludeLoggers) {
+            if (prefix != null && !prefix.isEmpty() && loggerName.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /**
      * @return 业务方法返回值；若异常结束则通常为 null
@@ -514,5 +542,19 @@ public class LogCollectContext {
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    private static int toLevelInt(String level) {
+        if (level == null) {
+            return 0;
+        }
+        String v = level.trim().toUpperCase();
+        if ("FATAL".equals(v)) return 5;
+        if ("ERROR".equals(v)) return 4;
+        if ("WARN".equals(v) || "WARNING".equals(v)) return 3;
+        if ("INFO".equals(v)) return 2;
+        if ("DEBUG".equals(v)) return 1;
+        if ("TRACE".equals(v)) return 0;
+        return 0;
     }
 }

@@ -4,16 +4,12 @@ import com.logcollect.api.masker.LogMasker;
 import com.logcollect.api.model.LogEntry;
 import com.logcollect.api.sanitizer.LogSanitizer;
 
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+
 /**
- * 安全处理流水线：对 LogEntry 的内容和异常堆栈分别执行净化与脱敏。
- *
- * <p>处理顺序：
- * <ol>
- *   <li>消息内容：sanitize(content)</li>
- *   <li>异常堆栈：sanitizeThrowable(throwable)</li>
- *   <li>消息内容脱敏：mask(content)</li>
- *   <li>异常堆栈脱敏：mask(throwable)</li>
- * </ol>
+ * 端到端唯一安全处理入口。
  */
 public class SecurityPipeline {
 
@@ -25,41 +21,82 @@ public class SecurityPipeline {
         this.masker = masker;
     }
 
-    /**
-     * 执行安全流水线处理。
-     *
-     * @param rawEntry 原始 LogEntry（来自 Appender 层）
-     * @return 处理后的安全 LogEntry
-     */
     public LogEntry process(LogEntry rawEntry) {
-        String safeContent = rawEntry.getContent();
-        if (sanitizer != null) {
-            safeContent = sanitizer.sanitize(safeContent);
-        }
-        if (masker != null) {
-            safeContent = masker.mask(safeContent);
+        return process(rawEntry, null);
+    }
+
+    public LogEntry process(LogEntry rawEntry, SecurityMetrics metrics) {
+        if (rawEntry == null) {
+            return null;
         }
 
-        String safeThrowable = null;
-        if (rawEntry.hasThrowable()) {
-            safeThrowable = rawEntry.getThrowableString();
-            if (sanitizer != null) {
-                safeThrowable = sanitizer.sanitizeThrowable(safeThrowable);
+        SinglePassSecurityProcessor processor = new SinglePassSecurityProcessor(sanitizer, masker);
+        SinglePassSecurityProcessor.ProcessResult contentResult =
+                processor.process(rawEntry.getContent(), true);
+        SinglePassSecurityProcessor.ProcessResult throwableResult =
+                processor.process(rawEntry.getThrowableString(), false);
+
+        if (metrics != null) {
+            if (contentResult.isSanitizedModified()) {
+                metrics.onContentSanitized();
             }
-            if (masker != null) {
-                safeThrowable = masker.mask(safeThrowable);
+            if (throwableResult.isSanitizedModified()) {
+                metrics.onThrowableSanitized();
+            }
+            if (contentResult.isMaskedModified()) {
+                metrics.onContentMasked();
+            }
+            if (throwableResult.isMaskedModified()) {
+                metrics.onThrowableMasked();
             }
         }
 
         return LogEntry.builder()
                 .traceId(rawEntry.getTraceId())
-                .content(safeContent)
-                .level(rawEntry.getLevel())
-                .time(rawEntry.getTime())
+                .content(contentResult.getValue())
+                .level(sanitizeField(rawEntry.getLevel()))
                 .timestamp(rawEntry.getTimestamp())
-                .threadName(rawEntry.getThreadName())
-                .loggerName(rawEntry.getLoggerName())
-                .throwableString(safeThrowable)
+                .threadName(sanitizeField(rawEntry.getThreadName()))
+                .loggerName(sanitizeField(rawEntry.getLoggerName()))
+                .throwableString(throwableResult.getValue())
+                .mdcContext(sanitizeMdc(rawEntry.getMdcContext()))
                 .build();
+    }
+
+    private String sanitizeField(String value) {
+        if (sanitizer == null) {
+            return value;
+        }
+        return sanitizer.sanitize(value);
+    }
+
+    private Map<String, String> sanitizeMdc(Map<String, String> mdcContext) {
+        if (mdcContext == null || mdcContext.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        if (sanitizer == null) {
+            return mdcContext;
+        }
+        Map<String, String> sanitized = new HashMap<String, String>(mdcContext.size());
+        for (Map.Entry<String, String> entry : mdcContext.entrySet()) {
+            String key = sanitizeField(entry.getKey());
+            String value = sanitizeField(entry.getValue());
+            sanitized.put(key, value);
+        }
+        return sanitized;
+    }
+
+    public interface SecurityMetrics {
+        default void onContentSanitized() {
+        }
+
+        default void onThrowableSanitized() {
+        }
+
+        default void onContentMasked() {
+        }
+
+        default void onThrowableMasked() {
+        }
     }
 }

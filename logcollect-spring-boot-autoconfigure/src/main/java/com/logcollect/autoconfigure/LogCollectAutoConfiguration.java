@@ -3,15 +3,22 @@ package com.logcollect.autoconfigure;
 import com.logcollect.api.config.LogCollectConfigSource;
 import com.logcollect.api.enums.LogFramework;
 import com.logcollect.api.format.LogLineDefaults;
+import com.logcollect.api.masker.LogMasker;
+import com.logcollect.api.sanitizer.LogSanitizer;
 import com.logcollect.autoconfigure.circuitbreaker.CircuitBreakerRegistry;
 import com.logcollect.autoconfigure.config.LocalPropertiesLogCollectConfigSource;
 import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
 import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.config.LogCollectConfigResolver;
 import com.logcollect.core.config.LogCollectLocalConfigCache;
+import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.format.ConsolePatternDetector;
+import com.logcollect.core.format.PatternCleaner;
+import com.logcollect.core.format.PatternValidator;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.runtime.LogCollectGlobalSwitch;
+import com.logcollect.core.security.DefaultLogMasker;
+import com.logcollect.core.security.DefaultLogSanitizer;
 import com.logcollect.core.security.SecurityComponentRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -101,6 +108,30 @@ public class LogCollectAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean
+    public LogCollectBufferRegistry logCollectBufferRegistry() {
+        return new LogCollectBufferRegistry();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public LogCollectLifecycle logCollectLifecycle(LogCollectBufferRegistry registry) {
+        return new LogCollectLifecycle(registry);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(LogSanitizer.class)
+    public LogSanitizer logSanitizer() {
+        return new DefaultLogSanitizer();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(LogMasker.class)
+    public LogMasker logMasker() {
+        return new DefaultLogMasker();
+    }
+
+    @Bean
     public org.springframework.beans.factory.InitializingBean logCollectConsolePatternInitializer(
             ObjectProvider<java.util.List<ConsolePatternDetector>> detectorsProvider,
             LogCollectConfigResolver configResolver) {
@@ -122,6 +153,11 @@ public class LogCollectAutoConfiguration {
             LogCollectInternalLogger.setLevel(LogCollectInternalLogger.Level.INFO);
             return LogCollectInternalLogger.Level.INFO;
         }
+    }
+
+    @Bean
+    public org.springframework.beans.factory.InitializingBean logCollectDiagInitializer(LogCollectProperties props) {
+        return () -> LogCollectDiag.setEnabled(props != null && props.isDebug());
     }
 
     @Bean
@@ -159,7 +195,9 @@ public class LogCollectAutoConfiguration {
             }
             String configuredPattern = globals.get("format.log-line-pattern");
             if (configuredPattern != null && !configuredPattern.trim().isEmpty()) {
-                LogLineDefaults.setConfiguredPattern(configuredPattern);
+                String cleaned = PatternCleaner.clean(configuredPattern);
+                String validated = PatternValidator.validateAndClean(cleaned);
+                LogLineDefaults.setDetectedPattern(validated);
             }
         } catch (Throwable t) {
             LogCollectInternalLogger.debug("Apply configured log-line-pattern failed: {}", t.getMessage());

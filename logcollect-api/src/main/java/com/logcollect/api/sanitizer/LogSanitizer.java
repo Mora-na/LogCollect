@@ -1,5 +1,7 @@
 package com.logcollect.api.sanitizer;
 
+import java.util.Objects;
+
 /**
  * 日志内容净化器接口。
  */
@@ -28,4 +30,20 @@ public interface LogSanitizer {
      * @return 净化后的堆栈字符串
      */
     String sanitizeThrowable(String throwableString);
+
+    /**
+     * 带修改标记的消息净化。
+     */
+    default SanitizeResult sanitizeWithStats(String raw) {
+        String result = sanitize(raw);
+        return new SanitizeResult(result, !Objects.equals(raw, result));
+    }
+
+    /**
+     * 带修改标记的堆栈净化。
+     */
+    default SanitizeResult sanitizeThrowableWithStats(String raw) {
+        String result = sanitizeThrowable(raw);
+        return new SanitizeResult(result, !Objects.equals(raw, result));
+    }
 }

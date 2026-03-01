@@ -8,10 +8,7 @@ import com.logcollect.api.model.LogCollectContext;
 import com.logcollect.autoconfigure.circuitbreaker.CircuitBreakerRegistry;
 import com.logcollect.autoconfigure.jdbc.TransactionalLogCollectHandlerWrapper;
 import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
-import com.logcollect.core.buffer.AggregateModeBuffer;
-import com.logcollect.core.buffer.GlobalBufferMemoryManager;
-import com.logcollect.core.buffer.LogCollectBuffer;
-import com.logcollect.core.buffer.SingleModeBuffer;
+import com.logcollect.core.buffer.*;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.config.LogCollectConfigResolver;
 import com.logcollect.core.context.LogCollectContextManager;
@@ -61,6 +58,9 @@ public class LogCollectAspect {
     @Autowired(required = false)
     private DegradeFileManager degradeFileManager;
 
+    @Autowired(required = false)
+    private com.logcollect.autoconfigure.LogCollectBufferRegistry bufferRegistry;
+
     private static volatile GlobalBufferMemoryManager fallbackGlobalBufferManager;
 
     private final ConcurrentHashMap<String, LogCollectCircuitBreaker> breakerCache =
@@ -80,6 +80,7 @@ public class LogCollectAspect {
             config = configResolver.resolve(method, logCollect);
         } catch (Throwable t) {
             LogCollectInternalLogger.error("Config resolve failed, skip log collect", t);
+            frameworkWarn("Failed to resolve @LogCollect config, skip collecting", t);
             return pjp.proceed();
         }
         if (!config.isEnabled()) {
@@ -119,6 +120,7 @@ public class LogCollectAspect {
             }
         } catch (Throwable t) {
             LogCollectInternalLogger.error("LogCollect before phase error", t);
+            frameworkWarn("Failed to start collecting, skip", t);
             notifyHandlerError(ctx, t, "before");
             if (ctx != null) {
                 LogCollectContextManager.pop();
@@ -167,6 +169,7 @@ public class LogCollectAspect {
             }
         } catch (Throwable t) {
             LogCollectInternalLogger.error("LogCollect after phase error", t);
+            frameworkWarn("Failed to flush, data may be lost", t);
             notifyHandlerError(ctx, t, "after");
         } finally {
             try {
@@ -197,10 +200,26 @@ public class LogCollectAspect {
         GlobalBufferMemoryManager manager = getGlobalBufferManager(config);
         LogCollectBuffer buffer = null;
         if (config.isUseBuffer()) {
+            BoundedBufferPolicy policy = new BoundedBufferPolicy(
+                    config.getMaxBufferBytes(),
+                    config.getMaxBufferSize(),
+                    parseOverflowStrategy(config.getBufferOverflowStrategy()));
             if (collectMode == CollectMode.AGGREGATE) {
-                buffer = new AggregateModeBuffer(config.getMaxBufferSize(), config.getMaxBufferBytes(), manager, handler);
+                buffer = new AggregateModeBuffer(
+                        config.getMaxBufferSize(),
+                        config.getMaxBufferBytes(),
+                        manager,
+                        handler,
+                        policy);
             } else {
-                buffer = new SingleModeBuffer(config.getMaxBufferSize(), config.getMaxBufferBytes(), manager);
+                buffer = new SingleModeBuffer(
+                        config.getMaxBufferSize(),
+                        config.getMaxBufferBytes(),
+                        manager,
+                        policy);
+            }
+            if (bufferRegistry != null) {
+                bufferRegistry.register(buffer);
             }
         }
         LogCollectContext context = new LogCollectContext(traceId, method, args, config, handler, buffer, breaker, collectMode);
@@ -272,9 +291,13 @@ public class LogCollectAspect {
             Object buf = ctx.getBuffer();
             if (buf instanceof LogCollectBuffer) {
                 ((LogCollectBuffer) buf).closeAndFlush(ctx);
+                if (bufferRegistry != null) {
+                    bufferRegistry.unregister((LogCollectBuffer) buf);
+                }
             }
         } catch (Throwable t) {
             LogCollectInternalLogger.warn("Log buffer flush failed", t);
+            frameworkWarn("Log buffer flush failed", t);
         }
     }
 
@@ -345,13 +368,29 @@ public class LogCollectAspect {
     private CollectMode resolveCollectMode(LogCollectConfig config, LogCollectHandler handler) {
         CollectMode configMode = config == null ? CollectMode.AUTO : config.getCollectMode();
         if (configMode != null && configMode != CollectMode.AUTO) {
-            return configMode;
+            return configMode.resolve();
         }
         CollectMode preferred = handler == null ? CollectMode.AUTO : handler.preferredMode();
         if (preferred != null && preferred != CollectMode.AUTO) {
-            return preferred;
+            return preferred.resolve();
         }
         return CollectMode.AGGREGATE;
+    }
+
+    private BoundedBufferPolicy.OverflowStrategy parseOverflowStrategy(String raw) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY;
+        }
+        try {
+            return BoundedBufferPolicy.OverflowStrategy.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            return BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY;
+        }
+    }
+
+    private void frameworkWarn(String message, Throwable error) {
+        String detail = error == null ? "" : error.getMessage();
+        System.err.printf("[LogCollect-WARN] %s: %s%n", message, detail);
     }
 
     static class NoopLogCollectHandler implements LogCollectHandler {

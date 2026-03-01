@@ -21,7 +21,7 @@ public final class PatternCleaner {
 
     // Spring 属性引用：${LOG_DATEFORMAT_PATTERN:-default}
     private static final Pattern SPRING_PROP_PATTERN =
-            Pattern.compile("\\$\\{[A-Z_]+:-([^}]+)\\}");
+            Pattern.compile("\\$\\{[a-zA-Z0-9._\\-]+:-([^}]+)\\}");
 
     // 连续空格压缩
     private static final Pattern MULTI_SPACE = Pattern.compile("\\s{2,}");

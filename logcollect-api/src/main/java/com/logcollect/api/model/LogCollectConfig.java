@@ -6,8 +6,8 @@ import com.logcollect.api.enums.LogFramework;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.masker.LogMasker;
 import com.logcollect.api.sanitizer.LogSanitizer;
-import com.logcollect.api.security.DefaultLogMasker;
-import com.logcollect.api.security.DefaultLogSanitizer;
+
+import java.util.Arrays;
 
 public class LogCollectConfig {
 
@@ -17,6 +17,7 @@ public class LogCollectConfig {
     private Class<? extends LogCollectHandler> handlerClass = LogCollectHandler.class;
     private boolean async = true;
     private String level = "INFO";
+    private String[] excludeLoggerPrefixes = new String[0];
     private LogFramework logFramework = LogFramework.AUTO;
     private CollectMode collectMode = CollectMode.AUTO;
     private CollectMode effectiveCollectMode;
@@ -25,6 +26,7 @@ public class LogCollectConfig {
     private boolean useBuffer = true;
     private int maxBufferSize = 100;
     private long maxBufferBytes = 1024L * 1024;
+    private String bufferOverflowStrategy = "FLUSH_EARLY";
     private long globalBufferTotalMaxBytes = 100L * 1024 * 1024;
 
     // ===== 熔断降级配置 =====
@@ -39,9 +41,11 @@ public class LogCollectConfig {
 
     // ===== 安全防护配置 =====
     private boolean enableSanitize = true;
-    private Class<? extends LogSanitizer> sanitizerClass = DefaultLogSanitizer.class;
+    private Class<? extends LogSanitizer> sanitizerClass = LogSanitizer.class;
     private boolean enableMask = true;
-    private Class<? extends LogMasker> maskerClass = DefaultLogMasker.class;
+    private Class<? extends LogMasker> maskerClass = LogMasker.class;
+    private int guardMaxContentLength = 32 * 1024;
+    private int guardMaxThrowableLength = 64 * 1024;
 
     // ===== FILE 降级存储配置 =====
     private String degradeFileMaxTotalSize = "500MB";
@@ -92,6 +96,16 @@ public class LogCollectConfig {
         this.level = level;
     }
 
+    public String[] getExcludeLoggerPrefixes() {
+        return Arrays.copyOf(excludeLoggerPrefixes, excludeLoggerPrefixes.length);
+    }
+
+    public void setExcludeLoggerPrefixes(String[] excludeLoggerPrefixes) {
+        this.excludeLoggerPrefixes = excludeLoggerPrefixes == null
+                ? new String[0]
+                : Arrays.copyOf(excludeLoggerPrefixes, excludeLoggerPrefixes.length);
+    }
+
     public LogFramework getLogFramework() {
         return logFramework;
     }
@@ -138,6 +152,14 @@ public class LogCollectConfig {
 
     public void setMaxBufferBytes(long maxBufferBytes) {
         this.maxBufferBytes = maxBufferBytes;
+    }
+
+    public String getBufferOverflowStrategy() {
+        return bufferOverflowStrategy;
+    }
+
+    public void setBufferOverflowStrategy(String bufferOverflowStrategy) {
+        this.bufferOverflowStrategy = bufferOverflowStrategy;
     }
 
     public long getGlobalBufferTotalMaxBytes() {
@@ -242,6 +264,22 @@ public class LogCollectConfig {
 
     public void setMaskerClass(Class<? extends LogMasker> maskerClass) {
         this.maskerClass = maskerClass;
+    }
+
+    public int getGuardMaxContentLength() {
+        return guardMaxContentLength;
+    }
+
+    public void setGuardMaxContentLength(int guardMaxContentLength) {
+        this.guardMaxContentLength = guardMaxContentLength;
+    }
+
+    public int getGuardMaxThrowableLength() {
+        return guardMaxThrowableLength;
+    }
+
+    public void setGuardMaxThrowableLength(int guardMaxThrowableLength) {
+        this.guardMaxThrowableLength = guardMaxThrowableLength;
     }
 
     public String getDegradeFileMaxTotalSize() {

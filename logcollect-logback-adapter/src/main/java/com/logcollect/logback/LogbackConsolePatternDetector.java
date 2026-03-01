@@ -17,6 +17,11 @@ import java.util.Iterator;
 public class LogbackConsolePatternDetector implements ConsolePatternDetector {
 
     @Override
+    public int getOrder() {
+        return 10;
+    }
+
+    @Override
     public boolean isAvailable() {
         try {
             Class.forName("ch.qos.logback.classic.LoggerContext");
