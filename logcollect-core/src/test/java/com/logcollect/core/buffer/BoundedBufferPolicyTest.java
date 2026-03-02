@@ -62,4 +62,30 @@ class BoundedBufferPolicyTest {
         assertThat(policy.getCurrentBytes()).isEqualTo(150);
         assertThat(policy.getCurrentCount()).isEqualTo(1);
     }
+
+    @Test
+    void constructor_nullStrategy_defaultsToFlushEarly() {
+        BoundedBufferPolicy policy = new BoundedBufferPolicy(1024, 1, null);
+        assertThat(policy.getStrategy()).isEqualTo(BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY);
+    }
+
+    @Test
+    void afterDrain_overRelease_clampsToZero() {
+        BoundedBufferPolicy policy = new BoundedBufferPolicy(1024, 100, BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY);
+        policy.beforeAdd(10, null);
+        policy.afterDrain(999, 999);
+        assertThat(policy.getCurrentBytes()).isZero();
+        assertThat(policy.getCurrentCount()).isZero();
+    }
+
+    @Test
+    void recordDropped_variants_updateCounter() {
+        BoundedBufferPolicy policy = new BoundedBufferPolicy(1024, 100, BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY);
+        assertThat(policy.getDroppedCount()).isZero();
+        policy.recordDropped();
+        policy.recordDropped(0);
+        policy.recordDropped(-1);
+        policy.recordDropped(2);
+        assertThat(policy.getDroppedCount()).isEqualTo(3);
+    }
 }

@@ -13,11 +13,6 @@
     <artifactId>logcollect-bom</artifactId>
     <packaging>pom</packaging>
     <name>logcollect-bom</name>
-    <properties>
-        <!-- Default: disable signing and publishing unless release profile is selected -->
-        <gpg.skip>true</gpg.skip>
-        <skipPublishing>true</skipPublishing>
-    </properties>
 
     <profiles>
         <profile>
@@ -36,14 +31,6 @@
             </activation>
             <properties>
                 <context-propagation.version>1.1.1</context-propagation.version>
-            </properties>
-        </profile>
-        <profile>
-            <id>release-publish</id>
-            <properties>
-                <!-- Enable signing and publishing only when this profile is explicitly selected -->
-                <gpg.skip>false</gpg.skip>
-                <skipPublishing>false</skipPublishing>
             </properties>
         </profile>
     </profiles>

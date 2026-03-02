@@ -71,6 +71,16 @@ class StringLengthGuardTest extends CoreUnitTestBase {
     }
 
     @Test
+    void staticGuard_overloads_coverBothMaxLengthBranches() {
+        String truncatedByDefault = StringLengthGuard.guardContent(repeat("x", 33000), 0);
+        assertThat(truncatedByDefault).contains("[truncated by LogCollect]");
+
+        String truncatedByCustom = StringLengthGuard.guardThrowable(repeat("y", 20), 5);
+        assertThat(truncatedByCustom).startsWith("yyyyy");
+        assertThat(truncatedByCustom).contains("[truncated by LogCollect]");
+    }
+
+    @Test
     void constructor_zeroLimit_throws() {
         assertThatThrownBy(() -> new StringLengthGuard(0, 0))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -79,6 +89,12 @@ class StringLengthGuardTest extends CoreUnitTestBase {
     @Test
     void constructor_negativeLimit_throws() {
         assertThatThrownBy(() -> new StringLengthGuard(-1, 100))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void constructor_nonPositiveThrowableLimit_throws() {
+        assertThatThrownBy(() -> new StringLengthGuard(1, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

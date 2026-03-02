@@ -42,6 +42,7 @@
 - [十九、框架定位与生态关系](#十九框架定位与生态关系)
 - [二十、已知局限性](#二十已知局限性)
 - [二十一、贡献指南](#二十一贡献指南)
+- [二十二、代码规模统计（自动生成）](#二十二代码规模统计自动生成)
 
 ---
 
@@ -2663,8 +2664,10 @@ mvn clean verify
 # 指定 Spring Boot 版本测试
 mvn clean verify -Dspring-boot.version=3.2.5
 
-# 仅 core 覆盖率门禁（含 JaCoCo check）
-mvn verify -pl logcollect-core -am
+# 覆盖率门禁（含 JaCoCo check，模块内单一注入链）
+mvn verify \
+  -pl logcollect-api,logcollect-core,logcollect-logback-adapter,logcollect-log4j2-adapter,logcollect-spring-boot-autoconfigure \
+  -am
 ```
 
 ### 测试矩阵
@@ -2693,19 +2696,18 @@ CI 工作流：`.github/workflows/ci.yml`
 |------|------------------|------------|--------|
 | `logcollect-core` | 20.69% | ≥ 80% | 🔴 核心 |
 | `logcollect-api` | 待持续提升 | ≥ 60% | 🟡 次要 |
-| `logcollect-logback-adapter` | 安全路径优先 | 安全路径 100% | 🟡 次要 |
-| `logcollect-log4j2-adapter` | 安全路径优先 | 安全路径 100% | 🟡 次要 |
-| `logcollect-spring-boot-autoconfigure` | 关键路径优先 | ≥ 40% | 🟢 辅助 |
+| `logcollect-logback-adapter` | 运行时依赖强 | Appender 类级 ≥ 70% | 🟡 次要 |
+| `logcollect-log4j2-adapter` | 运行时依赖强 | Appender 类级 ≥ 70% | 🟡 次要 |
+| `logcollect-spring-boot-autoconfigure` | 条件装配类为主 | ≥ 30% | 🟢 辅助 |
 
-#### Phase 切分
+#### 执行优先级（投入产出）
 
-| Phase | 聚焦包/模块 | 目标提升 |
-|------|-------------|----------|
-| Phase 1 | `security` + `pipeline` | 20.69% → ~40% |
-| Phase 2 | `buffer` + `circuitbreaker` | ~40% → ~58% |
-| Phase 3 | `degrade` + `context` | ~58% → ~70% |
-| Phase 4 | `config` + `format` + `mdc` + `internal` | ~70% → ~80% |
-| Phase 5 | `api` + adapters + autoconfigure 关键安全路径 | core ≥80%，其余模块达标 |
+| 优先级 | 聚焦包/模块 | 目标 |
+|------|-------------|------|
+| P0 | `context` + `security` | 先补安全关键与差距最大路径 |
+| P1 | `buffer` + `degrade` | 补齐可靠性主路径与并发分支 |
+| P2 | `pipeline` + `circuitbreaker` + `config` + `api` + `mdc` | 补足中等差距模块 |
+| P3 | adapters + `autoconfigure` | 完成适配器安全路径与自动装配补漏 |
 
 #### 本轮已补齐的测试基建与重点用例
 
@@ -2721,16 +2723,24 @@ CI 工作流：`.github/workflows/ci.yml`
 - `logcollect-core/pom.xml` 已内置 `jacoco-maven-plugin`（`prepare-agent`/`report`/`check`）
 - 门禁规则：
   - 模块整体：`BUNDLE LINE >= 0.80`
-  - 安全核心包：`security` + `pipeline` 行覆盖率 ≥ 95%
-  - 缓冲与熔断包：`buffer` + `circuitbreaker` 行覆盖率 ≥ 85%
-  - 降级包：`degrade` 行覆盖率 ≥ 80%
+  - 包级：`security >= 95%`，`pipeline >= 90%`
+  - 包级：`buffer >= 85%`，`circuitbreaker >= 85%`
+  - 包级：`context >= 85%`，`degrade >= 80%`
+  - 包级：`config >= 75%`，`mdc >= 50%`
+  - 包级：`format >= 70%`，`internal >= 50%`
+- 模块规则：
+  - `logcollect-api`：`BUNDLE LINE >= 0.60`
+  - `logcollect-spring-boot-autoconfigure`：`BUNDLE LINE >= 0.30`
+- 适配器规则：
+  - `LogCollectLogbackAppender` 类级行覆盖率 `>= 0.70`
+  - `LogCollectLog4j2Appender` 类级行覆盖率 `>= 0.70`
 - 排除项：`internal/LogCollectInternalLogger`
 
 #### CI 覆盖率步骤
 
-- `Run tests with coverage`: `mvn -B verify -pl logcollect-core -am`
-- `Check coverage threshold`: 从 `logcollect-core/target/site/jacoco/index.html` 读取总覆盖率并校验 `>= 80`
-- `Upload coverage report`: 上传 `logcollect-core/target/site/jacoco/` 产物
+- `Run tests with coverage`: `mvn -B clean verify`（多模块；不启用父 `coverage profile`，避免重复 `prepare-agent` 注入）
+- `Check coverage threshold`: 读取各模块 `jacoco.xml`，执行模块级 + core 包级 + adapter 类级门禁校验
+- `Upload coverage report`: 上传 `**/target/site/jacoco/` 产物
 
 #### 提交前自查（测试）
 
@@ -2745,6 +2755,63 @@ CI 工作流：`.github/workflows/ci.yml`
 □ 每个测试方法可独立运行，不依赖执行顺序
 □ 提交前执行：mvn verify -pl logcollect-core -am
 ```
+
+---
+
+## 二十二、代码规模统计（自动生成）
+
+### 代码规模快照（自动统计）
+
+- 统计时间：`2026-03-03 00:42:44`
+- 统计脚本：`python3 scripts/analyze_code_scale.py`
+
+| 维度 | 数值 |
+|---|---:|
+| Maven 模块数（含父工程） | 19 |
+| Maven 子模块数 | 18 |
+| 文件总数（排除构建产物目录） | 245 |
+| 文本源码/配置文件数 | 232 |
+| Java 文件总数 | 209 |
+| 生产 Java 文件数 | 140 |
+| 测试 Java 文件数 | 69 |
+| 类型声明总数（class/interface/enum/record/@interface） | 285 |
+| 生产类型声明数 | 185 |
+| 测试源码类型声明数 | 100 |
+| 测试类数（含 @Test 或命名约定） | 64 |
+| 测试方法数（@Test 系列注解） | 355 |
+| 包数量 | 42 |
+| Java 总行数 | 23710 |
+| Java 代码行 | 18812 |
+| Java 注释行 | 1739 |
+| Java 空行 | 3159 |
+| main Java 代码行 | 12068 |
+| test Java 代码行 | 6744 |
+| 文本文件总行数 | 28701 |
+| 文本文件非空行 | 24836 |
+
+**Java 代码行 Top 模块**
+
+| 排名 | 模块 | Java 代码行 |
+|---:|---|---:|
+| 1 | `logcollect-core` | 9627 |
+| 2 | `logcollect-spring-boot-autoconfigure` | 4443 |
+| 3 | `logcollect-api` | 1757 |
+| 4 | `logcollect-logback-adapter` | 1171 |
+| 5 | `logcollect-log4j2-adapter` | 1166 |
+| 6 | `logcollect-config-nacos` | 236 |
+| 7 | `logcollect-config-apollo` | 176 |
+| 8 | `logcollect-config-spring-cloud` | 147 |
+
+**主流文件类型分布 Top 8**
+
+| 排名 | 扩展名 | 文件数 |
+|---:|---|---:|
+| 1 | `.java` | 209 |
+| 2 | `.xml` | 19 |
+| 3 | `.md` | 1 |
+| 4 | `.properties` | 1 |
+| 5 | `.py` | 1 |
+| 6 | `.yml` | 1 |
 
 ---
 

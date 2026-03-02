@@ -1,0 +1,457 @@
+package com.logcollect.logback;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.ThrowableProxy;
+import com.logcollect.api.backpressure.BackpressureAction;
+import com.logcollect.api.backpressure.BackpressureCallback;
+import com.logcollect.api.enums.CollectMode;
+import com.logcollect.api.enums.SamplingStrategy;
+import com.logcollect.api.enums.TotalLimitPolicy;
+import com.logcollect.api.exception.LogCollectDegradeException;
+import com.logcollect.api.handler.LogCollectHandler;
+import com.logcollect.api.model.LogCollectConfig;
+import com.logcollect.api.model.LogCollectContext;
+import com.logcollect.api.model.LogEntry;
+import com.logcollect.core.buffer.GlobalBufferMemoryManager;
+import com.logcollect.core.context.LogCollectContextManager;
+import com.logcollect.core.context.LogCollectIgnoreManager;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.Method;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
+
+class LogCollectLogbackAppenderBranchTest {
+
+    @AfterEach
+    void tearDown() {
+        LogCollectContextManager.clear();
+        LogCollectIgnoreManager.clear();
+    }
+
+    @Test
+    void privateHelpers_coverLevelAndStringBranches() throws Exception {
+        LogCollectLogbackAppender appender = new LogCollectLogbackAppender();
+        assertThat(invoke(appender, "toLevelRank", new Class[]{String.class}, "ERROR")).isEqualTo(4);
+        assertThat(invoke(appender, "toLevelRank", new Class[]{String.class}, "TRACE")).isEqualTo(0);
+        assertThat(invoke(appender, "toLevelRank", new Class[]{String.class}, (Object) null)).isEqualTo(0);
+
+        assertThat(invoke(appender, "isInternalLogger", new Class[]{String.class}, "com.logcollect.internal.X")).isEqualTo(true);
+        assertThat(invoke(appender, "isInternalLogger", new Class[]{String.class}, "io.github.morana.logcollect.internal.X")).isEqualTo(true);
+        assertThat(invoke(appender, "isInternalLogger", new Class[]{String.class}, "com.biz.X")).isEqualTo(false);
+
+        assertThat(invoke(appender, "normalizeSamplingRate", new Class[]{double.class}, Double.NaN)).isEqualTo(0.0d);
+        assertThat(invoke(appender, "normalizeSamplingRate", new Class[]{double.class}, -1.0d)).isEqualTo(0.0d);
+        assertThat(invoke(appender, "normalizeSamplingRate", new Class[]{double.class}, 2.0d)).isEqualTo(1.0d);
+        assertThat(invoke(appender, "normalizeSamplingRate", new Class[]{double.class}, 0.2d)).isEqualTo(0.2d);
+
+        assertThat(invoke(appender, "isWarnOrAbove", new Class[]{String.class}, "WARN")).isEqualTo(true);
+        assertThat(invoke(appender, "isWarnOrAbove", new Class[]{String.class}, "INFO")).isEqualTo(false);
+
+        assertThat(invoke(appender, "estimateStringBytes", new Class[]{String.class}, (Object) null)).isEqualTo(0L);
+        assertThat(invoke(appender, "estimateStringBytes", new Class[]{String.class}, "abcd")).isEqualTo(56L);
+    }
+
+    @Test
+    void privateHelpers_coverInvokeAndWrapBranches() throws Exception {
+        LogCollectLogbackAppender appender = new LogCollectLogbackAppender();
+        TxWrapper tx = new TxWrapper();
+        assertThat(invoke(appender, "invokeIfPresent",
+                new Class[]{Object.class, String.class, Object[].class},
+                tx, "executeInNewTransaction", new Object[]{new RunnableCounter(tx)})).isEqualTo(true);
+        assertThat(tx.called).isEqualTo(1);
+
+        assertThat(invoke(appender, "invokeIfPresent",
+                new Class[]{Object.class, String.class, Object[].class},
+                tx, "missing", new Object[]{new RunnableCounter(tx)})).isEqualTo(false);
+
+        LogCollectConfig cfg = LogCollectConfig.frameworkDefaults();
+        cfg.setTransactionIsolation(true);
+        LogCollectContext ctx = newContext("trace-tx", cfg, mock(LogCollectHandler.class));
+        ctx.setAttribute("__txWrapper", tx);
+        invoke(appender, "executeWithTx", new Class[]{LogCollectContext.class, Runnable.class}, ctx, (Runnable) () -> tx.directRun++);
+        assertThat(tx.called).isEqualTo(2);
+        assertThat(tx.directRun).isEqualTo(2);
+
+        assertThat(invoke(appender, "wrap", new Class[]{Class.class}, int.class)).isEqualTo(Integer.class);
+        assertThat(invoke(appender, "wrap", new Class[]{Class.class}, String.class)).isEqualTo(String.class);
+    }
+
+    @Test
+    void privateHelpers_coverBackpressureAndSamplingBranches() throws Exception {
+        LogCollectLogbackAppender appender = new LogCollectLogbackAppender();
+        LogCollectHandler handler = mock(LogCollectHandler.class);
+        LogCollectConfig cfg = LogCollectConfig.frameworkDefaults();
+        cfg.setSamplingRate(1.0d);
+        cfg.setSamplingStrategy(SamplingStrategy.COUNT);
+        LogCollectContext ctx = newContext("trace-bp", cfg, handler);
+
+        assertThat(invoke(appender, "allowByBackpressure",
+                new Class[]{LogCollectContext.class, String.class, String.class},
+                ctx, "INFO", ctx.getMethodSignature())).isEqualTo(true);
+
+        BackpressureCallback throwingCallback = new BackpressureCallback() {
+            @Override
+            public BackpressureAction onPressure(double utilization) {
+                throw new RuntimeException("boom");
+            }
+        };
+        ctx.setAttribute("__backpressureCallback", throwingCallback);
+        assertThat(invoke(appender, "allowByBackpressure",
+                new Class[]{LogCollectContext.class, String.class, String.class},
+                ctx, "INFO", ctx.getMethodSignature())).isEqualTo(true);
+
+        ctx.setAttribute("__backpressureCallback", new BackpressureCallback() {
+            @Override
+            public BackpressureAction onPressure(double utilization) {
+                return BackpressureAction.SKIP_DEBUG_INFO;
+            }
+        });
+        assertThat(invoke(appender, "allowByBackpressure",
+                new Class[]{LogCollectContext.class, String.class, String.class},
+                ctx, "INFO", ctx.getMethodSignature())).isEqualTo(false);
+        assertThat(invoke(appender, "allowByBackpressure",
+                new Class[]{LogCollectContext.class, String.class, String.class},
+                ctx, "ERROR", ctx.getMethodSignature())).isEqualTo(true);
+
+        ctx.setAttribute("__backpressureCallback", new BackpressureCallback() {
+            @Override
+            public BackpressureAction onPressure(double utilization) {
+                return BackpressureAction.PAUSE;
+            }
+        });
+        assertThat(invoke(appender, "allowByBackpressure",
+                new Class[]{LogCollectContext.class, String.class, String.class},
+                ctx, "WARN", ctx.getMethodSignature())).isEqualTo(false);
+
+        cfg.setSamplingRate(0.5d);
+        cfg.setSamplingStrategy(SamplingStrategy.COUNT);
+        assertThat(invoke(appender, "shouldSampleByCount",
+                new Class[]{LogCollectContext.class, double.class}, ctx, 0.5d)).isEqualTo(false);
+        assertThat(invoke(appender, "shouldSampleByCount",
+                new Class[]{LogCollectContext.class, double.class}, ctx, 0.5d)).isEqualTo(true);
+    }
+
+    @Test
+    void privateHelpers_coverTotalLimitPoliciesAndRethrow() throws Exception {
+        LogCollectLogbackAppender appender = new LogCollectLogbackAppender();
+        LogCollectHandler handler = mock(LogCollectHandler.class);
+        LogCollectConfig cfg = LogCollectConfig.frameworkDefaults();
+        cfg.setMaxTotalCollect(1);
+        cfg.setTotalLimitPolicy(TotalLimitPolicy.STOP_COLLECTING);
+        cfg.setSamplingRate(1.0d);
+        LogCollectContext ctx = newContext("trace-limit", cfg, handler);
+        ctx.incrementCollectedCount();
+
+        LogEntry entry = LogEntry.builder()
+                .traceId(ctx.getTraceId())
+                .content("c")
+                .level("INFO")
+                .timestamp(System.currentTimeMillis())
+                .threadName("main")
+                .loggerName("L")
+                .build();
+        assertThat(invoke(appender, "allowByTotalLimitAndSampling",
+                new Class[]{LogCollectContext.class, LogEntry.class, String.class},
+                ctx, entry, ctx.getMethodSignature())).isEqualTo(false);
+
+        cfg.setTotalLimitPolicy(TotalLimitPolicy.DOWNGRADE_LEVEL);
+        assertThat(invoke(appender, "allowByTotalLimitAndSampling",
+                new Class[]{LogCollectContext.class, LogEntry.class, String.class},
+                ctx, entry, ctx.getMethodSignature())).isEqualTo(false);
+
+        LogEntry warn = LogEntry.builder()
+                .traceId(ctx.getTraceId())
+                .content("w")
+                .level("WARN")
+                .timestamp(System.currentTimeMillis())
+                .threadName("main")
+                .loggerName("L")
+                .build();
+        assertThat(invoke(appender, "allowByTotalLimitAndSampling",
+                new Class[]{LogCollectContext.class, LogEntry.class, String.class},
+                ctx, warn, ctx.getMethodSignature())).isEqualTo(true);
+
+        cfg.setTotalLimitPolicy(TotalLimitPolicy.SAMPLE);
+        cfg.setSamplingRate(0.0d);
+        assertThat(invoke(appender, "allowByTotalLimitAndSampling",
+                new Class[]{LogCollectContext.class, LogEntry.class, String.class},
+                ctx, warn, ctx.getMethodSignature())).isEqualTo(false);
+
+        cfg.setBlockWhenDegradeFail(true);
+        assertThatThrownBy(() -> invoke(appender, "rethrowDegradeIfNecessary",
+                new Class[]{LogCollectContext.class, Throwable.class},
+                ctx, new LogCollectDegradeException("degrade"))).isInstanceOf(RuntimeException.class);
+    }
+
+    @Test
+    void append_securityMetricsAndThrowablePath_covered() throws Exception {
+        LogCollectHandler handler = mock(LogCollectHandler.class);
+        when(handler.shouldCollect(any(LogCollectContext.class), anyString(), anyString())).thenReturn(true);
+
+        LogCollectConfig config = LogCollectConfig.frameworkDefaults();
+        config.setUseBuffer(false);
+        config.setEnableMetrics(true);
+        config.setAsync(false);
+        LogCollectContext context = newContext("trace-sec", config, handler);
+        LogCollectContextManager.push(context);
+
+        MetricsStub metrics = new MetricsStub();
+        LogCollectLogbackAppender appender = new LogCollectLogbackAppender();
+        appender.setMetrics(metrics);
+        appender.start();
+
+        Map<String, String> mdc = new HashMap<String, String>();
+        mdc.put(LogCollectContextManager.TRACE_ID_KEY, "trace-sec");
+        ILoggingEvent event = mockEvent(
+                "phone=13812345678\nline2",
+                "com.test.Service",
+                Level.ERROR,
+                mdc,
+                new RuntimeException("boom<script>"));
+
+        appender.doAppend(event);
+
+        verify(handler, atLeastOnce()).appendLog(eq(context), any(LogEntry.class));
+        assertThat(metrics.securityTimerStarted).isGreaterThan(0);
+    }
+
+    @Test
+    void append_ignoreAndLoggerFilterBranches_covered() throws Exception {
+        LogCollectHandler handler = mock(LogCollectHandler.class);
+        when(handler.shouldCollect(any(LogCollectContext.class), anyString(), anyString())).thenReturn(true);
+        LogCollectConfig config = LogCollectConfig.frameworkDefaults();
+        config.setUseBuffer(false);
+        config.setExcludeLoggerPrefixes(new String[]{"com.skip"});
+        LogCollectContext context = newContext("trace-ignore", config, handler);
+        LogCollectContextManager.push(context);
+
+        LogCollectLogbackAppender appender = new LogCollectLogbackAppender();
+        appender.start();
+        Map<String, String> mdc = Collections.singletonMap(LogCollectContextManager.TRACE_ID_KEY, "trace-ignore");
+
+        LogCollectIgnoreManager.enter();
+        appender.doAppend(mockEvent("m1", "com.test.A", Level.INFO, mdc, null));
+        LogCollectIgnoreManager.clear();
+
+        appender.doAppend(mockEvent("m2", "com.skip.X", Level.INFO, mdc, null));
+        appender.doAppend(mockEvent("m3", "com.test.B", Level.DEBUG, mdc, null));
+
+        verify(handler, never()).appendLog(any(), any());
+    }
+
+    @Test
+    void privateHelpers_coverAdaptiveSamplingAndRegistryBranches() throws Exception {
+        LogCollectLogbackAppender appender = new LogCollectLogbackAppender();
+        appender.setSecurityRegistry(null);
+
+        LogCollectConfig disabled = LogCollectConfig.frameworkDefaults();
+        disabled.setEnableSanitize(false);
+        disabled.setEnableMask(false);
+        assertThat(invoke(appender, "resolveSanitizer",
+                new Class[]{LogCollectConfig.class}, disabled)).isNull();
+        assertThat(invoke(appender, "resolveMasker",
+                new Class[]{LogCollectConfig.class}, disabled)).isNull();
+
+        LogCollectConfig enabled = LogCollectConfig.frameworkDefaults();
+        assertThat(invoke(appender, "resolveSanitizer",
+                new Class[]{LogCollectConfig.class}, enabled)).isNotNull();
+        assertThat(invoke(appender, "resolveMasker",
+                new Class[]{LogCollectConfig.class}, enabled)).isNotNull();
+
+        LogCollectContext ctx = newContext("trace-adaptive", enabled, mock(LogCollectHandler.class));
+        assertThat(invoke(appender, "shouldSampleAdaptive",
+                new Class[]{LogCollectContext.class, String.class, double.class},
+                ctx, "INFO", 0.5d)).isEqualTo(true);
+
+        GlobalBufferMemoryManager mid = new GlobalBufferMemoryManager(100L);
+        mid.forceAllocate(60L);
+        ctx.setAttribute("__globalBufferManager", mid);
+        assertThat(invoke(appender, "shouldSampleAdaptive",
+                new Class[]{LogCollectContext.class, String.class, double.class},
+                ctx, "INFO", 1.0d)).isEqualTo(true);
+
+        GlobalBufferMemoryManager high = new GlobalBufferMemoryManager(100L);
+        high.forceAllocate(90L);
+        ctx.setAttribute("__globalBufferManager", high);
+        assertThat(invoke(appender, "shouldSampleAdaptive",
+                new Class[]{LogCollectContext.class, String.class, double.class},
+                ctx, "INFO", 0.2d)).isEqualTo(false);
+        assertThat(invoke(appender, "shouldSampleAdaptive",
+                new Class[]{LogCollectContext.class, String.class, double.class},
+                ctx, "WARN", 0.2d)).isEqualTo(true);
+
+        assertThat(invoke(appender, "shouldSample",
+                new Class[]{LogCollectContext.class, LogCollectConfig.class, String.class, boolean.class},
+                ctx, null, "INFO", false)).isEqualTo(true);
+
+        enabled.setSamplingRate(1.0d);
+        enabled.setSamplingStrategy(SamplingStrategy.RATE);
+        assertThat(invoke(appender, "shouldSample",
+                new Class[]{LogCollectContext.class, LogCollectConfig.class, String.class, boolean.class},
+                ctx, enabled, "INFO", false)).isEqualTo(true);
+
+        enabled.setSamplingRate(0.0d);
+        assertThat(invoke(appender, "shouldSample",
+                new Class[]{LogCollectContext.class, LogCollectConfig.class, String.class, boolean.class},
+                ctx, enabled, "INFO", false)).isEqualTo(false);
+
+        enabled.setSamplingRate(1.0d);
+        enabled.setSamplingStrategy(SamplingStrategy.ADAPTIVE);
+        assertThat(invoke(appender, "shouldSample",
+                new Class[]{LogCollectContext.class, LogCollectConfig.class, String.class, boolean.class},
+                ctx, enabled, "WARN", true)).isEqualTo(true);
+    }
+
+    @Test
+    void privateHelpers_coverNotifyBranches() throws Exception {
+        LogCollectLogbackAppender appender = new LogCollectLogbackAppender();
+        LogCollectConfig config = LogCollectConfig.frameworkDefaults();
+
+        LogCollectHandler okHandler = mock(LogCollectHandler.class);
+        LogCollectContext okCtx = newContext("trace-notify-ok", config, okHandler);
+        invoke(appender, "notifyError",
+                new Class[]{LogCollectContext.class, Throwable.class, String.class},
+                okCtx, new RuntimeException("x"), "append");
+        verify(okHandler).onError(eq(okCtx), any(Throwable.class), eq("append"));
+
+        invoke(appender, "notifyDegrade",
+                new Class[]{LogCollectContext.class, String.class},
+                okCtx, "reason-ok");
+        verify(okHandler).onDegrade(eq(okCtx), any());
+
+        LogCollectHandler failHandler = mock(LogCollectHandler.class);
+        doThrow(new RuntimeException("onError-failed"))
+                .when(failHandler).onError(any(LogCollectContext.class), any(Throwable.class), anyString());
+        doThrow(new RuntimeException("onDegrade-failed"))
+                .when(failHandler).onDegrade(any(LogCollectContext.class), any());
+        LogCollectContext failCtx = newContext("trace-notify-fail", config, failHandler);
+        invoke(appender, "notifyError",
+                new Class[]{LogCollectContext.class, Throwable.class, String.class},
+                failCtx, new RuntimeException("y"), "append");
+        invoke(appender, "notifyDegrade",
+                new Class[]{LogCollectContext.class, String.class},
+                failCtx, "reason-fail");
+
+        LogCollectContext noHandlerCtx = newContext("trace-no-handler", config, null);
+        invoke(appender, "notifyError",
+                new Class[]{LogCollectContext.class, Throwable.class, String.class},
+                noHandlerCtx, new RuntimeException("z"), "append");
+
+        LogCollectContext nullConfigCtx = newContext("trace-null-config", null, okHandler);
+        invoke(appender, "notifyDegrade",
+                new Class[]{LogCollectContext.class, String.class},
+                nullConfigCtx, "reason-null-config");
+    }
+
+    private ILoggingEvent mockEvent(String msg, String logger, Level level, Map<String, String> mdc, Throwable t) {
+        ILoggingEvent event = mock(ILoggingEvent.class);
+        when(event.getMDCPropertyMap()).thenReturn(mdc);
+        when(event.getFormattedMessage()).thenReturn(msg);
+        when(event.getLoggerName()).thenReturn(logger);
+        when(event.getLevel()).thenReturn(level);
+        when(event.getThreadName()).thenReturn("main");
+        when(event.getTimeStamp()).thenReturn(System.currentTimeMillis());
+        if (t != null) {
+            when(event.getThrowableProxy()).thenReturn(new ThrowableProxy(t));
+        }
+        return event;
+    }
+
+    private LogCollectContext newContext(String traceId, LogCollectConfig config, LogCollectHandler handler) throws Exception {
+        Method method = LogCollectLogbackAppenderBranchTest.class.getDeclaredMethod("marker");
+        return new LogCollectContext(traceId, method, new Object[0], config, handler, null, null, CollectMode.SINGLE);
+    }
+
+    private Object invoke(Object target, String name, Class<?>[] types, Object... args) throws Exception {
+        Method method = target.getClass().getDeclaredMethod(name, types);
+        method.setAccessible(true);
+        try {
+            return method.invoke(target, args);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            if (cause instanceof Error) {
+                throw (Error) cause;
+            }
+            throw new RuntimeException(cause);
+        }
+    }
+
+    @SuppressWarnings("unused")
+    private static void marker() {
+    }
+
+    private static final class TxWrapper {
+        private int called;
+        private int directRun;
+
+        public void executeInNewTransaction(Runnable action) {
+            called++;
+            action.run();
+        }
+    }
+
+    private static final class RunnableCounter implements Runnable {
+        private final TxWrapper wrapper;
+
+        private RunnableCounter(TxWrapper wrapper) {
+            this.wrapper = wrapper;
+        }
+
+        @Override
+        public void run() {
+            wrapper.directRun++;
+        }
+    }
+
+    @SuppressWarnings("unused")
+    public static final class MetricsStub {
+        int securityTimerStarted;
+
+        public Object startSecurityTimer() {
+            securityTimerStarted++;
+            return new Object();
+        }
+
+        public void stopSecurityTimer(Object timer, String method) {
+            securityTimerStarted++;
+        }
+
+        public void incrementSanitizeHits(String method) {
+            securityTimerStarted++;
+        }
+
+        public void incrementMaskHits(String method) {
+            securityTimerStarted++;
+        }
+
+        public void incrementDiscarded(String method, String reason) {
+            securityTimerStarted++;
+        }
+
+        public void incrementCollected(String method, String level, String mode) {
+            securityTimerStarted++;
+        }
+
+        public Object startPersistTimer() {
+            securityTimerStarted++;
+            return new Object();
+        }
+
+        public void stopPersistTimer(Object timer, String method, String mode) {
+            securityTimerStarted++;
+        }
+    }
+}

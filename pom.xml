@@ -45,6 +45,10 @@
         <context-propagation.version>1.0.6</context-propagation.version>
         <spring-boot.min.version>2.7.0</spring-boot.min.version>
         <spring-boot.version>2.7.18</spring-boot.version>
+
+        <!-- Default: disable signing and publishing unless release profile is selected -->
+        <gpg.skip>true</gpg.skip>
+        <skipPublishing>true</skipPublishing>
     </properties>
 
     <modules>
@@ -61,6 +65,17 @@
         <module>logcollect-test-support</module>
         <module>logcollect-samples</module>
     </modules>
+
+    <profiles>
+        <profile>
+            <id>release-publish</id>
+            <properties>
+                <!-- Enable signing and publishing only when this profile is explicitly selected -->
+                <gpg.skip>false</gpg.skip>
+                <skipPublishing>false</skipPublishing>
+            </properties>
+        </profile>
+    </profiles>
 
     <dependencyManagement>
         <dependencies>
@@ -197,6 +212,13 @@
                     <artifactId>maven-gpg-plugin</artifactId>
                     <version>3.2.4</version>
                 </plugin>
+
+                <!-- Site 报告：统一到 doxia 2.x，避免 NoSuchMethodError -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-site-plugin</artifactId>
+                    <version>3.21.0</version>
+                </plugin>
             </plugins>
         </pluginManagement>
 
@@ -274,4 +296,14 @@
             </plugin>
         </plugins>
     </build>
+
+    <reporting>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-project-info-reports-plugin</artifactId>
+                <version>3.9.0</version>
+            </plugin>
+        </plugins>
+    </reporting>
 </project>
