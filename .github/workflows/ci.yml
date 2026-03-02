@@ -32,7 +32,10 @@ jobs:
           mvn -B clean verify \
             -Dspring-boot.version=${{ matrix.spring-boot }} \
             -Dlog-framework=${{ matrix.log-framework }} \
-            -pl '!logcollect-samples'
+            -pl '!logcollect-samples' \
+            -Denv.CI=true \
+            -DenablePublish=false \
+            -DskipDeploy=true
 
   coverage:
     runs-on: ubuntu-latest
