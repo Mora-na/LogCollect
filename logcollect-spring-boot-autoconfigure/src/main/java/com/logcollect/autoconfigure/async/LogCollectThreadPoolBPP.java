@@ -70,6 +70,9 @@ public class LogCollectThreadPoolBPP implements BeanPostProcessor {
      */
     private void wrapTaskDecorator(ThreadPoolTaskExecutor executor, String beanName) {
         try {
+            if (isInitialized(executor)) {
+                return;
+            }
             TaskDecorator existing = getTaskDecoratorReflective(executor);
             TaskDecorator lc = new LogCollectTaskDecorator();
             TaskDecorator chained = existing == null ? lc : chain(existing, lc);
@@ -84,6 +87,9 @@ public class LogCollectThreadPoolBPP implements BeanPostProcessor {
      */
     private void wrapTaskDecorator(ThreadPoolTaskScheduler scheduler, String beanName) {
         try {
+            if (isInitialized(scheduler)) {
+                return;
+            }
             TaskDecorator existing = getTaskDecoratorReflective(scheduler);
             TaskDecorator lc = new LogCollectTaskDecorator();
             TaskDecorator chained = existing == null ? lc : chain(existing, lc);
@@ -133,6 +139,26 @@ public class LogCollectThreadPoolBPP implements BeanPostProcessor {
             // ignore
         }
         return null;
+    }
+
+    private boolean isInitialized(ThreadPoolTaskExecutor executor) {
+        try {
+            return executor.getThreadPoolExecutor() != null;
+        } catch (IllegalStateException ex) {
+            return false;
+        } catch (Throwable ex) {
+            return false;
+        }
+    }
+
+    private boolean isInitialized(ThreadPoolTaskScheduler scheduler) {
+        try {
+            return scheduler.getScheduledExecutor() != null;
+        } catch (IllegalStateException ex) {
+            return false;
+        } catch (Throwable ex) {
+            return false;
+        }
     }
 
     /**
