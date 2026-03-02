@@ -2,6 +2,7 @@ package com.logcollect.core.context;
 
 import com.logcollect.api.model.LogCollectContext;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Deque;
@@ -32,12 +33,15 @@ public final class LogCollectContextUtils {
         if (runnable instanceof LogCollectRunnableWrapper) {
             return runnable;
         }
-        Deque<LogCollectContext> snapshot = LogCollectContextManager.snapshot();
-        if (snapshot == null || snapshot.isEmpty()) {
+        final List<WeakReference<LogCollectContext>> weakSnapshot = captureWeakSnapshot();
+        if (weakSnapshot.isEmpty()) {
             return runnable;
         }
         return () -> {
-            LogCollectContextManager.restore(snapshot);
+            if (!restoreWeakSnapshot(weakSnapshot)) {
+                runnable.run();
+                return;
+            }
             try {
                 runnable.run();
             } finally {
@@ -60,12 +64,14 @@ public final class LogCollectContextUtils {
         if (callable instanceof LogCollectCallableWrapper) {
             return callable;
         }
-        Deque<LogCollectContext> snapshot = LogCollectContextManager.snapshot();
-        if (snapshot == null || snapshot.isEmpty()) {
+        final List<WeakReference<LogCollectContext>> weakSnapshot = captureWeakSnapshot();
+        if (weakSnapshot.isEmpty()) {
             return callable;
         }
         return () -> {
-            LogCollectContextManager.restore(snapshot);
+            if (!restoreWeakSnapshot(weakSnapshot)) {
+                return callable.call();
+            }
             try {
                 return callable.call();
             } finally {
@@ -85,14 +91,17 @@ public final class LogCollectContextUtils {
         if (consumer == null) {
             return null;
         }
-        final Deque<LogCollectContext> snapshot = LogCollectContextManager.snapshot();
-        if (snapshot == null || snapshot.isEmpty()) {
+        final List<WeakReference<LogCollectContext>> weakSnapshot = captureWeakSnapshot();
+        if (weakSnapshot.isEmpty()) {
             return consumer;
         }
         return new Consumer<T>() {
             @Override
             public void accept(T t) {
-                LogCollectContextManager.restore(snapshot);
+                if (!restoreWeakSnapshot(weakSnapshot)) {
+                    consumer.accept(t);
+                    return;
+                }
                 try {
                     consumer.accept(t);
                 } finally {
@@ -254,14 +263,16 @@ public final class LogCollectContextUtils {
         if (supplier == null) {
             return null;
         }
-        final Deque<LogCollectContext> snapshot = LogCollectContextManager.snapshot();
-        if (snapshot == null || snapshot.isEmpty()) {
+        final List<WeakReference<LogCollectContext>> weakSnapshot = captureWeakSnapshot();
+        if (weakSnapshot.isEmpty()) {
             return supplier;
         }
         return new Supplier<U>() {
             @Override
             public U get() {
-                LogCollectContextManager.restore(snapshot);
+                if (!restoreWeakSnapshot(weakSnapshot)) {
+                    return supplier.get();
+                }
                 try {
                     return supplier.get();
                 } finally {
@@ -287,5 +298,40 @@ public final class LogCollectContextUtils {
             wrapped.add(wrapCallable(task));
         }
         return wrapped;
+    }
+
+    private static List<WeakReference<LogCollectContext>> captureWeakSnapshot() {
+        Deque<LogCollectContext> snapshot = LogCollectContextManager.snapshot();
+        if (snapshot == null || snapshot.isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+        List<WeakReference<LogCollectContext>> weakSnapshot =
+                new ArrayList<WeakReference<LogCollectContext>>(snapshot.size());
+        for (LogCollectContext context : snapshot) {
+            weakSnapshot.add(new WeakReference<LogCollectContext>(context));
+        }
+        return weakSnapshot;
+    }
+
+    private static boolean restoreWeakSnapshot(List<WeakReference<LogCollectContext>> weakSnapshot) {
+        if (weakSnapshot == null || weakSnapshot.isEmpty()) {
+            LogCollectContextManager.clear();
+            return false;
+        }
+        Deque<LogCollectContext> restored = new java.util.ArrayDeque<LogCollectContext>(weakSnapshot.size());
+        for (WeakReference<LogCollectContext> reference : weakSnapshot) {
+            LogCollectContext context = reference == null ? null : reference.get();
+            if (context == null) {
+                LogCollectContextManager.clear();
+                return false;
+            }
+            restored.addLast(context);
+        }
+        if (restored.isEmpty()) {
+            LogCollectContextManager.clear();
+            return false;
+        }
+        LogCollectContextManager.restore(restored);
+        return true;
     }
 }

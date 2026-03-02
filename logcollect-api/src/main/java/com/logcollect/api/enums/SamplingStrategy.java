@@ -2,6 +2,8 @@ package com.logcollect.api.enums;
 
 /**
  * 日志采样策略。
+ *
+ * @since 1.0.0
  */
 public enum SamplingStrategy {
     /**

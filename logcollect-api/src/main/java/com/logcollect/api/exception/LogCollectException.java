@@ -2,6 +2,8 @@ package com.logcollect.api.exception;
 
 /**
  * LogCollect 框架通用运行时异常。
+ *
+ * @since 1.0.0
  */
 public class LogCollectException extends RuntimeException {
     public LogCollectException(String message) { super(message); }

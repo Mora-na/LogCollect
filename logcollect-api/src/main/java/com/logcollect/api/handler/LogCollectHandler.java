@@ -8,6 +8,8 @@ import com.logcollect.api.model.DegradeEvent;
 import com.logcollect.api.model.LogCollectContext;
 import com.logcollect.api.model.LogEntry;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+
 /**
  * 日志收集处理器接口。
  */
@@ -28,9 +30,19 @@ public interface LogCollectHandler {
     // =====================================================================
 
     default void appendLog(LogCollectContext context, LogEntry entry) {
+        if (context != null) {
+            context.incrementDiscardedCount();
+            if (context.getTotalDiscardedCount() != 1) {
+                return;
+            }
+        } else if (!DefaultWarnings.APPEND_NO_CONTEXT_WARNED.compareAndSet(false, true)) {
+            return;
+        }
+        String traceId = context == null ? "unknown" : context.getTraceId();
         System.err.println("[LogCollect-WARN] appendLog not implemented in "
                 + getClass().getSimpleName()
-                + ", log entry dropped. Consider implementing appendLog or using AGGREGATE mode.");
+                + ", entries are being dropped for traceId=" + traceId
+                + ". Implement appendLog or switch to AGGREGATE mode.");
     }
 
     // =====================================================================
@@ -99,7 +111,7 @@ public interface LogCollectHandler {
      *
      * @param context 当前上下文
      * @param level 日志级别
-     * @param messageSummary 消息摘要（已做控制字符清理并截断）
+     * @param messageSummary 消息安全摘要（已做基础清理，最长 256 字符）
      * @return true 表示允许收集
      */
     default boolean shouldCollect(LogCollectContext context, String level, String messageSummary) {
@@ -127,5 +139,12 @@ public interface LogCollectHandler {
     }
 
     default void onError(LogCollectContext context, Throwable error, String phase) {
+    }
+
+    final class DefaultWarnings {
+        static final AtomicBoolean APPEND_NO_CONTEXT_WARNED = new AtomicBoolean(false);
+
+        private DefaultWarnings() {
+        }
     }
 }

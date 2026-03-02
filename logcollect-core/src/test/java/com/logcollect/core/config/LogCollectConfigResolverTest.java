@@ -1,6 +1,8 @@
 package com.logcollect.core.config;
 
 import com.logcollect.api.annotation.LogCollect;
+import com.logcollect.api.backpressure.BackpressureAction;
+import com.logcollect.api.backpressure.BackpressureCallback;
 import com.logcollect.api.config.LogCollectConfigSource;
 import com.logcollect.api.enums.SamplingStrategy;
 import com.logcollect.api.enums.TotalLimitPolicy;
@@ -64,6 +66,46 @@ class LogCollectConfigResolverTest {
         Assertions.assertEquals(0.75d, config.getDegradeFailureRateThreshold(), 0.00001d);
     }
 
+    @Test
+    void shouldPreferMethodOverGlobalOverAnnotation() throws Exception {
+        Map<String, String> global = new LinkedHashMap<String, String>();
+        global.put("level", "WARN");
+        Map<String, String> method = new LinkedHashMap<String, String>();
+        method.put("level", "ERROR");
+
+        LogCollectConfigSource source = new InMemorySource(global, method);
+        LogCollectConfigResolver resolver = new LogCollectConfigResolver(
+                Collections.singletonList(source), null);
+
+        Method target = LogCollectConfigResolverTest.class.getDeclaredMethod("annotatedWithDebug");
+        LogCollect annotation = target.getAnnotation(LogCollect.class);
+        LogCollectConfig config = resolver.resolve(target, annotation);
+
+        Assertions.assertEquals("ERROR", config.getLevel());
+    }
+
+    @Test
+    void shouldUseFrameworkDefaultLevelWhenAnnotationMinLevelIsEmpty() throws Exception {
+        LogCollectConfigResolver resolver = new LogCollectConfigResolver(Collections.emptyList(), null);
+        Method target = LogCollectConfigResolverTest.class.getDeclaredMethod("annotatedWithDefaultMinLevel");
+        LogCollect annotation = target.getAnnotation(LogCollect.class);
+
+        LogCollectConfig config = resolver.resolve(target, annotation);
+
+        Assertions.assertEquals("INFO", config.getLevel());
+    }
+
+    @Test
+    void shouldResolveBackpressureFromAnnotation() throws Exception {
+        LogCollectConfigResolver resolver = new LogCollectConfigResolver(Collections.emptyList(), null);
+        Method target = LogCollectConfigResolverTest.class.getDeclaredMethod("annotatedWithBackpressure");
+        LogCollect annotation = target.getAnnotation(LogCollect.class);
+
+        LogCollectConfig config = resolver.resolve(target, annotation);
+
+        Assertions.assertEquals(TestBackpressureCallback.class, config.getBackpressureCallbackClass());
+    }
+
     private static class InMemorySource implements LogCollectConfigSource {
         private final Map<String, String> global;
         private final Map<String, String> method;
@@ -85,5 +127,24 @@ class LogCollectConfigResolverTest {
     }
 
     private static void targetMethod() {
+    }
+
+    @LogCollect(minLevel = "DEBUG")
+    private static void annotatedWithDebug() {
+    }
+
+    @LogCollect
+    private static void annotatedWithDefaultMinLevel() {
+    }
+
+    @LogCollect(backpressure = TestBackpressureCallback.class)
+    private static void annotatedWithBackpressure() {
+    }
+
+    public static class TestBackpressureCallback implements BackpressureCallback {
+        @Override
+        public BackpressureAction onPressure(double utilization) {
+            return BackpressureAction.CONTINUE;
+        }
     }
 }

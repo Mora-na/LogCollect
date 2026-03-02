@@ -64,6 +64,8 @@ jobs:
           python3 - <<'PY'
           import xml.etree.ElementTree as ET
 
+          MIN_CORE_LINE_COVERAGE = 0.80
+
           report = "logcollect-core/target/site/jacoco/jacoco.xml"
           root = ET.parse(report).getroot()
           line_counter = None
@@ -83,6 +85,7 @@ jobs:
 
           ratio = covered / total
           print(f"Core line coverage ratio: {ratio:.4f}")
-          if ratio < 0.80:
+          print(f"Required minimum ratio: {MIN_CORE_LINE_COVERAGE:.2f}")
+          if ratio < MIN_CORE_LINE_COVERAGE:
               raise SystemExit(1)
           PY

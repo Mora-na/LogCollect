@@ -1,5 +1,6 @@
 package com.logcollect.api.model;
 
+import com.logcollect.api.backpressure.BackpressureCallback;
 import com.logcollect.api.enums.*;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.masker.LogMasker;
@@ -61,6 +62,7 @@ public class LogCollectConfig {
     private TotalLimitPolicy totalLimitPolicy = TotalLimitPolicy.STOP_COLLECTING;
     private double samplingRate = 1.0d;
     private SamplingStrategy samplingStrategy = SamplingStrategy.RATE;
+    private Class<? extends BackpressureCallback> backpressureCallbackClass = BackpressureCallback.class;
 
     // ===== 可观测性配置 =====
     private boolean enableMetrics = true;
@@ -389,6 +391,14 @@ public class LogCollectConfig {
 
     public void setSamplingStrategy(SamplingStrategy samplingStrategy) {
         this.samplingStrategy = samplingStrategy;
+    }
+
+    public Class<? extends BackpressureCallback> getBackpressureCallbackClass() {
+        return backpressureCallbackClass;
+    }
+
+    public void setBackpressureCallbackClass(Class<? extends BackpressureCallback> backpressureCallbackClass) {
+        this.backpressureCallbackClass = backpressureCallbackClass;
     }
 
     public boolean isEnableMetrics() {

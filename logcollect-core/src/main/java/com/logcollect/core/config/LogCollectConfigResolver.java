@@ -1,6 +1,7 @@
 package com.logcollect.core.config;
 
 import com.logcollect.api.annotation.LogCollect;
+import com.logcollect.api.backpressure.BackpressureCallback;
 import com.logcollect.api.config.LogCollectConfigSource;
 import com.logcollect.api.enums.*;
 import com.logcollect.api.format.LogLineDefaults;
@@ -86,7 +87,7 @@ public class LogCollectConfigResolver {
 
     /**
      * 四级合并：
-     * ④ 框架默认 &lt;- ③ 注解显式 &lt;- ② 配置中心方法级 &lt;- ① 配置中心全局
+     * ④ 框架默认 &lt;- ③ 注解显式 &lt;- ② 配置中心全局 &lt;- ① 配置中心方法级
      *
      * @param method     目标方法
      * @param annotation 方法上的 {@link LogCollect} 注解，可为 null
@@ -105,14 +106,14 @@ public class LogCollectConfigResolver {
         // 第③级：注解显式
         mergeFromAnnotation(config, annotation);
 
-        // 第②级：方法级
+        // 第②级：全局
+        Map<String, String> globalProperties = loadGlobalProperties();
+        mergeFromProperties(config, globalProperties);
+
+        // 第①级：方法级（最高优先）
         Map<String, String> methodProperties = filterMethodLevelProperties(
                 loadMethodProperties(configMethodKey), configMethodKey);
         mergeFromProperties(config, methodProperties);
-
-        // 第①级：全局（最高优先）
-        Map<String, String> globalProperties = loadGlobalProperties();
-        mergeFromProperties(config, globalProperties);
 
         persistResolvedProperties(configMethodKey, methodProperties, globalProperties);
         return config;
@@ -423,8 +424,8 @@ public class LogCollectConfigResolver {
         if (!annotation.async()) {
             config.setAsync(false);
         }
-        if (!"TRACE".equals(annotation.minLevel())) {
-            config.setLevel(annotation.minLevel());
+        if (annotation.minLevel() != null && !annotation.minLevel().trim().isEmpty()) {
+            config.setLevel(annotation.minLevel().trim());
         }
         if (annotation.excludeLoggers() != null && annotation.excludeLoggers().length > 0) {
             config.setExcludeLoggerPrefixes(annotation.excludeLoggers());
@@ -478,6 +479,10 @@ public class LogCollectConfigResolver {
         }
         if (annotation.samplingStrategy() != SamplingStrategy.RATE) {
             config.setSamplingStrategy(annotation.samplingStrategy());
+        }
+        if (annotation.backpressure() != null
+                && annotation.backpressure() != BackpressureCallback.class) {
+            config.setBackpressureCallbackClass(annotation.backpressure());
         }
         if (annotation.blockWhenDegradeFail()) {
             config.setBlockWhenDegradeFail(true);

@@ -284,7 +284,7 @@ public class ImportService {
     ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ 0. 配置解析                                                  │
-│    四级合并：框架默认 ← 注解 ← 配置中心方法级 ← 配置中心全局   │
+│    四级合并：框架默认 ← 注解 ← 配置中心全局 ← 配置中心方法级   │
 ├─────────────────────────────────────────────────────────────┤
 │ 1. AOP 前置                                                  │
 │    生成 UUID traceId → 创建 LogCollectContext                │
@@ -294,7 +294,7 @@ public class ImportService {
 │    每条日志 → Appender 拦截 → 检查 MDC traceId               │
 │    ↓ 匹配                                                    │
 │ 3. 收集过滤                                                  │
-│    级别过滤 → handler.shouldCollect() 自定义过滤              │
+│    级别/Logger 过滤 → handler.shouldCollect() 自定义过滤      │
 │    ↓ 通过                                                    │
 │ 4. 长度守卫                                                   │
 │    StringLengthGuard：content / throwable 分别限长            │
@@ -302,7 +302,7 @@ public class ImportService {
 │    ↓                                                         │
 │ 5. 安全流水线（唯一入口）                                      │
 │    SecurityPipeline：sanitize + mask 单入口处理               │
-│    同时净化 content / throwable / thread / logger / level     │
+│    同时净化 content / throwable / thread / logger / level / MDC 值 │
 │    ↓                                                         │
 │ 6. 模式分发                                                   │
 │    ├─ SINGLE:    构建 LogEntry → SingleModeBuffer             │
@@ -448,15 +448,19 @@ LogCollectContext
 ```
 优先级从高到低：
 
-① 配置中心 - 全局配置      logcollect.global.level=WARN
+① 配置中心 - 方法级配置    logcollect.methods.{类名_方法名}.level=ERROR
    ↓ 覆盖
-② 配置中心 - 方法级配置    logcollect.methods.{类名_方法名}.level=ERROR
+② 配置中心 - 全局配置      logcollect.global.level=WARN
    ↓ 覆盖
 ③ @LogCollect 注解配置      @LogCollect(minLevel = "INFO")
    ↓ 覆盖
 ④ 框架默认配置              INFO（硬编码在框架中）
 
 合并规则：每个参数独立合并，高优先级仅覆盖其显式设置的参数。
+
+Handler 解析优化：
+- `@LogCollect` 方法的 Handler 解析结果按 `Method` 缓存，避免每次调用重复扫描容器
+- 配置中心刷新后缓存自动失效，下次调用按最新配置重新解析
 ```
 
 ### 5.5 日志框架接入（自动 Appender 注册）
@@ -872,6 +876,9 @@ public final class LogEntry {
 
 ```java
 public class AggregatedLog {
+    /** 本次 flush 的唯一标识（UUID），用于幂等处理 */
+    private final String flushId;
+
     /** 聚合后的完整日志体（一整个大字符串，不是列表） */
     private final String content;
     
@@ -929,9 +936,13 @@ public interface LogCollectHandler {
      * 框架从缓冲区 drain 后循环调用。content 已过净化 + 脱敏。
      */
     default void appendLog(LogCollectContext context, LogEntry entry) {
-        System.err.println("[LogCollect-WARN] appendLog not implemented in "
-            + getClass().getSimpleName()
-            + ", log entry dropped. Consider implementing appendLog or using AGGREGATE mode.");
+        context.incrementDiscardedCount();
+        if (context.getTotalDiscardedCount() == 1) {
+            System.err.println("[LogCollect-WARN] appendLog not implemented in "
+                + getClass().getSimpleName()
+                + ", entries are being dropped for traceId=" + context.getTraceId()
+                + ". Implement appendLog or switch to AGGREGATE mode.");
+        }
     }
 
     // ==================== 模式2：聚合刷写模式 ====================
@@ -980,9 +991,10 @@ public interface LogCollectHandler {
     /**
      * 自定义日志收集过滤器。
      * 在级别过滤之后、安全流水线之前调用。返回 false 跳过该条日志。
+     * messageSummary 为安全摘要（基础清理后，最长 256 字符）。
      */
     default boolean shouldCollect(LogCollectContext context,
-                                  String level, String rawMessage) {
+                                  String level, String messageSummary) {
         return true;
     }
 
@@ -1016,12 +1028,12 @@ public interface LogCollectHandler {
 |------|------|---------|------|---------|
 | `before(context)` | 生命周期 | 空实现 | 初始化业务记录、设置 businessId 和 attributes | 两种 |
 | `after(context)` | 生命周期 | 空实现 | 更新终态（成功/失败/耗时/统计） | 两种 |
-| `appendLog(context, entry)` | 收集入口 | 打印警告并丢弃该条 | 逐条日志写入 | SINGLE |
+| `appendLog(context, entry)` | 收集入口 | 首次告警并丢弃 | 逐条日志写入 | SINGLE |
 | `flushAggregatedLog(context, aggLog)` | 收集入口 | 抛异常 | 聚合日志体一次性写入 | AGGREGATE |
 | `logLinePattern()` | 格式化 | `LogLineDefaults.getEffectivePattern()` | 定义默认 pattern | AGGREGATE |
 | `formatLogLine(entry)` | 格式化 | `LogLinePatternParser.format(...)` | 定义聚合体每行格式 | AGGREGATE |
 | `aggregatedLogSeparator()` | 格式化 | `"\n"` | 聚合体行分隔符 | AGGREGATE |
-| `shouldCollect(context, level, msg)` | 过滤 | `return true` | 自定义业务过滤 | 两种 |
+| `shouldCollect(context, level, messageSummary)` | 过滤 | `return true` | 基于安全摘要（基础清理后、最长 256 字符）做业务过滤 | 两种 |
 | `preferredMode()` | 模式选择 | `return AUTO` | 声明偏好模式 | 两种 |
 | `onDegrade(context, event)` | 降级 | 空实现 | 降级通知（可发告警） | 两种 |
 | `onError(context, error, phase)` | 错误处理 | 空实现 | 写入异常通知 | 两种 |
@@ -1105,9 +1117,9 @@ public class SimpleLogHandler implements LogCollectHandler {
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `handler` | `Class` | 自动匹配 | 业务日志处理实现类。选择优先级：注解显式指定 > 容器唯一实现 > `@Primary`；多个且无 `@Primary` 将启动失败 |
+| `handler` | `Class` | 自动匹配 | 业务日志处理实现类。选择优先级：注解显式指定 > 容器唯一实现 > `@Primary`。无 Handler 时回退 `NoopLogCollectHandler` 并打印启动告警；多个且无 `@Primary` 且存在 `handler=AUTO` 的 `@LogCollect` 方法时启动失败 |
 | `async` | `boolean` | `true` | 是否异步收集日志。异步时业务线程仅写入队列即返回 |
-| `minLevel` | `String` | `"TRACE"` | 注解维度最低采集级别（优先于 Handler 过滤） |
+| `minLevel` | `String` | `""`（空） | 注解维度最低采集级别；空表示“未显式设置”，由框架默认 `INFO` 或配置中心覆盖 |
 | `excludeLoggers` | `String[]` | `{}` | 按 logger 名前缀排除（如 `org.springframework.`） |
 | `collectMode` | `CollectMode` | `AUTO` | 日志收集模式。`AUTO`=框架自动选择（默认AGGREGATE），`SINGLE`=单条缓冲，`AGGREGATE`=聚合刷写 |
 
@@ -1153,6 +1165,17 @@ public class SimpleLogHandler implements LogCollectHandler {
 | `totalLimitPolicy` | `TotalLimitPolicy` | `STOP_COLLECTING` | 达到总量上限后的策略：`STOP_COLLECTING` / `DOWNGRADE_LEVEL` / `SAMPLE` |
 | `samplingRate` | `double` | `1.0` | 采样比例（0~1），`1.0` 表示全量 |
 | `samplingStrategy` | `SamplingStrategy` | `RATE` | 采样策略：`RATE` / `COUNT` / `ADAPTIVE` |
+| `backpressure` | `Class` | `BackpressureCallback.class` | 背压回调（按缓冲利用率返回 `CONTINUE` / `SKIP_DEBUG_INFO` / `PAUSE`） |
+
+**采样策略说明**
+
+| 策略 | 行为 |
+|------|------|
+| `RATE` | 每条日志以 `samplingRate` 概率决定是否收集（随机采样） |
+| `COUNT` | 每 `1/samplingRate` 条收集一条（如 `0.1` → 每 10 条收 1 条） |
+| `ADAPTIVE` | 根据全局缓冲区水位自适应调整：`<=50%` 全量收集；`50%~80%` 按 `samplingRate` 采样；`>=80%` 仅收集 WARN/ERROR |
+
+> `ADAPTIVE` 下 `samplingRate` 仅在中等水位区间（`50%~80%`）生效。
 
 #### 可观测性配置
 
@@ -1203,6 +1226,9 @@ public void importData(List<DataRecord> records) { ... }
 public PayResult pay(PayRequest request) { ... }
 ```
 
+> ⚠️ `async=false, useBuffer=false` 时每条日志会走同步热路径（含净化/脱敏正则与持久化），会直接增加业务 RT。  
+> 建议该组合仅用于 `minLevel="WARN"` 以上低频场景；高频场景优先使用默认 `async=true, useBuffer=true`。
+
 **高并发场景（大缓冲 + 聚合模式）**
 
 ```java
@@ -1224,6 +1250,45 @@ public void seckill(Long itemId) { ... }
     samplingStrategy = SamplingStrategy.ADAPTIVE
 )
 public void longRunningBatchJob() { ... }
+```
+
+**高压背压（回调感知缓冲压力）**
+
+```java
+@Component
+public class PaymentBackpressureCallback implements BackpressureCallback {
+    @Override
+    public BackpressureAction onPressure(double utilization) {
+        if (utilization >= 0.9d) {
+            return BackpressureAction.PAUSE;
+        }
+        if (utilization >= 0.75d) {
+            return BackpressureAction.SKIP_DEBUG_INFO;
+        }
+        return BackpressureAction.CONTINUE;
+    }
+}
+
+@LogCollect(backpressure = PaymentBackpressureCallback.class)
+public void processPay(PayRequest request) { ... }
+```
+
+**局部反向排除（`@LogCollectIgnore`）**
+
+```java
+@Service
+public class HealthProbeService {
+    @LogCollectIgnore
+    public void healthCheck() {
+        log.info("健康检查");  // ❌ 不收集
+    }
+}
+
+@LogCollect
+public void createOrder(OrderRequest req) {
+    log.info("创建订单");                 // ✅ 收集
+    healthProbeService.healthCheck();     // ❌ 被排除
+}
 ```
 
 ---
@@ -1475,7 +1540,9 @@ public void riskCheck(OrderRequest req) {
 | `isInLogCollectContext` | 诊断 | `boolean isInLogCollectContext()` |
 | `diagnosticInfo` | 诊断 | `String diagnosticInfo()` |
 
-**内存安全保障**：所有 `wrap*` 方法均在子线程 `finally` 块中强制清理 `ThreadLocal`，无论任务成功、失败或异常，绝无内存泄漏。
+**内存安全保障**：`wrap*` 方法使用弱引用捕获上下文，子线程 `finally` 中强制清理 `ThreadLocal`。若外层方法已结束且上下文被回收，延迟任务会安全降级为“无上下文执行”。
+
+> 权衡：弱引用方案优先避免长生命周期任务持有上下文造成泄漏；若任务延迟很久执行，可能因上下文已回收而不再传播。
 
 > `wrapThreadFactory` 仅接收 `java.util.concurrent.ThreadFactory`。  
 > `ForkJoinWorkerThreadFactory` 不是 `ThreadFactory` 子类型，ForkJoinPool 场景请优先包装提交任务（`wrapRunnable`）。
@@ -1556,7 +1623,7 @@ public class FinanceLogSanitizer extends DefaultLogSanitizer {
 | 手机号 | `13812345678` | `138****5678` |
 | 身份证号 | `110105199001011234` | `110105********1234` |
 | 银行卡号 | `6222021234567890123` | `6222****0123` |
-| 邮箱 | `zhangsan@example.com` | `zh***@example.com` |
+| 邮箱 | `zhangsan@example.com` | `zh****@example.com` |
 
 **自定义扩展**：
 
@@ -1606,7 +1673,7 @@ public class TaskLogHandler extends AbstractJdbcLogCollectHandler {
 
 | 防护项 | 措施 |
 |--------|------|
-| 路径遍历 | traceId 由框架内部 `UUID.randomUUID()` 生成，仅含十六进制和短横线，不接受外部输入 |
+| 路径遍历 | traceId 由框架内部 `UUID.randomUUID()` 生成；`DegradeFileManager` 对传入值做 UUID 正则校验，非法值自动替换为新 UUID |
 | 权限控制 | Linux/Mac：`rw-------` (600)；Windows：ACL 限制仅 owner 读写 |
 | 磁盘耗尽 | 总大小上限（默认 500MB） + TTL 自动清理（默认 90 天） + 磁盘可用空间 < 100MB 时停止写入 |
 | 数据泄露 | 降级文件同样经过 Sanitizer + Masker 处理；可选 AES-256-GCM 加密 |
@@ -1699,7 +1766,7 @@ public void criticalOperation() { ... }
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  LogCollectConfigResolver（四级配置合并引擎）                              │
-│  框架默认 ← @LogCollect注解 ← 配置中心方法级 ← 配置中心全局              │
+│  框架默认 ← @LogCollect注解 ← 配置中心全局 ← 配置中心方法级              │
 └────────────────────────────────┬─────────────────────────────────────────┘
                                  ↓
 ┌──────────┬──────────┬──────────────────┬───────────────────┐
@@ -1771,6 +1838,8 @@ logcollect.global.degrade.enabled=true
 logcollect.global.degrade.fail-threshold=5
 logcollect.global.degrade.storage=FILE
 logcollect.global.degrade.recover-interval-seconds=30
+logcollect.global.degrade.window-size=10
+logcollect.global.degrade.failure-rate-threshold=0.6
 logcollect.global.degrade.file.max-total-size=500MB
 logcollect.global.degrade.file.ttl-days=90
 logcollect.global.security.sanitize.enabled=true
@@ -1779,6 +1848,11 @@ logcollect.global.guard.max-content-length=32768
 logcollect.global.guard.max-throwable-length=65536
 logcollect.global.handler-timeout-ms=5000
 logcollect.global.max-nesting-depth=10
+logcollect.global.max-total-collect=100000
+logcollect.global.max-total-collect-bytes=50MB
+logcollect.global.total-limit-policy=STOP_COLLECTING
+logcollect.global.sampling-rate=1.0
+logcollect.global.sampling-strategy=RATE
 logcollect.global.metrics.enabled=true
 logcollect.internal.log-level=INFO
 
@@ -1786,6 +1860,8 @@ logcollect.internal.log-level=INFO
 logcollect.methods.com_example_service_OrderService_pay.level=ERROR
 logcollect.methods.com_example_service_OrderService_pay.async=false
 logcollect.methods.com_example_service_OrderService_pay.collect-mode=SINGLE
+logcollect.methods.com_example_service_OrderService_pay.max-total-collect=500000
+logcollect.methods.com_example_service_OrderService_pay.sampling-rate=0.1
 logcollect.methods.com_example_job_ReconcileJob_execute.buffer.max-size=500
 ```
 
@@ -2233,8 +2309,8 @@ logcollect-parent/
 |------|---------|
 | 安全 | 新增 `StringLengthGuard`；`SecurityPipeline` 统一单入口；`thread/logger/level` 与 MDC 全字段净化；堆栈注入标记 `[ex-msg]` |
 | 可靠性 | `BoundedBufferPolicy` 上限与溢出策略；`ResilientFlusher` 重试+本地兜底；`LogCollectLifecycle` 优雅停机强制刷写 |
-| 并发与性能 | 缓冲区 `ConcurrentLinkedQueue + Atomic*`；pattern 解析缓存与热更新失效；AGGREGATE 按 pattern 版本切批 |
-| 工程一致性 | 默认 `Sanitizer/Masker` 统一在 core；starter 打包为 `jar`；README 与实现参数名同步（`minLevel` / `excludeLoggers` 等） |
+| 并发与性能 | 缓冲区 `ConcurrentLinkedQueue + Atomic*`；flush 后二次阈值检查；`@LogCollect` Handler 解析按 `Method` 缓存并在配置刷新后失效；AGGREGATE 按 pattern 版本切批 |
+| 工程一致性 | 默认 `Sanitizer/Masker` 统一在 core；新增 `BackpressureCallback` / `@LogCollectIgnore`；README 与实现参数名同步（`minLevel` / `messageSummary` / `backpressure` 等） |
 
 ### 依赖范围控制原则
 
@@ -2593,7 +2669,7 @@ CI 工作流：`.github/workflows/ci.yml`
 ### 代码规范
 
 - 所有公开 API 提供完整 Javadoc
-- 边界层（AOP 切面、Appender 入口、Handler 回调包装）使用 `catch (Throwable t)`
+- 边界层（AOP 切面、Appender 入口、Handler 回调包装）优先 `catch (Exception)`，并单独 `catch (Error)` 做熔断/关停后重新抛出
 - 内部实现层优先使用 `catch (Exception)` 或具体异常类型，让 `Error` 向边界层汇聚
 - 新增接口方法必须提供 `default` 实现
 - 新增注解参数必须有默认值

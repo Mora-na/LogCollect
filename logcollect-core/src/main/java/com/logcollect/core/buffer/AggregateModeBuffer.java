@@ -30,6 +30,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
     private static final String DEFAULT_SEPARATOR = "\n";
 
     private final ConcurrentLinkedQueue<LogSegment> segments = new ConcurrentLinkedQueue<LogSegment>();
+    // 条数使用 O(1) 计数器维护，避免 ConcurrentLinkedQueue.size() 的 O(n) 开销。
     private final AtomicInteger count = new AtomicInteger(0);
     private final AtomicLong bytes = new AtomicLong(0);
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -252,36 +253,41 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             return;
         }
         try {
-            List<LogSegment> drained = drainSegments();
-            if (!drained.isEmpty()) {
-                if (warnOnly) {
-                    int originalSize = drained.size();
-                    drained = retainWarnOrAbove(drained);
-                    int dropped = originalSize - drained.size();
-                    if (dropped > 0 && context != null) {
-                        context.incrementDiscardedCount(dropped);
-                        metricCall(context, "incrementDiscarded",
-                                context.getMethodSignature(), "async_queue_full_low_level");
+            boolean continueFlush;
+            do {
+                List<LogSegment> drained = drainSegments();
+                if (!drained.isEmpty()) {
+                    if (warnOnly) {
+                        int originalSize = drained.size();
+                        drained = retainWarnOrAbove(drained);
+                        int dropped = originalSize - drained.size();
+                        if (dropped > 0 && context != null) {
+                            context.incrementDiscardedCount(dropped);
+                            metricCall(context, "incrementDiscarded",
+                                    context.getMethodSignature(), "async_queue_full_low_level");
+                        }
                     }
                 }
-            }
-            if (!drained.isEmpty()) {
-                String methodKey = context == null ? "unknown" : context.getMethodSignature();
-                metricCall(context, "incrementFlush", methodKey, "AGGREGATE",
-                        warnOnly ? "degraded" : (isFinal ? "final" : "threshold"));
-                List<List<LogSegment>> batches = splitByPatternVersion(drained);
-                for (List<LogSegment> batch : batches) {
-                    AggregatedLog agg = buildAggregatedLog(batch, isFinal);
-                    if (agg != null) {
-                        flushAggregated(context, agg);
+                if (!drained.isEmpty()) {
+                    String methodKey = context == null ? "unknown" : context.getMethodSignature();
+                    metricCall(context, "incrementFlush", methodKey, "AGGREGATE",
+                            warnOnly ? "degraded" : (isFinal ? "final" : "threshold"));
+                    List<List<LogSegment>> batches = splitByPatternVersion(drained);
+                    for (List<LogSegment> batch : batches) {
+                        AggregatedLog agg = buildAggregatedLog(batch, isFinal);
+                        if (agg != null) {
+                            flushAggregated(context, agg);
+                        }
                     }
+                    if (context != null) {
+                        context.incrementFlushCount();
+                    }
+                    LogCollectDiag.debug("Flush triggered: segments=%d", drained.size());
                 }
-                if (context != null) {
-                    context.incrementFlushCount();
-                }
-                LogCollectDiag.debug("Flush triggered: segments=%d", drained.size());
-            }
-            updateUtilization(context);
+                updateUtilization(context);
+                // 处理 flush 期间新增并再次达到阈值的日志，避免等待下一次入队触发。
+                continueFlush = shouldFlush() && !segments.isEmpty();
+            } while (continueFlush);
         } finally {
             flushing.set(false);
         }

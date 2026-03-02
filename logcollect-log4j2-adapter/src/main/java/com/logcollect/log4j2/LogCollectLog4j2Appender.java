@@ -1,5 +1,7 @@
 package com.logcollect.log4j2;
 
+import com.logcollect.api.backpressure.BackpressureAction;
+import com.logcollect.api.backpressure.BackpressureCallback;
 import com.logcollect.api.enums.CollectMode;
 import com.logcollect.api.enums.SamplingStrategy;
 import com.logcollect.api.enums.TotalLimitPolicy;
@@ -13,6 +15,7 @@ import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.buffer.LogCollectBuffer;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.context.LogCollectContextManager;
+import com.logcollect.core.context.LogCollectIgnoreManager;
 import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.internal.LogCollectInternalLogger;
@@ -90,6 +93,11 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             String level = event.getLevel() == null ? "INFO" : event.getLevel().toString();
             LogCollectDiag.debug("Appender received event: logger=%s level=%s", loggerName, level);
 
+            if (LogCollectIgnoreManager.isIgnored()) {
+                context.incrementDiscardedCount();
+                metricCall(context, "incrementDiscarded", methodKey, "logcollect_ignore");
+                return;
+            }
             if (!isLevelAllowed(event.getLevel(), context.getMinLevelInt())) {
                 context.incrementDiscardedCount();
                 metricCall(context, "incrementDiscarded", methodKey, "level_filter");
@@ -100,14 +108,19 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                 metricCall(context, "incrementDiscarded", methodKey, "logger_filter");
                 return;
             }
+            if (!allowByBackpressure(context, level, methodKey)) {
+                return;
+            }
 
             String rawMessage = event.getMessage() == null ? "" : event.getMessage().getFormattedMessage();
             LogCollectHandler handler = context.getHandler();
-            String messageSummary = QuickSanitizer.summarize(rawMessage, 256);
-            if (handler != null && !handler.shouldCollect(context, level, messageSummary)) {
-                context.incrementDiscardedCount();
-                metricCall(context, "incrementDiscarded", methodKey, "handler_filter");
-                return;
+            if (handler != null) {
+                String messageSummary = QuickSanitizer.summarize(rawMessage, 256);
+                if (!handler.shouldCollect(context, level, messageSummary)) {
+                    context.incrementDiscardedCount();
+                    metricCall(context, "incrementDiscarded", methodKey, "handler_filter");
+                    return;
+                }
             }
 
             long eventTimestamp = event.getTimeMillis();
@@ -143,9 +156,13 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             } else {
                 handleDirect(context, entry, methodKey);
             }
-        } catch (Throwable t) {
-            rethrowDegradeIfNecessary(context, t);
-            LogCollectInternalLogger.error("Log4j2 appender error", t);
+        } catch (Exception e) {
+            rethrowDegradeIfNecessary(context, e);
+            LogCollectInternalLogger.error("Log4j2 appender error", e);
+        } catch (Error error) {
+            rethrowDegradeIfNecessary(context, error);
+            LogCollectInternalLogger.error("Log4j2 appender fatal error", error);
+            throw error;
         }
     }
 
@@ -333,10 +350,42 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             return true;
         }
         if (utilization < 0.8d) {
-            double adaptiveRate = Math.min(0.5d, rate);
-            return ThreadLocalRandom.current().nextDouble() < adaptiveRate;
+            return ThreadLocalRandom.current().nextDouble() < rate;
         }
         return isWarnOrAbove(level);
+    }
+
+    private boolean allowByBackpressure(LogCollectContext context, String level, String methodKey) {
+        BackpressureCallback callback = context.getAttribute("__backpressureCallback", BackpressureCallback.class);
+        if (callback == null) {
+            return true;
+        }
+        double utilization = 0.0d;
+        Object managerObj = context.getAttribute("__globalBufferManager");
+        if (managerObj instanceof GlobalBufferMemoryManager) {
+            utilization = ((GlobalBufferMemoryManager) managerObj).utilization();
+        }
+        BackpressureAction action;
+        try {
+            action = callback.onPressure(utilization);
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Backpressure callback failed, fallback to CONTINUE", e);
+            return true;
+        }
+        if (action == null || action == BackpressureAction.CONTINUE) {
+            return true;
+        }
+        if (action == BackpressureAction.SKIP_DEBUG_INFO) {
+            if (isWarnOrAbove(level)) {
+                return true;
+            }
+            context.incrementDiscardedCount();
+            metricCall(context, "incrementDiscarded", methodKey, "backpressure_skip_low_level");
+            return false;
+        }
+        context.incrementDiscardedCount();
+        metricCall(context, "incrementDiscarded", methodKey, "backpressure_pause");
+        return false;
     }
 
     private double normalizeSamplingRate(double rawRate) {
@@ -398,9 +447,12 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                     String line;
                     try {
                         line = handler.formatLogLine(entry);
-                    } catch (Throwable t) {
-                        notifyError(context, t, "formatLogLine");
+                    } catch (Exception e) {
+                        notifyError(context, e, "formatLogLine");
                         line = entry.getContent();
+                    } catch (Error error) {
+                        notifyError(context, error, "formatLogLine");
+                        throw error;
                     }
                     AggregatedLog agg = new AggregatedLog(
                             UUID.randomUUID().toString(),
@@ -421,12 +473,12 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             if (breaker != null) {
                 breaker.recordSuccess();
             }
-        } catch (Throwable t) {
+        } catch (Exception e) {
             if (breaker != null) {
                 breaker.recordFailure();
             }
             context.incrementDiscardedCount();
-            notifyError(context, t, "append");
+            notifyError(context, e, "append");
             notifyDegrade(context, "handler_error");
             metricCall(context, "incrementPersistFailed", methodKey);
             metricCall(context, "incrementDegradeTriggered", "persist_failed", methodKey);
@@ -434,6 +486,12 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                     context, "persist_failed",
                     Collections.singletonList(entry.getContent()),
                     entry.getLevel());
+        } catch (Error error) {
+            if (breaker != null) {
+                breaker.recordFailure();
+            }
+            notifyError(context, error, "append");
+            throw error;
         } finally {
             metricCall(context, "stopPersistTimer", persistTimer, methodKey, context.getCollectMode().name());
         }
@@ -457,8 +515,8 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                     reason,
                     config.getDegradeStorage(),
                     LocalDateTime.now()));
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn("onDegrade callback failed", t);
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("onDegrade callback failed", e);
         }
     }
 
@@ -469,8 +527,8 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         }
         try {
             handler.onError(context, error, phase);
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn("onError callback failed", t);
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("onError callback failed", e);
         }
     }
 
@@ -537,7 +595,9 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                 method.invoke(target, args);
                 return true;
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
+        } catch (Error e) {
+            throw e;
         }
         return false;
     }
@@ -564,7 +624,9 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                 method.setAccessible(true);
                 return method.invoke(target, args);
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
+        } catch (Error e) {
+            throw e;
         }
         return null;
     }

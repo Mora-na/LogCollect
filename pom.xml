@@ -161,6 +161,13 @@
                                     <requireJavaVersion>
                                         <version>[1.8,)</version>
                                     </requireJavaVersion>
+                                    <requireMavenVersion>
+                                        <version>[3.8,)</version>
+                                        <message>
+                                            LogCollect requires Maven 3.8+.
+                                            Current: ${maven.version}
+                                        </message>
+                                    </requireMavenVersion>
                                     <bannedDependencies>
                                         <excludes>
                                             <exclude>commons-logging:commons-logging</exclude>
@@ -195,6 +202,11 @@
 
         <!-- 实际执行的发布相关插件 -->
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+            </plugin>
+
             <!-- 1) 生成 sources jar -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

@@ -12,6 +12,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
 
 /**
  * 降级文件存储管理器。
@@ -21,6 +22,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class DegradeFileManager {
 
     private static final long DISK_FREE_MIN_BYTES = 100L * 1024 * 1024;
+    private static final Pattern SAFE_TRACE_ID_PATTERN = Pattern.compile("^[0-9a-fA-F\\-]{36}$");
 
     private final Path baseDir;
     private final long maxTotalBytes;
@@ -121,7 +123,7 @@ public class DegradeFileManager {
             byte[] data = content == null ? new byte[0] : content.getBytes(StandardCharsets.UTF_8);
             ensureCapacity(data.length);
 
-            String safeTrace = traceId == null || traceId.trim().isEmpty() ? UUID.randomUUID().toString() : traceId;
+            String safeTrace = normalizeTraceId(traceId);
             String fileName = safeTrace + "_" + System.currentTimeMillis() + ".log";
             Path file = baseDir.resolve(fileName);
 
@@ -423,6 +425,22 @@ public class DegradeFileManager {
             LogCollectInternalLogger.error("Set degrade file permissions failed with fatal error: {}", file, e);
             throw e;
         }
+    }
+
+    private String normalizeTraceId(String traceId) {
+        if (traceId == null || traceId.trim().isEmpty()) {
+            return UUID.randomUUID().toString();
+        }
+        String candidate = traceId.trim();
+        if (SAFE_TRACE_ID_PATTERN.matcher(candidate).matches()) {
+            return candidate;
+        }
+        String generated = UUID.randomUUID().toString();
+        String preview = candidate.length() > 20 ? candidate.substring(0, 20) : candidate;
+        LogCollectInternalLogger.warn(
+                "DegradeFileManager received non-UUID traceId '{}', using generated '{}'",
+                preview, generated);
+        return generated;
     }
 
     /**

@@ -4,6 +4,14 @@ import com.logcollect.api.enums.DegradeStorage;
 
 import java.time.LocalDateTime;
 
+/**
+ * 降级事件模型。
+ *
+ * <p>当日志写入触发熔断/降级时，框架会通过
+ * {@code LogCollectHandler#onDegrade(...)} 回调该对象。</p>
+ *
+ * @since 1.0.0
+ */
 public class DegradeEvent {
     private final String traceId;
     private final String methodSignature;

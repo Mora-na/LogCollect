@@ -1,5 +1,10 @@
 package com.logcollect.api.enums;
 
+/**
+ * 熔断/降级后的兜底存储策略。
+ *
+ * @since 1.0.0
+ */
 public enum DegradeStorage {
     /**
      * 降级到本地文件（默认，可选加密）。

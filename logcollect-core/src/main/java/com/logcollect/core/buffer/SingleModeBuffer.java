@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class SingleModeBuffer implements LogCollectBuffer {
     private final ConcurrentLinkedQueue<LogEntry> queue = new ConcurrentLinkedQueue<LogEntry>();
+    // 条数使用 O(1) 计数器维护，避免 ConcurrentLinkedQueue.size() 的 O(n) 开销。
     private final AtomicInteger count = new AtomicInteger(0);
     private final AtomicLong bytes = new AtomicLong(0);
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -165,30 +166,35 @@ public class SingleModeBuffer implements LogCollectBuffer {
             return;
         }
         try {
-            List<LogEntry> batch = drain();
-            if (!batch.isEmpty()) {
-                if (warnOnly) {
-                    int originalSize = batch.size();
-                    batch = retainWarnOrAbove(batch);
-                    int dropped = originalSize - batch.size();
-                    if (dropped > 0 && context != null) {
-                        context.incrementDiscardedCount(dropped);
-                        metricCall(context, "incrementDiscarded",
-                                context.getMethodSignature(), "async_queue_full_low_level");
+            boolean continueFlush;
+            do {
+                List<LogEntry> batch = drain();
+                if (!batch.isEmpty()) {
+                    if (warnOnly) {
+                        int originalSize = batch.size();
+                        batch = retainWarnOrAbove(batch);
+                        int dropped = originalSize - batch.size();
+                        if (dropped > 0 && context != null) {
+                            context.incrementDiscardedCount(dropped);
+                            metricCall(context, "incrementDiscarded",
+                                    context.getMethodSignature(), "async_queue_full_low_level");
+                        }
                     }
                 }
-            }
-            if (!batch.isEmpty()) {
-                String methodKey = context == null ? "unknown" : context.getMethodSignature();
-                metricCall(context, "incrementFlush", methodKey, "SINGLE",
-                        warnOnly ? "degraded" : (isFinal ? "final" : "threshold"));
-                flushBatch(context, batch);
-                if (context != null) {
-                    context.incrementFlushCount();
+                if (!batch.isEmpty()) {
+                    String methodKey = context == null ? "unknown" : context.getMethodSignature();
+                    metricCall(context, "incrementFlush", methodKey, "SINGLE",
+                            warnOnly ? "degraded" : (isFinal ? "final" : "threshold"));
+                    flushBatch(context, batch);
+                    if (context != null) {
+                        context.incrementFlushCount();
+                    }
+                    LogCollectDiag.debug("Flush triggered: segments=%d", batch.size());
                 }
-                LogCollectDiag.debug("Flush triggered: segments=%d", batch.size());
-            }
-            updateUtilization(context);
+                updateUtilization(context);
+                // 处理 flush 期间新增并再次达到阈值的日志，避免等待下一次入队触发。
+                continueFlush = shouldFlush() && !queue.isEmpty();
+            } while (continueFlush);
         } finally {
             flushing.set(false);
         }

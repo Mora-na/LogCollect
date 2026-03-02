@@ -72,6 +72,7 @@ public final class LogCollectContextManager {
     public static void clear() {
         CONTEXT_STACK.remove();
         MDCAdapter.remove(TRACE_ID_KEY);
+        LogCollectIgnoreManager.clear();
     }
 
     public static LogCollectContextSnapshot captureSnapshot() {

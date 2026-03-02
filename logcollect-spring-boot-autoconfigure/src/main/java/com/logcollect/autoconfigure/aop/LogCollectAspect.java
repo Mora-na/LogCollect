@@ -1,6 +1,7 @@
 package com.logcollect.autoconfigure.aop;
 
 import com.logcollect.api.annotation.LogCollect;
+import com.logcollect.api.backpressure.BackpressureCallback;
 import com.logcollect.api.enums.CollectMode;
 import com.logcollect.api.exception.LogCollectDegradeException;
 import com.logcollect.api.exception.LogCollectException;
@@ -29,9 +30,12 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Method;
+import java.time.Instant;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Aspect
@@ -66,6 +70,7 @@ public class LogCollectAspect {
     private com.logcollect.autoconfigure.LogCollectBufferRegistry bufferRegistry;
 
     private static volatile GlobalBufferMemoryManager fallbackGlobalBufferManager;
+    private static final NoopLogCollectHandler NOOP_HANDLER = new NoopLogCollectHandler();
     private static final ExecutorService HANDLER_TIMEOUT_EXECUTOR =
             Executors.newCachedThreadPool(new ThreadFactory() {
                 @Override
@@ -81,131 +86,144 @@ public class LogCollectAspect {
 
     private final ConcurrentHashMap<String, AtomicReference<LogCollectConfig>> breakerConfigRefs =
             new ConcurrentHashMap<String, AtomicReference<LogCollectConfig>>();
+    private final ConcurrentHashMap<Method, ResolvedHandler> handlerCache =
+            new ConcurrentHashMap<Method, ResolvedHandler>();
+    private volatile Instant handlerCacheRefreshTime;
+    private final ConcurrentHashMap<Class<? extends BackpressureCallback>, BackpressureCallback> backpressureCallbackCache =
+            new ConcurrentHashMap<Class<? extends BackpressureCallback>, BackpressureCallback>();
 
     @Around("@annotation(logCollect)")
     public Object around(ProceedingJoinPoint pjp, LogCollect logCollect) throws Throwable {
-        Method method = ((MethodSignature) pjp.getSignature()).getMethod();
-        if (globalSwitch != null && !globalSwitch.isEnabled()) {
-            return pjp.proceed();
-        }
-        LogCollectConfig config;
         try {
-            config = configResolver.resolve(method, logCollect);
-        } catch (Throwable t) {
-            LogCollectInternalLogger.error("Config resolve failed, skip log collect", t);
-            frameworkWarn("Failed to resolve @LogCollect config, skip collecting", t);
-            return pjp.proceed();
-        }
-        if (!config.isEnabled()) {
-            return pjp.proceed();
-        }
-        if (LogCollectContextManager.depth() >= config.getMaxNestingDepth()) {
-            LogCollectInternalLogger.warn("Max nesting depth {} reached, skip", config.getMaxNestingDepth());
-            return pjp.proceed();
-        }
-        String methodKey = MethodKeyResolver.toDisplayKey(method);
-        LogCollectCircuitBreaker breaker = getOrCreateBreaker(methodKey, config);
-
-        String traceId = UUID.randomUUID().toString();
-        LogCollectHandler handler = resolveHandler(logCollect, config);
-        CollectMode collectMode = resolveCollectMode(config, handler);
-        config.setEffectiveCollectMode(collectMode);
-        LogCollectContext ctx = null;
-        try {
-            ctx = buildContext(traceId, method, pjp.getArgs(), config, handler, breaker, collectMode);
-            if (metrics != null && config.isEnableMetrics()) {
-                metrics.recordActiveCollectionStart();
-                metrics.registerCircuitBreakerGauge(methodKey, breaker);
+            Method method = ((MethodSignature) pjp.getSignature()).getMethod();
+            if (globalSwitch != null && !globalSwitch.isEnabled()) {
+                return pjp.proceed();
             }
-            LogCollectContextManager.push(ctx);
-            final LogCollectContext finalCtx = ctx;
-            final LogCollectHandler finalHandler = handler;
-            long beforeStart = System.currentTimeMillis();
-            safeInvoke(new Callable<Object>() {
-                @Override
-                public Object call() {
-                    finalHandler.before(finalCtx);
-                    return null;
-                }
-            }, config.getHandlerTimeoutMs(), config.isTransactionIsolation(), finalCtx, "before");
-            if (metrics != null && config.isEnableMetrics()) {
-                metrics.recordHandlerDuration(methodKey, "before", System.currentTimeMillis() - beforeStart);
-            }
-        } catch (Throwable t) {
-            forceOpenIfError(breaker, t);
-            LogCollectInternalLogger.error("LogCollect before phase error", t);
-            frameworkWarn("Failed to start collecting, skip", t);
-            notifyHandlerError(ctx, t, "before");
-            if (ctx != null) {
-                LogCollectContextManager.pop();
-            }
-            return pjp.proceed();
-        }
-
-        Throwable bizError = null;
-        Object result = null;
-        try {
-            result = pjp.proceed();
-        } catch (Throwable t) {
-            bizError = t;
-            if (ctx != null) {
-                ctx.setError(t);
-            }
-        }
-        if (ctx != null && bizError == null) {
-            ctx.setReturnValue(result);
-        }
-
-        try {
-            if (ctx != null) {
-                if (config.isTransactionIsolation() && txWrapper != null) {
-                    final LogCollectContext flushCtx = ctx;
-                    txWrapper.executeInNewTransaction(() -> {
-                        closeBuffer(flushCtx);
-                        return null;
-                    });
-                } else {
-                    closeBuffer(ctx);
-                }
-            }
-            final LogCollectContext finalCtx = ctx;
-            final LogCollectHandler finalHandler = handler;
-            long afterStart = System.currentTimeMillis();
-            safeInvoke(new Callable<Object>() {
-                @Override
-                public Object call() {
-                    finalHandler.after(finalCtx);
-                    return null;
-                }
-            }, config.getHandlerTimeoutMs(), config.isTransactionIsolation(), finalCtx, "after");
-            if (metrics != null && config.isEnableMetrics()) {
-                metrics.recordHandlerDuration(methodKey, "after", System.currentTimeMillis() - afterStart);
-            }
-        } catch (Throwable t) {
-            forceOpenIfError(breaker, t);
-            LogCollectInternalLogger.error("LogCollect after phase error", t);
-            frameworkWarn("Failed to flush, data may be lost", t);
-            notifyHandlerError(ctx, t, "after");
-            if (shouldPropagateDegradeException(ctx, t)) {
-                throw t;
-            }
-        } finally {
+            LogCollectConfig config;
             try {
-                LogCollectContextManager.pop();
-            } catch (Throwable t) {
-                LogCollectInternalLogger.error("Context cleanup error", t);
-                MDCAdapter.remove("_logCollect_traceId");
-            } finally {
+                config = configResolver.resolve(method, logCollect);
+            } catch (Exception e) {
+                LogCollectInternalLogger.error("Config resolve failed, skip log collect", e);
+                frameworkWarn("Failed to resolve @LogCollect config, skip collecting", e);
+                return pjp.proceed();
+            }
+            if (!config.isEnabled()) {
+                return pjp.proceed();
+            }
+            if (LogCollectContextManager.depth() >= config.getMaxNestingDepth()) {
+                LogCollectInternalLogger.warn("Max nesting depth {} reached, skip", config.getMaxNestingDepth());
+                return pjp.proceed();
+            }
+            String methodKey = MethodKeyResolver.toDisplayKey(method);
+            LogCollectCircuitBreaker breaker = getOrCreateBreaker(methodKey, config);
+
+            String traceId = UUID.randomUUID().toString();
+            LogCollectHandler handler = resolveHandler(method, logCollect, config);
+            CollectMode collectMode = resolveCollectMode(config, handler);
+            config.setEffectiveCollectMode(collectMode);
+            LogCollectContext ctx = null;
+            try {
+                ctx = buildContext(traceId, method, pjp.getArgs(), config, handler, breaker, collectMode, logCollect);
                 if (metrics != null && config.isEnableMetrics()) {
-                    metrics.recordActiveCollectionEnd();
+                    metrics.recordActiveCollectionStart();
+                    metrics.registerCircuitBreakerGauge(methodKey, breaker);
+                }
+                LogCollectContextManager.push(ctx);
+                final LogCollectContext finalCtx = ctx;
+                final LogCollectHandler finalHandler = handler;
+                long beforeStart = System.currentTimeMillis();
+                safeInvoke(new Callable<Object>() {
+                    @Override
+                    public Object call() {
+                        finalHandler.before(finalCtx);
+                        return null;
+                    }
+                }, config.getHandlerTimeoutMs(), config.isTransactionIsolation(), finalCtx, "before");
+                if (metrics != null && config.isEnableMetrics()) {
+                    metrics.recordHandlerDuration(methodKey, "before", System.currentTimeMillis() - beforeStart);
+                }
+            } catch (Exception e) {
+                forceOpenIfError(breaker, e);
+                LogCollectInternalLogger.error("LogCollect before phase error", e);
+                frameworkWarn("Failed to start collecting, skip", e);
+                notifyHandlerError(ctx, e, "before");
+                if (ctx != null) {
+                    LogCollectContextManager.pop();
+                }
+                return pjp.proceed();
+            }
+
+            Throwable bizError = null;
+            Object result = null;
+            try {
+                result = pjp.proceed();
+            } catch (Throwable t) {
+                bizError = t;
+                if (ctx != null) {
+                    ctx.setError(t);
                 }
             }
-        }
+            if (ctx != null && bizError == null) {
+                ctx.setReturnValue(result);
+            }
 
-        if (bizError != null) {
-            throw bizError;
+            try {
+                if (ctx != null) {
+                    if (config.isTransactionIsolation() && txWrapper != null) {
+                        final LogCollectContext flushCtx = ctx;
+                        txWrapper.executeInNewTransaction(() -> {
+                            closeBuffer(flushCtx);
+                            return null;
+                        });
+                    } else {
+                        closeBuffer(ctx);
+                    }
+                }
+                final LogCollectContext finalCtx = ctx;
+                final LogCollectHandler finalHandler = handler;
+                long afterStart = System.currentTimeMillis();
+                safeInvoke(new Callable<Object>() {
+                    @Override
+                    public Object call() {
+                        finalHandler.after(finalCtx);
+                        return null;
+                    }
+                }, config.getHandlerTimeoutMs(), config.isTransactionIsolation(), finalCtx, "after");
+                if (metrics != null && config.isEnableMetrics()) {
+                    metrics.recordHandlerDuration(methodKey, "after", System.currentTimeMillis() - afterStart);
+                }
+            } catch (Exception e) {
+                forceOpenIfError(breaker, e);
+                LogCollectInternalLogger.error("LogCollect after phase error", e);
+                frameworkWarn("Failed to flush, data may be lost", e);
+                notifyHandlerError(ctx, e, "after");
+                if (shouldPropagateDegradeException(ctx, e)) {
+                    throw e;
+                }
+            } finally {
+                try {
+                    LogCollectContextManager.pop();
+                } catch (Exception e) {
+                    LogCollectInternalLogger.error("Context cleanup error", e);
+                    MDCAdapter.remove("_logCollect_traceId");
+                } finally {
+                    if (metrics != null && config.isEnableMetrics()) {
+                        metrics.recordActiveCollectionEnd();
+                    }
+                }
+            }
+
+            if (bizError != null) {
+                throw bizError;
+            }
+            return result;
+        } catch (Error error) {
+            LogCollectInternalLogger.error("LogCollect fatal error, forcing disable", error);
+            if (globalSwitch != null) {
+                globalSwitch.onConfigChange(false);
+            }
+            throw error;
         }
-        return result;
     }
 
     private LogCollectContext buildContext(String traceId,
@@ -214,7 +232,8 @@ public class LogCollectAspect {
                                            LogCollectConfig config,
                                            LogCollectHandler handler,
                                            LogCollectCircuitBreaker breaker,
-                                           CollectMode collectMode) {
+                                           CollectMode collectMode,
+                                           LogCollect logCollect) {
         GlobalBufferMemoryManager manager = getGlobalBufferManager(config);
         LogCollectBuffer buffer = null;
         if (config.isUseBuffer()) {
@@ -253,6 +272,10 @@ public class LogCollectAspect {
         if (txWrapper != null && config.isTransactionIsolation()) {
             context.setAttribute("__txWrapper", txWrapper);
         }
+        BackpressureCallback backpressureCallback = resolveBackpressureCallback(logCollect, config);
+        if (backpressureCallback != null) {
+            context.setAttribute("__backpressureCallback", backpressureCallback);
+        }
         return context;
     }
 
@@ -270,18 +293,49 @@ public class LogCollectAspect {
         return fallbackGlobalBufferManager;
     }
 
-    private LogCollectHandler resolveHandler(LogCollect logCollect, LogCollectConfig config) {
-        Class<? extends LogCollectHandler> handlerClass = logCollect.handler();
+    private LogCollectHandler resolveHandler(Method method, LogCollect logCollect, LogCollectConfig config) {
+        refreshHandlerCacheIfNeeded();
+        Class<? extends LogCollectHandler> handlerClass = resolveHandlerClass(logCollect, config);
+        if (handlerClass == null || handlerClass == LogCollectHandler.class) {
+            Map<String, LogCollectHandler> handlers = applicationContext.getBeansOfType(LogCollectHandler.class);
+            if (handlers.isEmpty()) {
+                return resolveDefaultHandler();
+            }
+        }
+        final Class<? extends LogCollectHandler> targetClass = handlerClass;
+        ResolvedHandler resolved = handlerCache.compute(method, (m, existing) -> {
+            if (existing != null && existing.matches(targetClass)) {
+                return existing;
+            }
+            LogCollectHandler handler;
+            if (targetClass != null && targetClass != LogCollectHandler.class) {
+                handler = resolveSpecifiedHandler(targetClass);
+            } else {
+                handler = resolveDefaultHandler();
+            }
+            return new ResolvedHandler(targetClass, handler);
+        });
+        return resolved == null ? resolveDefaultHandler() : resolved.getHandler();
+    }
+
+    private void refreshHandlerCacheIfNeeded() {
+        Instant refreshTime = configResolver == null ? null : configResolver.getLastRefreshTime();
+        if (Objects.equals(refreshTime, handlerCacheRefreshTime)) {
+            return;
+        }
+        handlerCache.clear();
+        handlerCacheRefreshTime = refreshTime;
+    }
+
+    private Class<? extends LogCollectHandler> resolveHandlerClass(LogCollect logCollect, LogCollectConfig config) {
+        Class<? extends LogCollectHandler> handlerClass = logCollect == null ? null : logCollect.handler();
         if ((handlerClass == null || handlerClass == LogCollectHandler.class)
                 && config != null
                 && config.getHandlerClass() != null
                 && config.getHandlerClass() != LogCollectHandler.class) {
             handlerClass = config.getHandlerClass();
         }
-        if (handlerClass != null && handlerClass != LogCollectHandler.class) {
-            return resolveSpecifiedHandler(handlerClass);
-        }
-        return resolveDefaultHandler();
+        return handlerClass;
     }
 
     private LogCollectHandler resolveSpecifiedHandler(Class<? extends LogCollectHandler> handlerClass) {
@@ -308,7 +362,7 @@ public class LogCollectAspect {
                 return parent.getHandler();
             }
             LogCollectInternalLogger.warn("No default LogCollectHandler bean available, fallback to Noop");
-            return new NoopLogCollectHandler();
+            return NOOP_HANDLER;
         }
         if (handlers.size() == 1) {
             return handlers.values().iterator().next();
@@ -336,6 +390,58 @@ public class LogCollectAspect {
         return primary;
     }
 
+    private BackpressureCallback resolveBackpressureCallback(LogCollect logCollect, LogCollectConfig config) {
+        Class<? extends BackpressureCallback> callbackClass =
+                logCollect == null ? BackpressureCallback.class : logCollect.backpressure();
+        if ((callbackClass == null || callbackClass == BackpressureCallback.class)
+                && config != null
+                && config.getBackpressureCallbackClass() != null
+                && config.getBackpressureCallbackClass() != BackpressureCallback.class) {
+            callbackClass = config.getBackpressureCallbackClass();
+        }
+        if (callbackClass == null || callbackClass == BackpressureCallback.class) {
+            return null;
+        }
+        final Class<? extends BackpressureCallback> target = callbackClass;
+        return backpressureCallbackCache.computeIfAbsent(target, this::instantiateBackpressureCallback);
+    }
+
+    private BackpressureCallback instantiateBackpressureCallback(Class<? extends BackpressureCallback> callbackClass) {
+        Map<String, ? extends BackpressureCallback> candidates = applicationContext.getBeansOfType(callbackClass);
+        if (candidates.isEmpty()) {
+            try {
+                return callbackClass.getDeclaredConstructor().newInstance();
+            } catch (Exception e) {
+                throw new LogCollectException("BackpressureCallback " + callbackClass.getName() + " cannot be created", e);
+            }
+        }
+        if (candidates.size() == 1) {
+            return candidates.values().iterator().next();
+        }
+        BackpressureCallback primary = resolvePrimaryBackpressureCallback(candidates);
+        if (primary != null) {
+            return primary;
+        }
+        throw new LogCollectException("Multiple beans found for BackpressureCallback "
+                + callbackClass.getName() + ", please mark one bean with @Primary");
+    }
+
+    private BackpressureCallback resolvePrimaryBackpressureCallback(
+            Map<String, ? extends BackpressureCallback> callbacks) {
+        BackpressureCallback primary = null;
+        for (Map.Entry<String, ? extends BackpressureCallback> entry : callbacks.entrySet()) {
+            Primary annotation = applicationContext.findAnnotationOnBean(entry.getKey(), Primary.class);
+            if (annotation == null) {
+                continue;
+            }
+            if (primary != null) {
+                throw new LogCollectException("Multiple @Primary BackpressureCallback beans found");
+            }
+            primary = entry.getValue();
+        }
+        return primary;
+    }
+
     private void closeBuffer(LogCollectContext ctx) {
         try {
             Object buf = ctx.getBuffer();
@@ -345,18 +451,18 @@ public class LogCollectAspect {
                     bufferRegistry.unregister((LogCollectBuffer) buf);
                 }
             }
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn("Log buffer flush failed", t);
-            frameworkWarn("Log buffer flush failed", t);
-            if (shouldPropagateDegradeException(ctx, t)) {
-                if (t instanceof RuntimeException) {
-                    throw (RuntimeException) t;
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Log buffer flush failed", e);
+            frameworkWarn("Log buffer flush failed", e);
+            if (shouldPropagateDegradeException(ctx, e)) {
+                if (e instanceof RuntimeException) {
+                    throw (RuntimeException) e;
                 }
-                if (t instanceof Error) {
-                    throw (Error) t;
-                }
-                throw new RuntimeException(t);
+                throw new RuntimeException(e);
             }
+        } catch (Error error) {
+            LogCollectInternalLogger.error("Log buffer flush failed with fatal error", error);
+            throw error;
         }
     }
 
@@ -392,6 +498,10 @@ public class LogCollectAspect {
             return null;
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() == null ? e : e.getCause();
+            if (cause instanceof Error) {
+                forceOpenIfError(context, cause);
+                throw (Error) cause;
+            }
             forceOpenIfError(context, cause);
             if (shouldPropagateDegradeException(context, cause)) {
                 if (cause instanceof RuntimeException) {
@@ -405,19 +515,16 @@ public class LogCollectAspect {
             LogCollectInternalLogger.error("Handler execution error", cause);
             notifyHandlerError(context, cause, phase);
             return null;
-        } catch (Throwable t) {
-            forceOpenIfError(context, t);
-            if (shouldPropagateDegradeException(context, t)) {
-                if (t instanceof RuntimeException) {
-                    throw (RuntimeException) t;
+        } catch (Exception e) {
+            forceOpenIfError(context, e);
+            if (shouldPropagateDegradeException(context, e)) {
+                if (e instanceof RuntimeException) {
+                    throw (RuntimeException) e;
                 }
-                if (t instanceof Error) {
-                    throw (Error) t;
-                }
-                throw new RuntimeException(t);
+                throw new RuntimeException(e);
             }
-            LogCollectInternalLogger.error("Handler execution error", t);
-            notifyHandlerError(context, t, phase);
+            LogCollectInternalLogger.error("Handler execution error", e);
+            notifyHandlerError(context, e, phase);
             return null;
         }
     }
@@ -458,8 +565,8 @@ public class LogCollectAspect {
         }
         try {
             handler.onError(context, error, phase);
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn("onError callback failed", t);
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("onError callback failed", e);
         }
     }
 
@@ -508,10 +615,77 @@ public class LogCollectAspect {
         System.err.printf("[LogCollect-WARN] %s: %s%n", message, detail);
     }
 
+    private static final class ResolvedHandler {
+        private final Class<? extends LogCollectHandler> requestedClass;
+        private final LogCollectHandler handler;
+
+        private ResolvedHandler(Class<? extends LogCollectHandler> requestedClass, LogCollectHandler handler) {
+            this.requestedClass = requestedClass;
+            this.handler = handler;
+        }
+
+        private boolean matches(Class<? extends LogCollectHandler> currentRequestedClass) {
+            return requestedClass == currentRequestedClass;
+        }
+
+        private LogCollectHandler getHandler() {
+            return handler;
+        }
+    }
+
     static class NoopLogCollectHandler implements LogCollectHandler {
+        private final AtomicBoolean warned = new AtomicBoolean(false);
+
         @Override
-        public void appendLog(LogCollectContext context, com.logcollect.api.model.LogEntry entry) {}
+        public void before(LogCollectContext context) {
+            if (!warned.compareAndSet(false, true)) {
+                return;
+            }
+            LogCollectInternalLogger.error(
+                    "╔══════════════════════════════════════════════╗\n"
+                            + "║ [LogCollect] NoopLogCollectHandler 已激活！  ║\n"
+                            + "║ 所有 @LogCollect 日志将被丢弃！             ║\n"
+                            + "║ 请注册 LogCollectHandler Bean 以启用收集。   ║\n"
+                            + "╚══════════════════════════════════════════════╝");
+        }
+
         @Override
-        public void flushAggregatedLog(LogCollectContext context, com.logcollect.api.model.AggregatedLog aggregatedLog) {}
+        public void appendLog(LogCollectContext context, com.logcollect.api.model.LogEntry entry) {
+            incrementNoopDiscarded(context, 1);
+        }
+
+        @Override
+        public void flushAggregatedLog(LogCollectContext context, com.logcollect.api.model.AggregatedLog aggregatedLog) {
+            int dropped = aggregatedLog == null ? 0 : Math.max(aggregatedLog.getEntryCount(), 0);
+            incrementNoopDiscarded(context, dropped);
+        }
+
+        private void incrementNoopDiscarded(LogCollectContext context, int dropped) {
+            if (context == null || dropped <= 0) {
+                return;
+            }
+            context.incrementDiscardedCount(dropped);
+            Object metrics = context.getAttribute("__metrics");
+            if (metrics == null) {
+                return;
+            }
+            for (int i = 0; i < dropped; i++) {
+                invokeMetric(metrics, context.getMethodSignature(), "noop_handler");
+            }
+        }
+
+        private void invokeMetric(Object metrics, String methodKey, String reason) {
+            try {
+                for (Method method : metrics.getClass().getMethods()) {
+                    if (!"incrementDiscarded".equals(method.getName())
+                            || method.getParameterTypes().length != 2) {
+                        continue;
+                    }
+                    method.invoke(metrics, methodKey, reason);
+                    return;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
     }
 }

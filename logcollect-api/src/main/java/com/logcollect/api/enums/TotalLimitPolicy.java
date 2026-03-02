@@ -2,6 +2,8 @@ package com.logcollect.api.enums;
 
 /**
  * 单次方法调用总量上限触发后的处理策略。
+ *
+ * @since 1.0.0
  */
 public enum TotalLimitPolicy {
     /**

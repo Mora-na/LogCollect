@@ -1,5 +1,6 @@
 package com.logcollect.api.annotation;
 
+import com.logcollect.api.backpressure.BackpressureCallback;
 import com.logcollect.api.enums.CollectMode;
 import com.logcollect.api.enums.DegradeStorage;
 import com.logcollect.api.enums.SamplingStrategy;
@@ -10,6 +11,18 @@ import com.logcollect.api.sanitizer.LogSanitizer;
 
 import java.lang.annotation.*;
 
+/**
+ * 标记需要进行业务日志聚合收集的方法。
+ *
+ * <p>框架会在标注方法执行期间自动拦截指定级别日志，经过安全流水线
+ * （净化 + 脱敏）后，按收集模式缓冲并回调 {@link LogCollectHandler}
+ * 完成持久化。</p>
+ *
+ * <p>支持同步与异步场景的上下文传播，包括 {@code @Async}、线程池、
+ * WebFlux 响应式链路等。</p>
+ *
+ * @since 1.0.0
+ */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
@@ -18,7 +31,7 @@ public @interface LogCollect {
     // ===== 基础配置 =====
     Class<? extends LogCollectHandler> handler() default LogCollectHandler.class;
     boolean async() default true;
-    String minLevel() default "TRACE";
+    String minLevel() default "";
     String[] excludeLoggers() default {};
     CollectMode collectMode() default CollectMode.AUTO;
 
@@ -52,6 +65,7 @@ public @interface LogCollect {
     TotalLimitPolicy totalLimitPolicy() default TotalLimitPolicy.STOP_COLLECTING;
     double samplingRate() default 1.0d;
     SamplingStrategy samplingStrategy() default SamplingStrategy.RATE;
+    Class<? extends BackpressureCallback> backpressure() default BackpressureCallback.class;
 
     // ===== 可观测性配置 =====
     boolean enableMetrics() default true;
