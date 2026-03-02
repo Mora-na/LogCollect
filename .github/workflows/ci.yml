@@ -14,11 +14,18 @@ jobs:
         spring-boot: ['2.7.18', '3.0.13', '3.2.5', '3.4.1']
         log-framework: ['logback', 'log4j2']
         exclude:
+          # Spring Boot 3.x requires Java 17+, so JDK 8/11 + Boot 3.x are invalid combinations.
           - java: 8
             spring-boot: '3.0.13'
           - java: 8
             spring-boot: '3.2.5'
           - java: 8
+            spring-boot: '3.4.1'
+          - java: 11
+            spring-boot: '3.0.13'
+          - java: 11
+            spring-boot: '3.2.5'
+          - java: 11
             spring-boot: '3.4.1'
 
     steps:
