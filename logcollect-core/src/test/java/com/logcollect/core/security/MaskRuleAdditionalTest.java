@@ -9,6 +9,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MaskRuleAdditionalTest {
 
     @Test
+    void apply_withNullContent_returnsNull() {
+        MaskRule rule = new MaskRule(Pattern.compile("secret=\\w+"), matcher -> "secret=***");
+        assertThat(rule.apply(null)).isNull();
+    }
+
+    @Test
+    void apply_withEmptyContent_returnsEmpty() {
+        MaskRule rule = new MaskRule(Pattern.compile("secret=\\w+"), matcher -> "secret=***");
+        assertThat(rule.apply("")).isEmpty();
+    }
+
+    @Test
     void apply_withPreCheckNotMatched_returnsOriginal() {
         MaskRule rule = new MaskRule(
                 Pattern.compile("secret=\\w+"),

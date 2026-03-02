@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
  */
 public class DefaultLogMasker implements LogMasker {
     private static final long DEFAULT_MASK_TIMEOUT_MS = 50L;
-    private static final ExecutorService MASK_EXECUTOR = Executors.newCachedThreadPool(r -> {
+    static ExecutorService MASK_EXECUTOR = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "logcollect-mask-executor");
         t.setDaemon(true);
         return t;

@@ -12,7 +12,7 @@ public final class RegexSafetyValidator {
     private static final long REGEX_TEST_TIMEOUT_MS = 100;
     private static final Pattern NESTED_QUANTIFIER = Pattern.compile("\\([^)]*[+*][^)]*\\)\\s*[+*]");
 
-    private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(new ThreadFactory() {
+    static ExecutorService EXECUTOR = Executors.newSingleThreadExecutor(new ThreadFactory() {
         @Override
         public Thread newThread(Runnable r) {
             Thread t = new Thread(r, "logcollect-regex-validator");

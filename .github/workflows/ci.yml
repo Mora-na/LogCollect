@@ -294,7 +294,8 @@ jobs:
                   if pkg.attrib.get("name") != pkg_name:
                       continue
                   for cls in pkg.findall("class"):
-                      if cls.attrib.get("name") != class_name:
+                      cls_name = cls.attrib.get("name", "")
+                      if cls_name != class_name and not cls_name.endswith("/" + class_name):
                           continue
                       c = find_line_counter(cls)
                       if c is None:
