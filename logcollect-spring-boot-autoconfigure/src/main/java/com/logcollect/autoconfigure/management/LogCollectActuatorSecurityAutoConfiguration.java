@@ -9,6 +9,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 
 @Configuration
 @ConditionalOnClass({SecurityFilterChain.class, HttpSecurity.class})
@@ -20,7 +21,8 @@ public class LogCollectActuatorSecurityAutoConfiguration {
     @ConditionalOnMissingBean(name = "logCollectActuatorSecurityFilterChain")
     public SecurityFilterChain logCollectActuatorSecurityFilterChain(HttpSecurity http) throws Exception {
         AntPathRequestMatcher matcher = new AntPathRequestMatcher("/actuator/logcollect/**");
-        http.requestMatcher(matcher)
+        applySecurityMatcher(http, matcher);
+        http
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(new AntPathRequestMatcher("/actuator/logcollect/**", "GET"))
                         .hasAnyRole("MONITOR", "ADMIN")
@@ -30,5 +32,13 @@ public class LogCollectActuatorSecurityAutoConfiguration {
                         .hasRole("ADMIN")
                         .anyRequest().authenticated());
         return http.build();
+    }
+
+    private void applySecurityMatcher(HttpSecurity http, RequestMatcher matcher) throws Exception {
+        try {
+            HttpSecurity.class.getMethod("securityMatcher", RequestMatcher.class).invoke(http, matcher);
+        } catch (NoSuchMethodException ex) {
+            HttpSecurity.class.getMethod("requestMatcher", RequestMatcher.class).invoke(http, matcher);
+        }
     }
 }
