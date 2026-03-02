@@ -50,10 +50,14 @@ public class LogCollectLocalConfigCache {
         if (cacheFile == null || !Files.exists(cacheFile)) {
             return Collections.emptyMap();
         }
+        if (maxAgeDays <= 0) {
+            LogCollectInternalLogger.warn("Local config cache disabled by non-positive maxAgeDays: {}", maxAgeDays);
+            return Collections.emptyMap();
+        }
         try {
             FileTime lastModified = Files.getLastModifiedTime(cacheFile);
             Instant cutoff = Instant.now().minus(maxAgeDays, ChronoUnit.DAYS);
-            if (lastModified.toInstant().isBefore(cutoff)) {
+            if (!lastModified.toInstant().isAfter(cutoff)) {
                 LogCollectInternalLogger.warn("Local config cache expired: {}", cacheFile);
                 return Collections.emptyMap();
             }

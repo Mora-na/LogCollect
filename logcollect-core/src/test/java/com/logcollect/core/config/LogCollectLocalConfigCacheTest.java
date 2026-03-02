@@ -32,4 +32,15 @@ class LogCollectLocalConfigCacheTest {
         Map<String, String> loaded = dirCache.load();
         assertThat(loaded).isEmpty();
     }
+
+    @Test
+    void load_nonPositiveMaxAge_returnsEmpty() {
+        Path cacheFile = tempDir.resolve("cache.properties");
+        LogCollectLocalConfigCache zeroTtl = new LogCollectLocalConfigCache(cacheFile, 0);
+        zeroTtl.save(Collections.singletonMap("a", "b"));
+        assertThat(zeroTtl.load()).isEmpty();
+
+        LogCollectLocalConfigCache negativeTtl = new LogCollectLocalConfigCache(cacheFile, -1);
+        assertThat(negativeTtl.load()).isEmpty();
+    }
 }

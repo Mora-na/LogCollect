@@ -40,6 +40,9 @@ public final class RegexSafetyValidator {
         if (regex == null) {
             return false;
         }
+        if (Thread.currentThread().isInterrupted()) {
+            return false;
+        }
         if (regex.isEmpty()) {
             return true;
         }
@@ -60,6 +63,10 @@ public final class RegexSafetyValidator {
                 }
             });
             try {
+                if (Thread.currentThread().isInterrupted()) {
+                    future.cancel(true);
+                    return false;
+                }
                 future.get(REGEX_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             } catch (TimeoutException e) {
                 future.cancel(true);

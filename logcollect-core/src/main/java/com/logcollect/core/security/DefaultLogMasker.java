@@ -148,6 +148,9 @@ public class DefaultLogMasker implements LogMasker {
     }
 
     private String applyMaskRules(String input) {
+        if (Thread.currentThread().isInterrupted()) {
+            return input;
+        }
         Future<String> future = MASK_EXECUTOR.submit(() -> {
             String result = input;
             for (MaskRule rule : rules) {
@@ -156,6 +159,10 @@ public class DefaultLogMasker implements LogMasker {
             return result;
         });
         try {
+            if (Thread.currentThread().isInterrupted()) {
+                future.cancel(true);
+                return input;
+            }
             return future.get(maskTimeoutMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             future.cancel(true);
