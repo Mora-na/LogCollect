@@ -3,6 +3,7 @@ package com.logcollect.core.security;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 
 import java.util.concurrent.*;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -22,14 +23,31 @@ public final class RegexSafetyValidator {
 
     private RegexSafetyValidator() {}
 
-    public static boolean isSafe(String regex) {
+    public static void validate(Pattern pattern) {
+        if (pattern == null) {
+            throw new NullPointerException("pattern");
+        }
+        String regex = pattern.pattern();
         if (regex == null || regex.isEmpty()) {
+            return;
+        }
+        if (!isSafe(regex)) {
+            throw new IllegalArgumentException("ReDoS risk regex rejected: " + regex);
+        }
+    }
+
+    public static boolean isSafe(String regex) {
+        if (regex == null) {
             return false;
+        }
+        if (regex.isEmpty()) {
+            return true;
         }
         if (regex.length() > MAX_REGEX_LENGTH) {
             return false;
         }
-        if (NESTED_QUANTIFIER.matcher(regex).find()) {
+        Matcher nestedQuantifierMatcher = NESTED_QUANTIFIER.matcher(regex);
+        if (nestedQuantifierMatcher.find()) {
             return false;
         }
         try {
@@ -64,14 +82,18 @@ public final class RegexSafetyValidator {
     }
 
     public static Pattern safeCompile(String regex) {
-        if (!isSafe(regex)) {
-            LogCollectInternalLogger.warn("Rejected unsafe regex: {}", regex);
-            return null;
-        }
         try {
-            return Pattern.compile(regex);
+            Pattern pattern = Pattern.compile(regex);
+            validate(pattern);
+            return pattern;
         } catch (PatternSyntaxException e) {
             LogCollectInternalLogger.warn("Invalid regex: {}", regex, e);
+            return null;
+        } catch (IllegalArgumentException e) {
+            LogCollectInternalLogger.warn("Rejected unsafe regex: {}", regex);
+            return null;
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Compile regex failed: {}", regex, e);
             return null;
         }
     }

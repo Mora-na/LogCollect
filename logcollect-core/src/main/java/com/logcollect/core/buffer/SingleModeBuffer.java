@@ -158,6 +158,9 @@ public class SingleModeBuffer implements LogCollectBuffer {
     }
 
     private boolean shouldFlush() {
+        if (policy.getStrategy() != BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY) {
+            return false;
+        }
         return (maxCount > 0 && count.get() >= maxCount) || (maxBytes > 0 && bytes.get() >= maxBytes);
     }
 

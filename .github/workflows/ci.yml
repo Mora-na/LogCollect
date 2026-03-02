@@ -34,6 +34,13 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
       - name: Build & Test
         run: |
           mvn -B clean verify \
@@ -42,50 +49,278 @@ jobs:
             -pl '!logcollect-samples' \
             -Dgpg.skip=true \
             -DskipPublishing=true \
+            -DskipDeploy=true \
+            -Djacoco.skip=true
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Prepare Checkstyle Config
+        run: |
+          mkdir -p .github/checkstyle
+          cat > .github/checkstyle/checkstyle.xml <<'EOF'
+          <?xml version="1.0"?>
+          <!DOCTYPE module PUBLIC
+              "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+              "https://checkstyle.org/dtds/configuration_1_3.dtd">
+          <module name="Checker">
+            <module name="NewlineAtEndOfFile"/>
+            <module name="FileTabCharacter">
+              <property name="eachLine" value="true"/>
+            </module>
+          </module>
+          EOF
+      - name: Checkstyle Quality Gate
+        run: |
+          mvn -B -pl '!logcollect-samples' -am \
+            org.apache.maven.plugins:maven-checkstyle-plugin:3.3.1:check \
+            -Dcheckstyle.config.location=.github/checkstyle/checkstyle.xml \
+            -Dcheckstyle.failOnViolation=true \
+            -Dcheckstyle.consoleOutput=true \
+            -DskipTests=true \
+            -Dgpg.skip=true \
+            -DskipPublishing=true \
             -DskipDeploy=true
+      - name: Resolve Sonar Defaults
+        id: sonar
+        env:
+          INPUT_SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          INPUT_SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          INPUT_SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+          INPUT_SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+        run: |
+          if [ -z "${INPUT_SONAR_TOKEN}" ]; then
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          SONAR_HOST_URL="${INPUT_SONAR_HOST_URL:-https://sonarcloud.io}"
+          SONAR_ORGANIZATION="${INPUT_SONAR_ORGANIZATION:-${GITHUB_REPOSITORY_OWNER}}"
+          DEFAULT_PROJECT_KEY="$(echo "${GITHUB_REPOSITORY}" | tr '/' '_')"
+          SONAR_PROJECT_KEY="${INPUT_SONAR_PROJECT_KEY:-${DEFAULT_PROJECT_KEY}}"
+
+          echo "enabled=true" >> "${GITHUB_OUTPUT}"
+          echo "host_url=${SONAR_HOST_URL}" >> "${GITHUB_OUTPUT}"
+          echo "organization=${SONAR_ORGANIZATION}" >> "${GITHUB_OUTPUT}"
+          echo "project_key=${SONAR_PROJECT_KEY}" >> "${GITHUB_OUTPUT}"
+      - name: SonarQube/SonarCloud Scan
+        if: ${{ steps.sonar.outputs.enabled == 'true' }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          SONAR_ARGS=(
+            "-Dsonar.host.url=${{ steps.sonar.outputs.host_url }}"
+            "-Dsonar.token=${SONAR_TOKEN}"
+            "-Dsonar.projectKey=${{ steps.sonar.outputs.project_key }}"
+            "-Dsonar.qualitygate.wait=true"
+          )
+          if [ -n "${{ steps.sonar.outputs.organization }}" ]; then
+            SONAR_ARGS+=("-Dsonar.organization=${{ steps.sonar.outputs.organization }}")
+          fi
+
+          mvn -B -pl '!logcollect-samples' -am \
+            org.sonarsource.scanner.maven:sonar-maven-plugin:3.11.0.3922:sonar \
+            "${SONAR_ARGS[@]}" \
+            -DskipTests=true \
+            -Dgpg.skip=true \
+            -DskipPublishing=true \
+            -DskipDeploy=true
+      - name: SonarQube Scan Skipped
+        if: ${{ steps.sonar.outputs.enabled != 'true' }}
+        run: |
+          echo "Sonar scan skipped: SONAR_TOKEN is not configured."
+          echo "Default free mode is SonarCloud (https://sonarcloud.io) when SONAR_HOST_URL is not set."
+          echo "Optional repo variables: SONAR_HOST_URL, SONAR_ORGANIZATION, SONAR_PROJECT_KEY."
 
   coverage:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, quality]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
-      - name: Coverage Report
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Run tests with coverage
         run: |
-          mvn -B -pl logcollect-core -am \
+          mvn -B \
+            -pl logcollect-api,logcollect-core,logcollect-logback-adapter,logcollect-log4j2-adapter,logcollect-spring-boot-autoconfigure \
+            -am \
             org.jacoco:jacoco-maven-plugin:0.8.12:prepare-agent \
             test \
-            org.jacoco:jacoco-maven-plugin:0.8.12:report
-      - name: Check Coverage
+            org.jacoco:jacoco-maven-plugin:0.8.12:report \
+            -Dgpg.skip=true \
+            -DskipPublishing=true \
+            -DskipDeploy=true
+      - name: Check Coverage Gates (Module + Package)
         run: |
           python3 - <<'PY'
+          import sys
+          from pathlib import Path
           import xml.etree.ElementTree as ET
 
-          MIN_CORE_LINE_COVERAGE = 0.80
+          module_thresholds = {
+              "logcollect-core": 0.80,
+              "logcollect-api": 0.60,
+              "logcollect-spring-boot-autoconfigure": 0.40,
+          }
 
-          report = "logcollect-core/target/site/jacoco/jacoco.xml"
-          root = ET.parse(report).getroot()
-          line_counter = None
-          for counter in root.findall("counter"):
-              if counter.attrib.get("type") == "LINE":
-                  line_counter = counter
-                  break
+          core_package_thresholds = {
+              "com/logcollect/core/security": 0.95,
+              "com/logcollect/core/pipeline": 0.90,
+              "com/logcollect/core/buffer": 0.85,
+              "com/logcollect/core/circuitbreaker": 0.85,
+              "com/logcollect/core/degrade": 0.80,
+              "com/logcollect/core/context": 0.85,
+              "com/logcollect/core/config": 0.75,
+              "com/logcollect/core/format": 0.70,
+              "com/logcollect/core/mdc": 0.65,
+              "com/logcollect/core/internal": 0.50,
+          }
 
-          if line_counter is None:
-              raise SystemExit("No LINE coverage counter found")
+          adapter_security_class_thresholds = {
+              ("logcollect-logback-adapter", "com/logcollect/logback", "LogCollectLogbackAppender"): 1.00,
+              ("logcollect-log4j2-adapter", "com/logcollect/log4j2", "LogCollectLog4j2Appender"): 1.00,
+          }
 
-          missed = int(line_counter.attrib["missed"])
-          covered = int(line_counter.attrib["covered"])
-          total = missed + covered
-          if total == 0:
-              raise SystemExit("LINE coverage total is zero")
+          failed = []
 
-          ratio = covered / total
-          print(f"Core line coverage ratio: {ratio:.4f}")
-          print(f"Required minimum ratio: {MIN_CORE_LINE_COVERAGE:.2f}")
-          if ratio < MIN_CORE_LINE_COVERAGE:
-              raise SystemExit(1)
+          def locate_jacoco_xml(module):
+              module_dir = Path(module)
+              if not module_dir.exists():
+                  return None
+
+              preferred = module_dir / "target" / "site" / "jacoco" / "jacoco.xml"
+              if preferred.exists():
+                  return preferred
+
+              candidates = sorted(module_dir.rglob("target/site/jacoco/jacoco.xml"))
+              if candidates:
+                  return candidates[0]
+
+              fallback = sorted(module_dir.rglob("jacoco.xml"))
+              return fallback[0] if fallback else None
+
+          def parse_xml(module):
+              report = locate_jacoco_xml(module)
+              if report is None:
+                  failed.append(f"{module}: jacoco.xml not found under module directory")
+                  return None, None
+              try:
+                  return ET.parse(report).getroot(), str(report)
+              except Exception as e:
+                  failed.append(f"{module}: report unreadable: {report} ({e})")
+                  return None, str(report)
+
+          def line_ratio(counter):
+              missed = int(counter.attrib["missed"])
+              covered = int(counter.attrib["covered"])
+              total = missed + covered
+              return (covered / total) if total else 0.0, covered, total
+
+          def find_line_counter(parent):
+              for c in parent.findall("counter"):
+                  if c.attrib.get("type") == "LINE":
+                      return c
+              return None
+
+          # 1) 模块级门禁
+          for module, threshold in module_thresholds.items():
+              root, _ = parse_xml(module)
+              if root is None:
+                  continue
+              counter = find_line_counter(root)
+              if counter is None:
+                  failed.append(f"{module}: missing LINE counter in jacoco.xml")
+                  continue
+              ratio, covered, total = line_ratio(counter)
+              print(f"[MODULE] {module}: {ratio:.2%} ({covered}/{total}), target >= {threshold:.0%}")
+              if ratio < threshold:
+                  failed.append(f"{module}: {ratio:.2%} < {threshold:.0%}")
+
+          # 2) core 包级门禁
+          core_root, _ = parse_xml("logcollect-core")
+          if core_root is not None:
+              package_nodes = core_root.findall("package")
+              for prefix, threshold in core_package_thresholds.items():
+                  covered = 0
+                  missed = 0
+                  for pkg in package_nodes:
+                      name = pkg.attrib.get("name", "")
+                      if not name.startswith(prefix):
+                          continue
+                      c = find_line_counter(pkg)
+                      if c is None:
+                          continue
+                      covered += int(c.attrib["covered"])
+                      missed += int(c.attrib["missed"])
+                  total = covered + missed
+                  ratio = (covered / total) if total else 0.0
+                  display = prefix.replace("com/logcollect/core/", "")
+                  print(f"[CORE-PKG] {display}: {ratio:.2%} ({covered}/{total}), target >= {threshold:.0%}")
+                  if total == 0:
+                      failed.append(f"logcollect-core package {display}: no line data")
+                  elif ratio < threshold:
+                      failed.append(f"logcollect-core package {display}: {ratio:.2%} < {threshold:.0%}")
+
+          # 3) adapter 安全路径 100%（关键 Appender 类）
+          for (module, pkg_name, class_name), threshold in adapter_security_class_thresholds.items():
+              root, _ = parse_xml(module)
+              if root is None:
+                  continue
+              ratio = None
+              covered = 0
+              total = 0
+              for pkg in root.findall("package"):
+                  if pkg.attrib.get("name") != pkg_name:
+                      continue
+                  for cls in pkg.findall("class"):
+                      if cls.attrib.get("name") != class_name:
+                          continue
+                      c = find_line_counter(cls)
+                      if c is None:
+                          continue
+                      ratio, covered, total = line_ratio(c)
+                      break
+              key = f"{module}:{pkg_name.replace('/', '.')}.{class_name}"
+              if ratio is None:
+                  failed.append(f"{key}: class LINE counter not found")
+                  continue
+              print(f"[ADAPTER-SEC] {key}: {ratio:.2%} ({covered}/{total}), target >= {threshold:.0%}")
+              if ratio < threshold:
+                  failed.append(f"{key}: {ratio:.2%} < {threshold:.0%}")
+
+          if failed:
+              print("\\n❌ Coverage gate failed:")
+              for item in failed:
+                  print(f" - {item}")
+              sys.exit(1)
+
+          print("\\n✅ All module/package/class coverage gates passed.")
           PY
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-reports
+          path: "**/target/site/jacoco/"

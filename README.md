@@ -2653,6 +2653,9 @@ mvn clean verify
 
 # 指定 Spring Boot 版本测试
 mvn clean verify -Dspring-boot.version=3.2.5
+
+# 仅 core 覆盖率门禁（含 JaCoCo check）
+mvn verify -pl logcollect-core -am
 ```
 
 ### 测试矩阵
@@ -2673,7 +2676,66 @@ CI 工作流：`.github/workflows/ci.yml`
 - 内部实现层优先使用 `catch (Exception)` 或具体异常类型，让 `Error` 向边界层汇聚
 - 新增接口方法必须提供 `default` 实现
 - 新增注解参数必须有默认值
-- 核心模块测试覆盖率目标 ≥ 80%（按阶段补齐：buffer/security/config/context/circuitbreaker/resilient-flusher）
+- 核心模块测试覆盖率门禁：`logcollect-core` 行覆盖率 ≥ 80%
+
+### 测试覆盖率整改路线（core）
+
+| 模块 | 当前覆盖率（基线） | 目标覆盖率 | 优先级 |
+|------|------------------|------------|--------|
+| `logcollect-core` | 20.69% | ≥ 80% | 🔴 核心 |
+| `logcollect-api` | 待持续提升 | ≥ 60% | 🟡 次要 |
+| `logcollect-logback-adapter` | 安全路径优先 | 安全路径 100% | 🟡 次要 |
+| `logcollect-log4j2-adapter` | 安全路径优先 | 安全路径 100% | 🟡 次要 |
+| `logcollect-spring-boot-autoconfigure` | 关键路径优先 | ≥ 40% | 🟢 辅助 |
+
+#### Phase 切分
+
+| Phase | 聚焦包/模块 | 目标提升 |
+|------|-------------|----------|
+| Phase 1 | `security` + `pipeline` | 20.69% → ~40% |
+| Phase 2 | `buffer` + `circuitbreaker` | ~40% → ~58% |
+| Phase 3 | `degrade` + `context` | ~58% → ~70% |
+| Phase 4 | `config` + `format` + `mdc` + `internal` | ~70% → ~80% |
+| Phase 5 | `api` + adapters + autoconfigure 关键安全路径 | core ≥80%，其余模块达标 |
+
+#### 本轮已补齐的测试基建与重点用例
+
+- 新增 `CoreUnitTestBase` 与 `ConcurrentTestHelper`（线程安全与上下文清理验证）
+- 安全链路：`DefaultLogSanitizer` / `DefaultLogMasker` / `RegexSafetyValidator` / `StringLengthGuard` / `SecurityPipeline`
+- 缓冲与可靠性：`AggregateModeBuffer` / `SingleModeBuffer` / `BoundedBufferPolicy` / `GlobalBufferMemoryManager` / `LogCollectCircuitBreaker`
+- 降级与上下文：`DegradeFileManager` / `LogCollectContextManager` / `LogCollectContextUtils`
+- 配置与格式：`LogCollectConfigResolver` / `PatternCleaner` / `PatternValidator` / `LogLinePatternParser`
+- 跨模块补漏：`LogEntry` / `AggregatedLog` / `LogCollectContext`、Logback/Log4j2 安全路径、AOP 关键集成路径
+
+#### JaCoCo 门禁
+
+- `logcollect-core/pom.xml` 已内置 `jacoco-maven-plugin`（`prepare-agent`/`report`/`check`）
+- 门禁规则：
+  - 模块整体：`BUNDLE LINE >= 0.80`
+  - 安全核心包：`security` + `pipeline` 行覆盖率 ≥ 95%
+  - 缓冲与熔断包：`buffer` + `circuitbreaker` 行覆盖率 ≥ 85%
+  - 降级包：`degrade` 行覆盖率 ≥ 80%
+- 排除项：`internal/LogCollectInternalLogger`
+
+#### CI 覆盖率步骤
+
+- `Run tests with coverage`: `mvn -B verify -pl logcollect-core -am`
+- `Check coverage threshold`: 从 `logcollect-core/target/site/jacoco/index.html` 读取总覆盖率并校验 `>= 80`
+- `Upload coverage report`: 上传 `logcollect-core/target/site/jacoco/` 产物
+
+#### 提交前自查（测试）
+
+```
+□ 测试命名遵循 method_scenario_expected
+□ 正常路径 + 异常路径 + 边界值已覆盖
+□ null 输入已覆盖
+□ 并发场景（buffer/context/circuitbreaker）已覆盖
+□ 安全断言使用 doesNotContain 验证危险内容已清理
+□ 文件测试使用临时目录，避免污染运行环境
+□ 测试间无 ThreadLocal 泄漏
+□ 每个测试方法可独立运行，不依赖执行顺序
+□ 提交前执行：mvn verify -pl logcollect-core -am
+```
 
 ---
 

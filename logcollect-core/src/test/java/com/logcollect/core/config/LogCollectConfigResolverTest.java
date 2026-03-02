@@ -11,6 +11,8 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -106,6 +108,63 @@ class LogCollectConfigResolverTest {
         Assertions.assertEquals(TestBackpressureCallback.class, config.getBackpressureCallbackClass());
     }
 
+    @Test
+    void resolve_noConfigCenter_fallbackToAnnotation() throws Exception {
+        LogCollectConfigResolver resolver = new LogCollectConfigResolver(Collections.emptyList(), null);
+        Method target = LogCollectConfigResolverTest.class.getDeclaredMethod("annotatedWithDebug");
+        LogCollect annotation = target.getAnnotation(LogCollect.class);
+        LogCollectConfig config = resolver.resolve(target, annotation);
+        Assertions.assertEquals("DEBUG", config.getLevel());
+    }
+
+    @Test
+    void resolve_noAnnotation_fallbackToDefault() throws Exception {
+        LogCollectConfigResolver resolver = new LogCollectConfigResolver(Collections.emptyList(), null);
+        Method target = LogCollectConfigResolverTest.class.getDeclaredMethod("targetMethod");
+        LogCollectConfig config = resolver.resolve(target, null);
+        Assertions.assertEquals("INFO", config.getLevel());
+    }
+
+    @Test
+    void resolve_configSourceUnavailable_usesLocalCache() throws Exception {
+        Path tempDir = Files.createTempDirectory("logcollect-config-cache");
+        Path cacheFile = tempDir.resolve("local.properties");
+        LogCollectLocalConfigCache cache = new LogCollectLocalConfigCache(cacheFile, 7);
+        Map<String, String> cached = new LinkedHashMap<String, String>();
+        cached.put("logcollect.global.level", "ERROR");
+        cached.put("logcollect.methods." + targetMethodKey() + ".async", "false");
+        cache.save(cached);
+
+        LogCollectConfigSource unavailable = new InMemorySource(Collections.emptyMap(), Collections.emptyMap()) {
+            @Override
+            public boolean isAvailable() {
+                return false;
+            }
+        };
+
+        LogCollectConfigResolver resolver = new LogCollectConfigResolver(
+                Collections.singletonList(unavailable), cache);
+        Method target = LogCollectConfigResolverTest.class.getDeclaredMethod("targetMethod");
+        LogCollectConfig config = resolver.resolve(target, null);
+        Assertions.assertEquals("ERROR", config.getLevel());
+        Assertions.assertFalse(config.isAsync());
+    }
+
+    @Test
+    void resolve_cachedConfigExpired_fallsBackToDefault() throws Exception {
+        Path tempDir = Files.createTempDirectory("logcollect-config-cache-expired");
+        Path cacheFile = tempDir.resolve("local.properties");
+        LogCollectLocalConfigCache cache = new LogCollectLocalConfigCache(cacheFile, 0);
+        Map<String, String> cached = new LinkedHashMap<String, String>();
+        cached.put("logcollect.global.level", "ERROR");
+        cache.save(cached);
+
+        LogCollectConfigResolver resolver = new LogCollectConfigResolver(Collections.emptyList(), cache);
+        Method target = LogCollectConfigResolverTest.class.getDeclaredMethod("targetMethod");
+        LogCollectConfig config = resolver.resolve(target, null);
+        Assertions.assertEquals("INFO", config.getLevel());
+    }
+
     private static class InMemorySource implements LogCollectConfigSource {
         private final Map<String, String> global;
         private final Map<String, String> method;
@@ -146,5 +205,10 @@ class LogCollectConfigResolverTest {
         public BackpressureAction onPressure(double utilization) {
             return BackpressureAction.CONTINUE;
         }
+    }
+
+    private String targetMethodKey() throws NoSuchMethodException {
+        Method method = LogCollectConfigResolverTest.class.getDeclaredMethod("targetMethod");
+        return method.getDeclaringClass().getName().replace('.', '_') + "_" + method.getName();
     }
 }

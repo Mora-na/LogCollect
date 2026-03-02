@@ -3,6 +3,7 @@ package com.logcollect.core.pipeline;
 import com.logcollect.api.masker.LogMasker;
 import com.logcollect.api.model.LogEntry;
 import com.logcollect.api.sanitizer.LogSanitizer;
+import com.logcollect.core.security.StringLengthGuard;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -17,10 +18,16 @@ public class SecurityPipeline {
 
     private final LogSanitizer sanitizer;
     private final LogMasker masker;
+    private final StringLengthGuard lengthGuard;
 
     public SecurityPipeline(LogSanitizer sanitizer, LogMasker masker) {
+        this(sanitizer, masker, null);
+    }
+
+    public SecurityPipeline(LogSanitizer sanitizer, LogMasker masker, StringLengthGuard lengthGuard) {
         this.sanitizer = sanitizer;
         this.masker = masker;
+        this.lengthGuard = lengthGuard;
     }
 
     public LogEntry process(LogEntry rawEntry) {
@@ -53,14 +60,21 @@ public class SecurityPipeline {
             }
         }
 
+        String guardedContent = contentResult.getValue();
+        String guardedThrowable = throwableResult.getValue();
+        if (lengthGuard != null) {
+            guardedContent = lengthGuard.guardContent(guardedContent);
+            guardedThrowable = lengthGuard.guardThrowable(guardedThrowable);
+        }
+
         return LogEntry.builder()
                 .traceId(rawEntry.getTraceId())
-                .content(contentResult.getValue())
+                .content(guardedContent)
                 .level(sanitizeField(rawEntry.getLevel()))
                 .timestamp(rawEntry.getTimestamp())
                 .threadName(sanitizeField(rawEntry.getThreadName()))
                 .loggerName(sanitizeField(rawEntry.getLoggerName()))
-                .throwableString(throwableResult.getValue())
+                .throwableString(guardedThrowable)
                 .mdcContext(sanitizeMdc(rawEntry.getMdcContext()))
                 .build();
     }
@@ -95,6 +109,9 @@ public class SecurityPipeline {
         }
         if (masker != null) {
             safeValue = masker.mask(safeValue);
+        }
+        if (lengthGuard != null) {
+            safeValue = lengthGuard.guardContent(safeValue);
         }
         return safeValue;
     }

@@ -1,7 +1,9 @@
 package com.logcollect.core.security;
 
 import com.logcollect.api.sanitizer.LogSanitizer;
+import com.logcollect.api.sanitizer.SanitizeResult;
 
+import java.util.Objects;
 import java.util.regex.Pattern;
 
 /**
@@ -10,6 +12,7 @@ import java.util.regex.Pattern;
 public class DefaultLogSanitizer implements LogSanitizer {
 
     private static final Pattern HTML_TAG = Pattern.compile("<[^>]+>");
+    private static final Pattern SCRIPT_BLOCK = Pattern.compile("(?is)<script[^>]*>.*?</script>");
     private static final Pattern ANSI_ESCAPE = Pattern.compile("\\x1B\\[[0-9;]*[a-zA-Z]");
     private static final Pattern MESSAGE_CONTROL_CHARS =
             Pattern.compile("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F\\r\\n\\t]");
@@ -50,8 +53,15 @@ public class DefaultLogSanitizer implements LogSanitizer {
         return sb.toString();
     }
 
+    @Override
+    public SanitizeResult sanitizeWithStats(String raw) {
+        String value = sanitize(raw);
+        return new SanitizeResult(value, !Objects.equals(raw, value));
+    }
+
     private static String removeHtmlTags(String input) {
-        return HTML_TAG.matcher(input).replaceAll("");
+        String noScript = SCRIPT_BLOCK.matcher(input).replaceAll("");
+        return HTML_TAG.matcher(noScript).replaceAll("");
     }
 
     private static String removeAnsiCodes(String input) {
@@ -66,4 +76,5 @@ public class DefaultLogSanitizer implements LogSanitizer {
                 || t.startsWith("Suppressed:")
                 || t.matches("^\\.\\.\\. \\d+ (more|common frames omitted)$");
     }
+
 }

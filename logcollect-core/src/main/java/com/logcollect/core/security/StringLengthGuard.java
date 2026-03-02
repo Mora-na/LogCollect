@@ -5,24 +5,41 @@ public final class StringLengthGuard {
     private static final int DEFAULT_MAX_CONTENT_LENGTH = 32 * 1024;
     private static final int DEFAULT_MAX_THROWABLE_LENGTH = 64 * 1024;
     private static final String TRUNCATION_MARKER = "\n... [truncated by LogCollect]";
+    private static final StringLengthGuard DEFAULT_GUARD =
+            new StringLengthGuard(DEFAULT_MAX_CONTENT_LENGTH, DEFAULT_MAX_THROWABLE_LENGTH);
 
-    private StringLengthGuard() {
+    private final int maxContentLength;
+    private final int maxThrowableLength;
+
+    public StringLengthGuard(int maxContentLength, int maxThrowableLength) {
+        if (maxContentLength <= 0) {
+            throw new IllegalArgumentException("maxContentLength must be > 0");
+        }
+        if (maxThrowableLength <= 0) {
+            throw new IllegalArgumentException("maxThrowableLength must be > 0");
+        }
+        this.maxContentLength = maxContentLength;
+        this.maxThrowableLength = maxThrowableLength;
     }
 
-    public static String guardContent(String raw) {
-        return truncate(raw, DEFAULT_MAX_CONTENT_LENGTH);
+    public static StringLengthGuard withDefaults() {
+        return DEFAULT_GUARD;
     }
 
     public static String guardContent(String raw, int maxLength) {
         return truncate(raw, maxLength <= 0 ? DEFAULT_MAX_CONTENT_LENGTH : maxLength);
     }
 
-    public static String guardThrowable(String raw) {
-        return truncate(raw, DEFAULT_MAX_THROWABLE_LENGTH);
-    }
-
     public static String guardThrowable(String raw, int maxLength) {
         return truncate(raw, maxLength <= 0 ? DEFAULT_MAX_THROWABLE_LENGTH : maxLength);
+    }
+
+    public String guardContent(String raw) {
+        return truncate(raw, maxContentLength);
+    }
+
+    public String guardThrowable(String raw) {
+        return truncate(raw, maxThrowableLength);
     }
 
     private static String truncate(String value, int maxLength) {

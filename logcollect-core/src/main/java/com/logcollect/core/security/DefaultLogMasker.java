@@ -104,6 +104,7 @@ public class DefaultLogMasker implements LogMasker {
         if (pattern == null || replacer == null) {
             return false;
         }
+        RegexSafetyValidator.validate(pattern);
         rules.add(new MaskRule(pattern, replacer));
         return true;
     }
