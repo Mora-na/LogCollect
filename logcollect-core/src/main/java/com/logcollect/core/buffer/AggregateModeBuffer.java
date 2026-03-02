@@ -11,7 +11,10 @@ import com.logcollect.core.internal.LogCollectInternalLogger;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -40,7 +43,9 @@ public class AggregateModeBuffer implements LogCollectBuffer {
     private final BoundedBufferPolicy policy;
     private final ResilientFlusher resilientFlusher = new ResilientFlusher();
 
-    private volatile int currentPatternVersion = LogLineDefaults.getVersion();
+    private final AtomicInteger patternVersion = new AtomicInteger(LogLineDefaults.getVersion());
+    private static final ThreadLocal<StringBuilder> SB_HOLDER =
+            ThreadLocal.withInitial(() -> new StringBuilder(4096));
 
     private static class LogSegment {
         final String formattedLine;
@@ -117,18 +122,22 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             return false;
         }
 
-        int patternVersion = LogLineDefaults.getVersion();
-        if (patternVersion != currentPatternVersion && count.get() > 0) {
+        int currentVersion = LogLineDefaults.getVersion();
+        int bufferedVersion = patternVersion.get();
+        if (currentVersion != bufferedVersion
+                && patternVersion.compareAndSet(bufferedVersion, currentVersion)
+                && count.get() > 0) {
             triggerFlush(context, false);
-            currentPatternVersion = patternVersion;
         }
 
         String formattedLine;
         try {
             formattedLine = handler == null ? entry.getContent() : handler.formatLogLine(entry);
-        } catch (Throwable t) {
+        } catch (Exception t) {
             notifyError(context, t, "formatLogLine");
             formattedLine = entry.getContent();
+        } catch (Error e) {
+            throw e;
         }
         if (formattedLine == null || formattedLine.isEmpty()) {
             return false;
@@ -180,7 +189,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
                 entry.getLevel(),
                 entry.getTimestamp(),
                 lineBytes,
-                patternVersion);
+                currentVersion);
 
         segments.offer(seg);
         count.incrementAndGet();
@@ -200,15 +209,14 @@ public class AggregateModeBuffer implements LogCollectBuffer {
 
     @Override
     public void triggerFlush(LogCollectContext context, boolean isFinal) {
-        Runnable flushTask = () -> doTriggerFlush(context, isFinal);
         boolean asyncFlush = context != null
                 && context.getConfig() != null
                 && context.getConfig().isAsync()
                 && !isFinal;
         if (asyncFlush) {
-            AsyncFlushExecutor.submitOrRun(flushTask);
+            AsyncFlushExecutor.submitOrRun(new AsyncBufferFlushTask(context, false, false));
         } else {
-            flushTask.run();
+            doTriggerFlush(context, isFinal, false);
         }
     }
 
@@ -239,21 +247,39 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         return (maxCount > 0 && count.get() >= maxCount) || (maxBytes > 0 && bytes.get() >= maxBytes);
     }
 
-    private void doTriggerFlush(LogCollectContext context, boolean isFinal) {
+    private void doTriggerFlush(LogCollectContext context, boolean isFinal, boolean warnOnly) {
         if (!flushing.compareAndSet(false, true)) {
             return;
         }
         try {
-            AggregatedLog agg = buildAggregatedLog(isFinal);
-            if (agg != null) {
+            List<LogSegment> drained = drainSegments();
+            if (!drained.isEmpty()) {
+                if (warnOnly) {
+                    int originalSize = drained.size();
+                    drained = retainWarnOrAbove(drained);
+                    int dropped = originalSize - drained.size();
+                    if (dropped > 0 && context != null) {
+                        context.incrementDiscardedCount(dropped);
+                        metricCall(context, "incrementDiscarded",
+                                context.getMethodSignature(), "async_queue_full_low_level");
+                    }
+                }
+            }
+            if (!drained.isEmpty()) {
                 String methodKey = context == null ? "unknown" : context.getMethodSignature();
                 metricCall(context, "incrementFlush", methodKey, "AGGREGATE",
-                        isFinal ? "final" : "threshold");
-                flushAggregated(context, agg);
+                        warnOnly ? "degraded" : (isFinal ? "final" : "threshold"));
+                List<List<LogSegment>> batches = splitByPatternVersion(drained);
+                for (List<LogSegment> batch : batches) {
+                    AggregatedLog agg = buildAggregatedLog(batch, isFinal);
+                    if (agg != null) {
+                        flushAggregated(context, agg);
+                    }
+                }
                 if (context != null) {
                     context.incrementFlushCount();
                 }
-                LogCollectDiag.debug("Flush triggered: segments=%d", agg.getEntryCount());
+                LogCollectDiag.debug("Flush triggered: segments=%d", drained.size());
             }
             updateUtilization(context);
         } finally {
@@ -261,17 +287,82 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         }
     }
 
-    private AggregatedLog buildAggregatedLog(boolean isFinal) {
-        int estimatedChars = (int) Math.min(bytes.get() / 2L + 256L, Integer.MAX_VALUE);
-        StringBuilder sb = new StringBuilder(estimatedChars);
+    private List<LogSegment> drainSegments() {
+        List<LogSegment> drained = new ArrayList<LogSegment>();
         LogSegment seg;
+        long drainedBytes = 0L;
+        while ((seg = segments.poll()) != null) {
+            drained.add(seg);
+            drainedBytes += seg.estimatedBytes;
+        }
+        if (!drained.isEmpty()) {
+            int drainedCount = drained.size();
+            int remaining = count.addAndGet(-drainedCount);
+            if (remaining < 0) {
+                count.set(0);
+            }
+            long remainingBytes = bytes.addAndGet(-drainedBytes);
+            if (remainingBytes < 0) {
+                bytes.set(0);
+            }
+            if (globalManager != null) {
+                globalManager.release(drainedBytes);
+            }
+            policy.afterDrain(drainedBytes, drainedCount);
+        }
+        return drained;
+    }
+
+    private List<List<LogSegment>> splitByPatternVersion(List<LogSegment> drained) {
+        if (drained == null || drained.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<List<LogSegment>> grouped = new ArrayList<List<LogSegment>>();
+        List<LogSegment> currentBatch = null;
+        int currentVersion = Integer.MIN_VALUE;
+        for (LogSegment seg : drained) {
+            if (currentBatch == null || seg.patternVersion != currentVersion) {
+                currentBatch = new ArrayList<LogSegment>();
+                grouped.add(currentBatch);
+                currentVersion = seg.patternVersion;
+            }
+            currentBatch.add(seg);
+        }
+        return grouped;
+    }
+
+    private List<LogSegment> retainWarnOrAbove(List<LogSegment> source) {
+        if (source == null || source.isEmpty()) {
+            return source;
+        }
+        List<LogSegment> kept = new ArrayList<LogSegment>(source.size());
+        for (LogSegment segment : source) {
+            if (segment != null && isHighLevel(segment.level)) {
+                kept.add(segment);
+            }
+        }
+        return kept;
+    }
+
+    private AggregatedLog buildAggregatedLog(List<LogSegment> segmentsBatch, boolean isFinal) {
+        if (segmentsBatch == null || segmentsBatch.isEmpty()) {
+            return null;
+        }
+        int estimatedChars = 256;
+        for (LogSegment segment : segmentsBatch) {
+            estimatedChars += (int) Math.max(0, (segment.estimatedBytes >> 1) + separator.length());
+        }
+        StringBuilder sb = SB_HOLDER.get();
+        sb.setLength(0);
+        sb.ensureCapacity(Math.min(estimatedChars, 4 * 1024 * 1024));
+
         int drainedCount = 0;
         long drainedBytes = 0;
         String localMaxLevel = "TRACE";
         LocalDateTime firstTime = null;
         LocalDateTime lastTime = null;
 
-        while ((seg = segments.poll()) != null) {
+        for (LogSegment seg : segmentsBatch) {
             if (drainedCount > 0) {
                 sb.append(separator);
             }
@@ -286,25 +377,13 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             localMaxLevel = higherLevel(localMaxLevel, seg.level);
         }
 
-        if (drainedCount == 0) {
-            return null;
+        String content = sb.toString();
+        if (sb.capacity() > 1024 * 1024) {
+            SB_HOLDER.remove();
         }
-
-        int remaining = count.addAndGet(-drainedCount);
-        if (remaining < 0) {
-            count.set(0);
-        }
-        long remainingBytes = bytes.addAndGet(-drainedBytes);
-        if (remainingBytes < 0) {
-            bytes.set(0);
-        }
-        if (globalManager != null) {
-            globalManager.release(drainedBytes);
-        }
-        policy.afterDrain(drainedBytes, drainedCount);
-
         return new AggregatedLog(
-                sb.toString(),
+                UUID.randomUUID().toString(),
+                content,
                 drainedCount,
                 drainedBytes,
                 localMaxLevel,
@@ -360,25 +439,38 @@ public class AggregateModeBuffer implements LogCollectBuffer {
 
     private void evictOldestUntilFit(LogCollectContext context, long incomingBytes) {
         while (policy.isOverflow(incomingBytes)) {
-            LogSegment evicted = segments.poll();
-            if (evicted == null) {
+            int toDrop = Math.max(1, count.get() / 10);
+            int actualDropped = 0;
+            long freedBytes = 0L;
+            for (int i = 0; i < toDrop; i++) {
+                LogSegment evicted = segments.poll();
+                if (evicted == null) {
+                    break;
+                }
+                freedBytes += evicted.estimatedBytes;
+                actualDropped++;
+                if (!policy.isOverflow(incomingBytes)) {
+                    break;
+                }
+            }
+            if (actualDropped == 0) {
                 break;
             }
-            int remainingCount = count.decrementAndGet();
+            int remainingCount = count.addAndGet(-actualDropped);
             if (remainingCount < 0) {
                 count.set(0);
             }
-            long remainingBytes = bytes.addAndGet(-evicted.estimatedBytes);
+            long remainingBytes = bytes.addAndGet(-freedBytes);
             if (remainingBytes < 0) {
                 bytes.set(0);
             }
             if (globalManager != null) {
-                globalManager.release(evicted.estimatedBytes);
+                globalManager.release(freedBytes);
             }
-            policy.afterDrain(evicted.estimatedBytes, 1);
-            policy.recordDropped();
+            policy.afterDrain(freedBytes, actualDropped);
+            policy.recordDropped(actualDropped);
             if (context != null) {
-                context.incrementDiscardedCount();
+                context.incrementDiscardedCount(actualDropped);
                 metricCall(context, "incrementDiscarded", context.getMethodSignature(), "buffer_full");
             }
         }
@@ -440,8 +532,10 @@ public class AggregateModeBuffer implements LogCollectBuffer {
                     reason,
                     config.getDegradeStorage(),
                     LocalDateTime.now()));
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LogCollectInternalLogger.warn("onDegrade callback failed", t);
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -455,8 +549,10 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         }
         try {
             h.onError(context, error, phase);
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LogCollectInternalLogger.warn("onError callback failed", t);
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -489,7 +585,9 @@ public class AggregateModeBuffer implements LogCollectBuffer {
                 }
                 return method.invoke(target, args);
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
+        } catch (Error e) {
+            throw e;
         }
         return null;
     }
@@ -539,7 +637,9 @@ public class AggregateModeBuffer implements LogCollectBuffer {
                 method.invoke(target, args);
                 return true;
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
+        } catch (Error e) {
+            throw e;
         }
         return false;
     }
@@ -567,5 +667,39 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             return "global_memory_limit";
         }
         return "buffer_full";
+    }
+
+    private final class AsyncBufferFlushTask implements AsyncFlushExecutor.RejectedAwareTask {
+        private final LogCollectContext context;
+        private final boolean isFinal;
+        private final boolean warnOnly;
+
+        private AsyncBufferFlushTask(LogCollectContext context, boolean isFinal, boolean warnOnly) {
+            this.context = context;
+            this.isFinal = isFinal;
+            this.warnOnly = warnOnly;
+        }
+
+        @Override
+        public void run() {
+            doTriggerFlush(context, isFinal, warnOnly);
+        }
+
+        @Override
+        public Runnable downgradeForRetry() {
+            if (isFinal || warnOnly) {
+                return null;
+            }
+            return new AsyncBufferFlushTask(context, isFinal, true);
+        }
+
+        @Override
+        public void onDiscard(String reason) {
+            if (context != null) {
+                context.incrementDiscardedCount();
+                metricCall(context, "incrementDiscarded", context.getMethodSignature(), reason);
+            }
+            notifyDegrade(context, reason);
+        }
     }
 }

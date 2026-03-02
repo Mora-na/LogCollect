@@ -63,8 +63,11 @@ public class DegradeFileManager {
                     baseDir,
                     DataSizeParser.formatBytes(currentTotalSize.get()),
                     DataSizeParser.formatBytes(maxTotalBytes));
-        } catch (Throwable t) {
-            LogCollectInternalLogger.error("Initialize DegradeFileManager failed", t);
+        } catch (Exception e) {
+            LogCollectInternalLogger.error("Initialize DegradeFileManager failed", e);
+        } catch (Error e) {
+            LogCollectInternalLogger.error("Initialize DegradeFileManager failed with fatal error", e);
+            throw e;
         }
     }
 
@@ -126,9 +129,12 @@ public class DegradeFileManager {
             Files.write(file, finalData, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
             setFilePermissions(file);
             currentTotalSize.addAndGet(finalData.length);
-        } catch (Throwable t) {
-            LogCollectInternalLogger.error("Degrade file write failed", t);
-            throw new DegradeStorageException(t);
+        } catch (Exception e) {
+            LogCollectInternalLogger.error("Degrade file write failed", e);
+            throw new DegradeStorageException(e);
+        } catch (Error e) {
+            LogCollectInternalLogger.error("Degrade file write failed with fatal error", e);
+            throw e;
         }
     }
 
@@ -178,12 +184,18 @@ public class DegradeFileManager {
                             currentTotalSize.addAndGet(-fileSize);
                         }
                     }
-                } catch (Throwable t) {
-                    LogCollectInternalLogger.warn("Delete degrade file failed: {}", file, t);
+                } catch (Exception e) {
+                    LogCollectInternalLogger.warn("Delete degrade file failed: {}", file, e);
+                } catch (Error e) {
+                    LogCollectInternalLogger.error("Delete degrade file failed with fatal error: {}", file, e);
+                    throw e;
                 }
             }
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn("Cleanup degrade files failed", t);
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Cleanup degrade files failed", e);
+        } catch (Error e) {
+            LogCollectInternalLogger.error("Cleanup degrade files failed with fatal error", e);
+            throw e;
         }
 
         if (currentTotalSize.get() < 0) {
@@ -365,7 +377,10 @@ public class DegradeFileManager {
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 cleanup(false);
-            } catch (Throwable ignored) {
+            } catch (Exception ignored) {
+                // ignored
+            } catch (Error e) {
+                throw e;
             }
         }, 1, 6, TimeUnit.HOURS);
     }
@@ -377,7 +392,10 @@ public class DegradeFileManager {
             }
             Set<PosixFilePermission> perms = PosixFilePermissions.fromString("rwx------");
             Files.setPosixFilePermissions(dir, perms);
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
+            // ignored
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -399,8 +417,11 @@ public class DegradeFileManager {
                     view.setAcl(java.util.Collections.singletonList(entry));
                 }
             }
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn("Set degrade file permissions failed: {}", file, t);
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Set degrade file permissions failed: {}", file, e);
+        } catch (Error e) {
+            LogCollectInternalLogger.error("Set degrade file permissions failed with fatal error: {}", file, e);
+            throw e;
         }
     }
 

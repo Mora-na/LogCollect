@@ -1,6 +1,9 @@
 package com.logcollect.autoconfigure;
 
+import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
+import com.logcollect.core.buffer.AsyncFlushExecutor;
 import com.logcollect.core.buffer.LogCollectBuffer;
+import com.logcollect.core.runtime.LogCollectGlobalSwitch;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.context.SmartLifecycle;
@@ -11,14 +14,31 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 
 public class LogCollectLifecycle implements SmartLifecycle, DisposableBean, InitializingBean {
 
+    private static final long DEFAULT_SHUTDOWN_TIMEOUT_MS = 15_000L;
+
     private final LogCollectBufferRegistry registry;
+    private final LogCollectGlobalSwitch globalSwitch;
+    private final LogCollectMetrics metrics;
+    private final long shutdownTimeoutMs;
     private volatile boolean running = false;
 
     public LogCollectLifecycle(LogCollectBufferRegistry registry) {
+        this(registry, null, null, DEFAULT_SHUTDOWN_TIMEOUT_MS);
+    }
+
+    public LogCollectLifecycle(LogCollectBufferRegistry registry,
+                               LogCollectGlobalSwitch globalSwitch,
+                               LogCollectMetrics metrics,
+                               long shutdownTimeoutMs) {
         this.registry = registry;
+        this.globalSwitch = globalSwitch;
+        this.metrics = metrics;
+        this.shutdownTimeoutMs = shutdownTimeoutMs <= 0 ? DEFAULT_SHUTDOWN_TIMEOUT_MS : shutdownTimeoutMs;
     }
 
     @Override
@@ -28,13 +48,28 @@ public class LogCollectLifecycle implements SmartLifecycle, DisposableBean, Init
 
     @Override
     public void stop() {
+        stop(() -> {
+            // no-op
+        });
+    }
+
+    @Override
+    public void stop(Runnable callback) {
         running = false;
-        drainAll();
+        if (globalSwitch != null) {
+            globalSwitch.setEnabled(false);
+        }
+        long deadline = System.currentTimeMillis() + shutdownTimeoutMs;
+        waitActiveCollections(deadline);
+        drainAll(Math.max(0L, deadline - System.currentTimeMillis()));
+        if (callback != null) {
+            callback.run();
+        }
     }
 
     @Override
     public int getPhase() {
-        return Integer.MAX_VALUE;
+        return Integer.MAX_VALUE - 100;
     }
 
     @Override
@@ -44,15 +79,24 @@ public class LogCollectLifecycle implements SmartLifecycle, DisposableBean, Init
 
     @Override
     public void destroy() {
-        drainAll();
+        drainAll(shutdownTimeoutMs);
     }
 
     @Override
     public void afterPropertiesSet() {
-        Runtime.getRuntime().addShutdownHook(new Thread(this::drainAll, "logcollect-shutdown"));
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> drainAll(shutdownTimeoutMs), "logcollect-shutdown"));
     }
 
-    private void drainAll() {
+    private void waitActiveCollections(long deadline) {
+        if (metrics == null) {
+            return;
+        }
+        while (metrics.getActiveCollections() > 0 && System.currentTimeMillis() < deadline) {
+            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(100));
+        }
+    }
+
+    private void drainAll(long timeoutMs) {
         if (registry == null) {
             return;
         }
@@ -61,8 +105,11 @@ public class LogCollectLifecycle implements SmartLifecycle, DisposableBean, Init
                 buffer.forceFlush();
             } catch (Exception ex) {
                 emergencyDump(buffer);
+            } catch (Error e) {
+                throw e;
             }
         }
+        AsyncFlushExecutor.shutdownAndAwait(timeoutMs);
     }
 
     private void emergencyDump(LogCollectBuffer buffer) {

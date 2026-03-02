@@ -37,14 +37,10 @@ public class LogCollectCallableWrapper<V> implements Callable<V> {
         LogCollectContextManager.restoreSnapshot(snapshot);
         try {
             return delegate.call();
-        } catch (Throwable t) {
-            if (t instanceof Exception) {
-                throw (Exception) t;
-            }
-            if (t instanceof Error) {
-                throw (Error) t;
-            }
-            throw new RuntimeException(t);
+        } catch (Exception e) {
+            throw e;
+        } catch (Error e) {
+            throw e;
         } finally {
             LogCollectContextManager.clearSnapshotContext();
         }

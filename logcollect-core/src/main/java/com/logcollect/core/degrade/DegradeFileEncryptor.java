@@ -41,8 +41,10 @@ public class DegradeFileEncryptor {
             System.arraycopy(iv, 0, out, 0, iv.length);
             System.arraycopy(ciphertext, 0, out, iv.length, ciphertext.length);
             return out;
-        } catch (Throwable t) {
-            throw new DegradeStorageException(t);
+        } catch (Exception e) {
+            throw new DegradeStorageException(e);
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -62,8 +64,10 @@ public class DegradeFileEncryptor {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(TAG_LENGTH, iv));
             return cipher.doFinal(body);
-        } catch (Throwable t) {
-            throw new DegradeStorageException(t);
+        } catch (Exception e) {
+            throw new DegradeStorageException(e);
+        } catch (Error e) {
+            throw e;
         }
     }
 }

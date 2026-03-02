@@ -8,12 +8,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.core.task.TaskDecorator;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 class LogCollectThreadPoolBPPTest {
 
@@ -77,6 +78,25 @@ class LogCollectThreadPoolBPPTest {
         } finally {
             LogCollectContextManager.clear();
             executor.shutdown();
+        }
+    }
+
+    @Test
+    void shouldWrapExecutorServiceAfterInitialization() throws Exception {
+        ExecutorService raw = Executors.newFixedThreadPool(1);
+        ExecutorService wrapped = raw;
+        try {
+            Object bean = bpp.postProcessAfterInitialization(raw, "customPool");
+            assertTrue(bean instanceof ExecutorService);
+            wrapped = (ExecutorService) bean;
+            assertNotSame(raw, wrapped);
+
+            LogCollectContextManager.push(new LogCollectContext("trace-executor", null, null, null, null, null, null, null));
+            Future<Boolean> future = wrapped.submit(LogCollectContextUtils::isInLogCollectContext);
+            assertTrue(future.get(5, TimeUnit.SECONDS));
+        } finally {
+            LogCollectContextManager.clear();
+            wrapped.shutdownNow();
         }
     }
 

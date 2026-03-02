@@ -2,9 +2,7 @@ package com.logcollect.core.config;
 
 import com.logcollect.api.annotation.LogCollect;
 import com.logcollect.api.config.LogCollectConfigSource;
-import com.logcollect.api.enums.CollectMode;
-import com.logcollect.api.enums.DegradeStorage;
-import com.logcollect.api.enums.LogFramework;
+import com.logcollect.api.enums.*;
 import com.logcollect.api.format.LogLineDefaults;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.core.format.PatternCleaner;
@@ -115,6 +113,8 @@ public class LogCollectConfigResolver {
         // 第①级：全局（最高优先）
         Map<String, String> globalProperties = loadGlobalProperties();
         mergeFromProperties(config, globalProperties);
+
+        persistResolvedProperties(configMethodKey, methodProperties, globalProperties);
         return config;
     }
 
@@ -241,8 +241,11 @@ public class LogCollectConfigResolver {
                 if (props != null && !props.isEmpty()) {
                     merged.putAll(props);
                 }
-            } catch (Throwable t) {
-                LogCollectInternalLogger.warn("Load global properties failed from {}", source.getType(), t);
+            } catch (Exception e) {
+                LogCollectInternalLogger.warn("Load global properties failed from {}", source.getType(), e);
+            } catch (Error e) {
+                LogCollectInternalLogger.error("Load global properties failed with fatal error from {}", source.getType(), e);
+                throw e;
             }
         }
         if (!merged.isEmpty()) {
@@ -266,8 +269,11 @@ public class LogCollectConfigResolver {
                 if (props != null && !props.isEmpty()) {
                     merged.putAll(props);
                 }
-            } catch (Throwable t) {
-                LogCollectInternalLogger.warn("Load method properties failed from {}", source.getType(), t);
+            } catch (Exception e) {
+                LogCollectInternalLogger.warn("Load method properties failed from {}", source.getType(), e);
+            } catch (Error e) {
+                LogCollectInternalLogger.error("Load method properties failed with fatal error from {}", source.getType(), e);
+                throw e;
             }
         }
         if (!merged.isEmpty()) {
@@ -331,11 +337,43 @@ public class LogCollectConfigResolver {
                         result.put(GLOBAL_PREFIX + entry.getKey(), entry.getValue());
                     }
                 }
-            } catch (Throwable t) {
-                LogCollectInternalLogger.warn("Load config source failed: {}", source.getType(), t);
+            } catch (Exception e) {
+                LogCollectInternalLogger.warn("Load config source failed: {}", source.getType(), e);
+            } catch (Error e) {
+                LogCollectInternalLogger.error("Load config source failed with fatal error: {}", source.getType(), e);
+                throw e;
             }
         }
         return result;
+    }
+
+    private void persistResolvedProperties(String configMethodKey,
+                                           Map<String, String> methodProperties,
+                                           Map<String, String> globalProperties) {
+        if (cache == null) {
+            return;
+        }
+        try {
+            Map<String, String> merged = new LinkedHashMap<String, String>(cache.load());
+            if (globalProperties != null) {
+                for (Map.Entry<String, String> entry : globalProperties.entrySet()) {
+                    merged.put(GLOBAL_PREFIX + entry.getKey(), entry.getValue());
+                }
+            }
+            if (methodProperties != null && configMethodKey != null && !configMethodKey.isEmpty()) {
+                String methodPrefix = METHODS_PREFIX + configMethodKey + ".";
+                for (Map.Entry<String, String> entry : methodProperties.entrySet()) {
+                    merged.put(methodPrefix + entry.getKey(), entry.getValue());
+                }
+            }
+            if (!merged.isEmpty()) {
+                cache.save(merged);
+            }
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Persist resolved properties to local cache failed", e);
+        } catch (Error e) {
+            throw e;
+        }
     }
 
     private Map<String, String> loadGlobalPropertiesFromLocalCache() {
@@ -426,6 +464,21 @@ public class LogCollectConfigResolver {
         if (annotation.halfOpenSuccessThreshold() != 3) {
             config.setHalfOpenSuccessThreshold(annotation.halfOpenSuccessThreshold());
         }
+        if (annotation.totalLimitPolicy() != TotalLimitPolicy.STOP_COLLECTING) {
+            config.setTotalLimitPolicy(annotation.totalLimitPolicy());
+        }
+        if (annotation.maxTotalCollect() != 100000) {
+            config.setMaxTotalCollect(annotation.maxTotalCollect());
+        }
+        if (!"50MB".equalsIgnoreCase(annotation.maxTotalCollectBytes())) {
+            config.setMaxTotalCollectBytes(DataSizeParser.parseToBytes(annotation.maxTotalCollectBytes()));
+        }
+        if (annotation.samplingRate() != 1.0d) {
+            config.setSamplingRate(annotation.samplingRate());
+        }
+        if (annotation.samplingStrategy() != SamplingStrategy.RATE) {
+            config.setSamplingStrategy(annotation.samplingStrategy());
+        }
         if (annotation.blockWhenDegradeFail()) {
             config.setBlockWhenDegradeFail(true);
         }
@@ -484,6 +537,8 @@ public class LogCollectConfigResolver {
         applyInt(props, "degrade.recover-max-interval-seconds", config::setRecoverMaxIntervalSeconds);
         applyInt(props, "degrade.half-open-pass-count", config::setHalfOpenPassCount);
         applyInt(props, "degrade.half-open-success-threshold", config::setHalfOpenSuccessThreshold);
+        applyInt(props, "degrade.window-size", config::setDegradeWindowSize);
+        applyDouble(props, "degrade.failure-rate-threshold", config::setDegradeFailureRateThreshold);
         applyBoolean(props, "degrade.block-when-degrade-fail", config::setBlockWhenDegradeFail);
 
         applyString(props, "degrade.file.max-total-size", config::setDegradeFileMaxTotalSize);
@@ -498,6 +553,11 @@ public class LogCollectConfigResolver {
         applyInt(props, "handler-timeout-ms", config::setHandlerTimeoutMs);
         applyBoolean(props, "transaction-isolation", config::setTransactionIsolation);
         applyInt(props, "max-nesting-depth", config::setMaxNestingDepth);
+        applyInt(props, "max-total-collect", config::setMaxTotalCollect);
+        applyDataSize(props, "max-total-collect-bytes", config::setMaxTotalCollectBytes);
+        applyEnum(props, "total-limit-policy", TotalLimitPolicy.class, config::setTotalLimitPolicy);
+        applyDouble(props, "sampling-rate", config::setSamplingRate);
+        applyEnum(props, "sampling-strategy", SamplingStrategy.class, config::setSamplingStrategy);
 
         applyBoolean(props, "metrics.enabled", config::setEnableMetrics);
     }
@@ -516,8 +576,11 @@ public class LogCollectConfigResolver {
                     globalSwitch.onConfigChange(Boolean.parseBoolean(globalProps.get("enabled")));
                     return;
                 }
-            } catch (Throwable t) {
-                LogCollectInternalLogger.warn("Sync global enabled from {} failed", source.getType(), t);
+            } catch (Exception e) {
+                LogCollectInternalLogger.warn("Sync global enabled from {} failed", source.getType(), e);
+            } catch (Error e) {
+                LogCollectInternalLogger.error("Sync global enabled from {} failed with fatal error", source.getType(), e);
+                throw e;
             }
         }
     }
@@ -535,8 +598,10 @@ public class LogCollectConfigResolver {
             String cleaned = PatternCleaner.clean(rawPattern);
             String validated = PatternValidator.validateAndClean(cleaned);
             LogLineDefaults.setDetectedPattern(validated);
-        } catch (Throwable t) {
-            LogCollectInternalLogger.debug("Sync global log-line-pattern failed: {}", t.getMessage());
+        } catch (Exception e) {
+            LogCollectInternalLogger.debug("Sync global log-line-pattern failed: {}", e.getMessage());
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -583,6 +648,10 @@ public class LogCollectConfigResolver {
         void accept(long value);
     }
 
+    private interface DoubleConsumer {
+        void accept(double value);
+    }
+
     private interface StringConsumer {
         void accept(String value);
     }
@@ -617,6 +686,17 @@ public class LogCollectConfigResolver {
         try {
             consumer.accept(DataSizeParser.parseToBytes(value));
         } catch (IllegalArgumentException ignored) {
+        }
+    }
+
+    private void applyDouble(Map<String, String> props, String key, DoubleConsumer consumer) {
+        String value = props.get(key);
+        if (value == null) {
+            return;
+        }
+        try {
+            consumer.accept(Double.parseDouble(value));
+        } catch (NumberFormatException ignored) {
         }
     }
 
@@ -681,7 +761,9 @@ public class LogCollectConfigResolver {
                 method.invoke(metrics, args);
                 return;
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
+        } catch (Error e) {
+            throw e;
         }
     }
 

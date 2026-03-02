@@ -23,9 +23,11 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 @RestControllerEndpoint(id = "logcollect")
 @ConditionalOnClass(name = "org.springframework.boot.actuate.endpoint.annotation.Endpoint")
@@ -42,8 +44,9 @@ public class LogCollectManagementEndpoint {
     private final GlobalBufferMemoryManager bufferMemoryManager;
     private final LogCollectGlobalSwitch globalSwitch;
     private final LogCollectMetrics metrics;
+    private final LogCollectManagementAuditLogger auditLogger;
 
-    private final AtomicLong lastRefreshTime = new AtomicLong(0);
+    private final AtomicReference<Instant> lastRefreshTime = new AtomicReference<Instant>(Instant.EPOCH);
     private final AtomicLong lastForceCleanupTime = new AtomicLong(0);
 
     public LogCollectManagementEndpoint(
@@ -53,7 +56,8 @@ public class LogCollectManagementEndpoint {
             @Autowired(required = false) DegradeFileManager degradeFileManager,
             @Autowired(required = false) GlobalBufferMemoryManager bufferMemoryManager,
             LogCollectGlobalSwitch globalSwitch,
-            @Autowired(required = false) LogCollectMetrics metrics) {
+            @Autowired(required = false) LogCollectMetrics metrics,
+            @Autowired(required = false) LogCollectManagementAuditLogger auditLogger) {
         this.circuitBreakerRegistry = circuitBreakerRegistry;
         this.configResolver = configResolver;
         this.configSources = configSources != null ? configSources : Collections.<LogCollectConfigSource>emptyList();
@@ -61,6 +65,7 @@ public class LogCollectManagementEndpoint {
         this.bufferMemoryManager = bufferMemoryManager;
         this.globalSwitch = globalSwitch;
         this.metrics = metrics;
+        this.auditLogger = auditLogger;
     }
 
     @GetMapping("/status")
@@ -129,6 +134,9 @@ public class LogCollectManagementEndpoint {
 
         result.put("configCacheSize", configResolver.getCacheSize());
         result.put("lastConfigRefreshTime", configResolver.getLastRefreshTimeFormatted());
+        if (auditLogger != null) {
+            result.put("managementAuditFile", auditLogger.getAuditFilePath());
+        }
 
         if (metrics != null) {
             result.put("activeCollections", metrics.getActiveCollections());
@@ -175,6 +183,7 @@ public class LogCollectManagementEndpoint {
 
             LogCollectInternalLogger.info("Circuit breaker manually reset: method={}, previousState={}",
                     normalized, previousState);
+            audit("circuitBreakerReset", true, "method=" + normalized + ", previous=" + previousState.name());
 
             return ResponseEntity.ok(result);
         }
@@ -200,21 +209,24 @@ public class LogCollectManagementEndpoint {
         result.put("resetTime", Instant.now().toString());
 
         LogCollectInternalLogger.info("All circuit breakers manually reset, count={}", resetDetails.size());
+        audit("circuitBreakerReset", true, "method=ALL,count=" + resetDetails.size());
 
         return ResponseEntity.ok(result);
     }
 
     @PostMapping("/refreshConfig")
     public ResponseEntity<Map<String, Object>> refreshConfig() {
-        long now = System.currentTimeMillis();
-        long last = lastRefreshTime.get();
-        if (now - last < REFRESH_MIN_INTERVAL_MS) {
-            long waitSeconds = (REFRESH_MIN_INTERVAL_MS - (now - last)) / 1000 + 1;
+        Instant now = Instant.now();
+        Instant last = lastRefreshTime.get();
+        if (Duration.between(last, now).toMillis() < REFRESH_MIN_INTERVAL_MS
+                || !lastRefreshTime.compareAndSet(last, now)) {
+            long waitSeconds = Math.max(1L,
+                    (REFRESH_MIN_INTERVAL_MS - Duration.between(last, now).toMillis()) / 1000 + 1);
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("error", "Too frequent, please wait " + waitSeconds + " seconds");
+            audit("refreshConfig", false, "too_frequent");
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(result);
         }
-        lastRefreshTime.set(now);
 
         Map<String, Object> result = new LinkedHashMap<String, Object>();
 
@@ -231,10 +243,12 @@ public class LogCollectManagementEndpoint {
                 } else {
                     sr.put("status", "unavailable");
                 }
-            } catch (Throwable t) {
+            } catch (Exception t) {
                 sr.put("status", "error");
                 sr.put("error", t.getMessage());
                 LogCollectInternalLogger.warn("Config source refresh failed: {}", source.getType(), t);
+            } catch (Error e) {
+                throw e;
             }
             sourceResults.add(sr);
         }
@@ -247,14 +261,17 @@ public class LogCollectManagementEndpoint {
         try {
             configResolver.saveToLocalCache();
             result.put("localCacheSaved", true);
-        } catch (Throwable t) {
+        } catch (Exception t) {
             result.put("localCacheSaved", false);
             result.put("localCacheError", t.getMessage());
+        } catch (Error e) {
+            throw e;
         }
 
         result.put("refreshTime", Instant.now().toString());
 
         LogCollectInternalLogger.info("Config manually refreshed, cacheClearedCount={}", clearedCount);
+        audit("refreshConfig", true, "cacheCleared=" + clearedCount);
 
         return ResponseEntity.ok(result);
     }
@@ -296,6 +313,7 @@ public class LogCollectManagementEndpoint {
 
                 LogCollectInternalLogger.warn("Force cleanup all degrade files: deleted={}, freedBytes={}",
                         cleanedCount, cleanedBytes);
+                audit("cleanupDegradeFiles", true, "force=true,deleted=" + cleanedCount);
             } else {
                 DegradeFileManager.CleanupResult cleanup = degradeFileManager.cleanExpiredFiles();
                 cleanedCount = cleanup.getDeletedCount();
@@ -304,6 +322,7 @@ public class LogCollectManagementEndpoint {
 
                 LogCollectInternalLogger.info("TTL cleanup degrade files: deleted={}, freedBytes={}",
                         cleanedCount, cleanedBytes);
+                audit("cleanupDegradeFiles", true, "force=false,deleted=" + cleanedCount);
             }
 
             result.put("before", buildFileStats(beforeCount, beforeBytes));
@@ -318,10 +337,13 @@ public class LogCollectManagementEndpoint {
             result.put("diskFreeSpaceAfter", degradeFileManager.getDiskFreeSpaceHuman());
             result.put("cleanupTime", Instant.now().toString());
 
-        } catch (Throwable t) {
+        } catch (Exception t) {
             result.put("error", "Cleanup failed: " + t.getMessage());
             LogCollectInternalLogger.error("Degrade file cleanup failed", t);
+            audit("cleanupDegradeFiles", false, "error=" + t.getClass().getSimpleName());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
+        } catch (Error e) {
+            throw e;
         }
 
         return ResponseEntity.ok(result);
@@ -341,11 +363,20 @@ public class LogCollectManagementEndpoint {
             } else {
                 LogCollectInternalLogger.info("LogCollect globally ENABLED via management endpoint");
             }
+            audit("setEnabled", true, "value=" + value);
         } else {
             result.put("message", "No change, already " + (value ? "enabled" : "disabled"));
+            audit("setEnabled", true, "noop,value=" + value);
         }
 
         return ResponseEntity.ok(result);
+    }
+
+    private void audit(String action, boolean success, String detail) {
+        if (auditLogger == null) {
+            return;
+        }
+        auditLogger.audit(action, null, null, success, detail);
     }
 
     private Map<String, Object> buildFileStats(long count, long bytes) {

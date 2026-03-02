@@ -112,11 +112,11 @@ public final class LogCollectContextUtils {
         if (executor == null) {
             return null;
         }
+        if (executor instanceof LogCollectWrappedExecutor) {
+            return executor;
+        }
         if (executor instanceof ScheduledExecutorService) {
             return wrapScheduledExecutorService((ScheduledExecutorService) executor);
-        }
-        if (executor instanceof LogCollectExecutorServiceWrapper) {
-            return executor;
         }
         return new LogCollectExecutorServiceWrapper(executor);
     }
@@ -131,7 +131,7 @@ public final class LogCollectContextUtils {
         if (executor == null) {
             return null;
         }
-        if (executor instanceof LogCollectScheduledExecutorServiceWrapper) {
+        if (executor instanceof LogCollectWrappedExecutor) {
             return executor;
         }
         return new LogCollectScheduledExecutorServiceWrapper(executor);
@@ -147,12 +147,10 @@ public final class LogCollectContextUtils {
         if (executor == null) {
             return null;
         }
-        return new Executor() {
-            @Override
-            public void execute(Runnable command) {
-                executor.execute(wrapRunnable(command));
-            }
-        };
+        if (executor instanceof LogCollectWrappedExecutor) {
+            return executor;
+        }
+        return new LogCollectExecutorWrapper(executor);
     }
 
     /**

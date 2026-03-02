@@ -1,8 +1,6 @@
 package com.logcollect.api.model;
 
-import com.logcollect.api.enums.CollectMode;
-import com.logcollect.api.enums.DegradeStorage;
-import com.logcollect.api.enums.LogFramework;
+import com.logcollect.api.enums.*;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.masker.LogMasker;
 import com.logcollect.api.sanitizer.LogSanitizer;
@@ -37,6 +35,8 @@ public class LogCollectConfig {
     private int recoverMaxIntervalSeconds = 300;
     private int halfOpenPassCount = 3;
     private int halfOpenSuccessThreshold = 3;
+    private int degradeWindowSize = 10;
+    private double degradeFailureRateThreshold = 0.6d;
     private boolean blockWhenDegradeFail = false;
 
     // ===== 安全防护配置 =====
@@ -56,6 +56,11 @@ public class LogCollectConfig {
     private int handlerTimeoutMs = 5000;
     private boolean transactionIsolation = false;
     private int maxNestingDepth = 10;
+    private int maxTotalCollect = 100000;
+    private long maxTotalCollectBytes = 50L * 1024L * 1024L;
+    private TotalLimitPolicy totalLimitPolicy = TotalLimitPolicy.STOP_COLLECTING;
+    private double samplingRate = 1.0d;
+    private SamplingStrategy samplingStrategy = SamplingStrategy.RATE;
 
     // ===== 可观测性配置 =====
     private boolean enableMetrics = true;
@@ -226,6 +231,22 @@ public class LogCollectConfig {
         this.halfOpenSuccessThreshold = halfOpenSuccessThreshold;
     }
 
+    public int getDegradeWindowSize() {
+        return degradeWindowSize;
+    }
+
+    public void setDegradeWindowSize(int degradeWindowSize) {
+        this.degradeWindowSize = degradeWindowSize;
+    }
+
+    public double getDegradeFailureRateThreshold() {
+        return degradeFailureRateThreshold;
+    }
+
+    public void setDegradeFailureRateThreshold(double degradeFailureRateThreshold) {
+        this.degradeFailureRateThreshold = degradeFailureRateThreshold;
+    }
+
     public boolean isBlockWhenDegradeFail() {
         return blockWhenDegradeFail;
     }
@@ -328,6 +349,46 @@ public class LogCollectConfig {
 
     public void setMaxNestingDepth(int maxNestingDepth) {
         this.maxNestingDepth = maxNestingDepth;
+    }
+
+    public int getMaxTotalCollect() {
+        return maxTotalCollect;
+    }
+
+    public void setMaxTotalCollect(int maxTotalCollect) {
+        this.maxTotalCollect = maxTotalCollect;
+    }
+
+    public long getMaxTotalCollectBytes() {
+        return maxTotalCollectBytes;
+    }
+
+    public void setMaxTotalCollectBytes(long maxTotalCollectBytes) {
+        this.maxTotalCollectBytes = maxTotalCollectBytes;
+    }
+
+    public TotalLimitPolicy getTotalLimitPolicy() {
+        return totalLimitPolicy;
+    }
+
+    public void setTotalLimitPolicy(TotalLimitPolicy totalLimitPolicy) {
+        this.totalLimitPolicy = totalLimitPolicy;
+    }
+
+    public double getSamplingRate() {
+        return samplingRate;
+    }
+
+    public void setSamplingRate(double samplingRate) {
+        this.samplingRate = samplingRate;
+    }
+
+    public SamplingStrategy getSamplingStrategy() {
+        return samplingStrategy;
+    }
+
+    public void setSamplingStrategy(SamplingStrategy samplingStrategy) {
+        this.samplingStrategy = samplingStrategy;
     }
 
     public boolean isEnableMetrics() {

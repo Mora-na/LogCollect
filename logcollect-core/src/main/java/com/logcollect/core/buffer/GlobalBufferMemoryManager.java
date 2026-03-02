@@ -137,7 +137,9 @@ public class GlobalBufferMemoryManager {
                 method.invoke(target, utilization);
                 break MethodLoop;
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
+        } catch (Error e) {
+            throw e;
         }
     }
 }

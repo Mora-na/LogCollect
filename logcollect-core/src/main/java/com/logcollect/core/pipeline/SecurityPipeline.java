@@ -103,7 +103,14 @@ public class SecurityPipeline {
         if (key == null || key.isEmpty()) {
             return null;
         }
-        String normalized = key.length() > 128 ? key.substring(0, 128) : key;
+        String normalized = key;
+        if (sanitizer != null) {
+            normalized = sanitizer.sanitize(normalized);
+        }
+        normalized = normalized == null ? null : (normalized.length() > 128 ? normalized.substring(0, 128) : normalized);
+        if (normalized == null || normalized.isEmpty()) {
+            return null;
+        }
         if (SAFE_MDC_KEY_PATTERN.matcher(normalized).matches()) {
             return normalized;
         }

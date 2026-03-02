@@ -7,13 +7,14 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.function.Supplier;
 
 /**
  * 日志降级写入熔断器。
  *
- * <p>当降级存储连续失败时进入 OPEN，恢复窗口到期后进入 HALF_OPEN 试探写入，
- * 连续成功达到阈值后回到 CLOSED。
+ * <p>当 CLOSED 状态下滑动窗口失败率达到阈值时进入 OPEN，
+ * 恢复窗口到期后进入 HALF_OPEN 试探写入，连续成功达到阈值后回到 CLOSED。
  */
 public class LogCollectCircuitBreaker {
     /**
@@ -33,11 +34,38 @@ public class LogCollectCircuitBreaker {
     private static final long DEFAULT_MAX_RECOVER_INTERVAL_MS = 300_000L;
     private static final int DEFAULT_HALF_OPEN_PASS_COUNT = 3;
     private static final int DEFAULT_HALF_OPEN_SUCCESS_THRESHOLD = 3;
+    private static final int DEFAULT_WINDOW_SIZE = 10;
+    private static final double DEFAULT_FAILURE_RATE_THRESHOLD = 0.6d;
+
+    private static final class RequestResult {
+        private final boolean success;
+        private final long timestamp;
+
+        private RequestResult(boolean success, long timestamp) {
+            this.success = success;
+            this.timestamp = timestamp;
+        }
+    }
+
+    private static final class WindowSnapshot {
+        private final int total;
+        private final int failures;
+        private final double failureRate;
+
+        private WindowSnapshot(int total, int failures) {
+            this.total = total;
+            this.failures = failures;
+            this.failureRate = total <= 0 ? 0.0d : ((double) failures / (double) total);
+        }
+    }
 
     private final AtomicReference<State> state = new AtomicReference<State>(State.CLOSED);
     private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
     private final AtomicInteger halfOpenSuccessCount = new AtomicInteger(0);
     private final AtomicInteger halfOpenPassedCount = new AtomicInteger(0);
+    private final AtomicInteger windowIndex = new AtomicInteger(0);
+    private volatile AtomicReferenceArray<RequestResult> window =
+            new AtomicReferenceArray<RequestResult>(DEFAULT_WINDOW_SIZE);
     private final AtomicLong lastFailureTime = new AtomicLong(0);
     private final AtomicLong currentRecoverIntervalMs = new AtomicLong(DEFAULT_RECOVER_INTERVAL_MS);
 
@@ -92,26 +120,33 @@ public class LogCollectCircuitBreaker {
      * 记录一次写入成功事件。
      */
     public void recordSuccess() {
+        LogCollectConfig config = safeConfig();
+        ensureWindowSize(config);
+
         State current = state.get();
         if (current == State.CLOSED) {
             consecutiveFailures.set(0);
+            recordWindowResult(true);
             return;
         }
 
         if (current == State.HALF_OPEN) {
             int success = halfOpenSuccessCount.incrementAndGet();
-            if (success >= safeConfig().getHalfOpenSuccessThreshold()) {
+            if (success >= config.getHalfOpenSuccessThreshold()) {
                 if (state.compareAndSet(State.HALF_OPEN, State.CLOSED)) {
                     consecutiveFailures.set(0);
                     halfOpenSuccessCount.set(0);
                     halfOpenPassedCount.set(0);
-                    currentRecoverIntervalMs.set(initialRecoverIntervalMs(safeConfig()));
+                    currentRecoverIntervalMs.set(initialRecoverIntervalMs(config));
+                    resetWindow();
                     LogCollectInternalLogger.info("CircuitBreaker -> CLOSED");
                     Runnable callback = recoveryCallback;
                     if (callback != null) {
                         try {
                             callback.run();
-                        } catch (Throwable ignored) {
+                        } catch (Exception ignored) {
+                        } catch (Error e) {
+                            throw e;
                         }
                     }
                 }
@@ -124,16 +159,25 @@ public class LogCollectCircuitBreaker {
      */
     public void recordFailure() {
         LogCollectConfig config = safeConfig();
+        ensureWindowSize(config);
         long now = System.currentTimeMillis();
         lastFailureTime.set(now);
 
         State current = state.get();
         if (current == State.CLOSED) {
             int failures = consecutiveFailures.incrementAndGet();
-            if (failures >= config.getDegradeFailThreshold()) {
+            recordWindowResult(false);
+            WindowSnapshot snapshot = snapshotWindow();
+            int minSamples = Math.max(1, config.getDegradeFailThreshold());
+            if (snapshot.total >= minSamples && snapshot.failureRate >= normalizeFailureRateThreshold(config)) {
                 if (state.compareAndSet(State.CLOSED, State.OPEN)) {
                     currentRecoverIntervalMs.set(initialRecoverIntervalMs(config));
-                    LogCollectInternalLogger.warn("CircuitBreaker -> OPEN, failures={}", failures);
+                    LogCollectInternalLogger.warn(
+                            "CircuitBreaker -> OPEN, failureRate={}({}/{}), threshold={}",
+                            String.format("%.2f", snapshot.failureRate),
+                            snapshot.failures,
+                            snapshot.total,
+                            normalizeFailureRateThreshold(config));
                 }
             }
             return;
@@ -156,12 +200,30 @@ public class LogCollectCircuitBreaker {
      * 手动重置熔断器到 CLOSED。
      */
     public void manualReset() {
+        LogCollectConfig config = safeConfig();
+        ensureWindowSize(config);
         state.set(State.CLOSED);
         consecutiveFailures.set(0);
         halfOpenSuccessCount.set(0);
         halfOpenPassedCount.set(0);
-        currentRecoverIntervalMs.set(initialRecoverIntervalMs(safeConfig()));
+        currentRecoverIntervalMs.set(initialRecoverIntervalMs(config));
         lastFailureTime.set(0);
+        resetWindow();
+    }
+
+    /**
+     * 立即强制打开熔断器。
+     *
+     * <p>用于边界层捕获到 {@link Error} 时快速熔断，避免系统处于不确定状态继续写入。
+     */
+    public void forceOpen() {
+        LogCollectConfig config = safeConfig();
+        ensureWindowSize(config);
+        state.set(State.OPEN);
+        lastFailureTime.set(System.currentTimeMillis());
+        halfOpenSuccessCount.set(0);
+        halfOpenPassedCount.set(0);
+        currentRecoverIntervalMs.set(initialRecoverIntervalMs(config));
     }
 
     /**
@@ -174,7 +236,7 @@ public class LogCollectCircuitBreaker {
     }
 
     /**
-     * 获取连续失败次数（CLOSED 阶段统计）。
+     * 获取连续失败次数（兼容指标，CLOSED 阶段统计）。
      *
      * @return 连续失败数
      */
@@ -224,6 +286,63 @@ public class LogCollectCircuitBreaker {
         return passed <= config.getHalfOpenPassCount();
     }
 
+    private void ensureWindowSize(LogCollectConfig config) {
+        int required = Math.max(1, config.getDegradeWindowSize());
+        AtomicReferenceArray<RequestResult> current = window;
+        if (current.length() == required) {
+            return;
+        }
+        synchronized (this) {
+            AtomicReferenceArray<RequestResult> latest = window;
+            if (latest.length() != required) {
+                window = new AtomicReferenceArray<RequestResult>(required);
+                windowIndex.set(0);
+            }
+        }
+    }
+
+    private void recordWindowResult(boolean success) {
+        AtomicReferenceArray<RequestResult> current = window;
+        int slot = Math.floorMod(windowIndex.getAndIncrement(), current.length());
+        current.set(slot, new RequestResult(success, System.currentTimeMillis()));
+    }
+
+    private WindowSnapshot snapshotWindow() {
+        AtomicReferenceArray<RequestResult> current = window;
+        int total = 0;
+        int failures = 0;
+        for (int i = 0; i < current.length(); i++) {
+            RequestResult result = current.get(i);
+            if (result == null) {
+                continue;
+            }
+            total++;
+            if (!result.success) {
+                failures++;
+            }
+        }
+        return new WindowSnapshot(total, failures);
+    }
+
+    private void resetWindow() {
+        AtomicReferenceArray<RequestResult> current = window;
+        for (int i = 0; i < current.length(); i++) {
+            current.set(i, null);
+        }
+        windowIndex.set(0);
+    }
+
+    private double normalizeFailureRateThreshold(LogCollectConfig config) {
+        double threshold = config.getDegradeFailureRateThreshold();
+        if (threshold <= 0.0d) {
+            return DEFAULT_FAILURE_RATE_THRESHOLD;
+        }
+        if (threshold > 1.0d) {
+            return 1.0d;
+        }
+        return threshold;
+    }
+
     private long applyJitter(long baseMs) {
         double jitter = 1.0 + (ThreadLocalRandom.current().nextDouble() * 0.4 - 0.2);
         return (long) (baseMs * jitter);
@@ -250,15 +369,27 @@ public class LogCollectCircuitBreaker {
             if (config.getHalfOpenSuccessThreshold() <= 0) {
                 config.setHalfOpenSuccessThreshold(DEFAULT_HALF_OPEN_SUCCESS_THRESHOLD);
             }
+            if (config.getDegradeWindowSize() <= 0) {
+                config.setDegradeWindowSize(DEFAULT_WINDOW_SIZE);
+            }
+            if (config.getDegradeFailureRateThreshold() <= 0.0d) {
+                config.setDegradeFailureRateThreshold(DEFAULT_FAILURE_RATE_THRESHOLD);
+            } else if (config.getDegradeFailureRateThreshold() > 1.0d) {
+                config.setDegradeFailureRateThreshold(1.0d);
+            }
             return config;
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
             LogCollectConfig defaults = LogCollectConfig.frameworkDefaults();
             defaults.setDegradeFailThreshold(DEFAULT_FAIL_THRESHOLD);
             defaults.setRecoverIntervalSeconds((int) (DEFAULT_RECOVER_INTERVAL_MS / 1000));
             defaults.setRecoverMaxIntervalSeconds((int) (DEFAULT_MAX_RECOVER_INTERVAL_MS / 1000));
             defaults.setHalfOpenPassCount(DEFAULT_HALF_OPEN_PASS_COUNT);
             defaults.setHalfOpenSuccessThreshold(DEFAULT_HALF_OPEN_SUCCESS_THRESHOLD);
+            defaults.setDegradeWindowSize(DEFAULT_WINDOW_SIZE);
+            defaults.setDegradeFailureRateThreshold(DEFAULT_FAILURE_RATE_THRESHOLD);
             return defaults;
+        } catch (Error e) {
+            throw e;
         }
     }
 

@@ -122,15 +122,14 @@ public class SingleModeBuffer implements LogCollectBuffer {
 
     @Override
     public void triggerFlush(LogCollectContext context, boolean isFinal) {
-        Runnable flushTask = () -> doTriggerFlush(context, isFinal);
         boolean asyncFlush = context != null
                 && context.getConfig() != null
                 && context.getConfig().isAsync()
                 && !isFinal;
         if (asyncFlush) {
-            AsyncFlushExecutor.submitOrRun(flushTask);
+            AsyncFlushExecutor.submitOrRun(new AsyncBufferFlushTask(context, false, false));
         } else {
-            flushTask.run();
+            doTriggerFlush(context, isFinal, false);
         }
     }
 
@@ -161,16 +160,28 @@ public class SingleModeBuffer implements LogCollectBuffer {
         return (maxCount > 0 && count.get() >= maxCount) || (maxBytes > 0 && bytes.get() >= maxBytes);
     }
 
-    private void doTriggerFlush(LogCollectContext context, boolean isFinal) {
+    private void doTriggerFlush(LogCollectContext context, boolean isFinal, boolean warnOnly) {
         if (!flushing.compareAndSet(false, true)) {
             return;
         }
         try {
             List<LogEntry> batch = drain();
             if (!batch.isEmpty()) {
+                if (warnOnly) {
+                    int originalSize = batch.size();
+                    batch = retainWarnOrAbove(batch);
+                    int dropped = originalSize - batch.size();
+                    if (dropped > 0 && context != null) {
+                        context.incrementDiscardedCount(dropped);
+                        metricCall(context, "incrementDiscarded",
+                                context.getMethodSignature(), "async_queue_full_low_level");
+                    }
+                }
+            }
+            if (!batch.isEmpty()) {
                 String methodKey = context == null ? "unknown" : context.getMethodSignature();
                 metricCall(context, "incrementFlush", methodKey, "SINGLE",
-                        isFinal ? "final" : "threshold");
+                        warnOnly ? "degraded" : (isFinal ? "final" : "threshold"));
                 flushBatch(context, batch);
                 if (context != null) {
                     context.incrementFlushCount();
@@ -259,29 +270,54 @@ public class SingleModeBuffer implements LogCollectBuffer {
 
     private void evictOldestUntilFit(LogCollectContext context, long incomingBytes) {
         while (policy.isOverflow(incomingBytes)) {
-            LogEntry evicted = queue.poll();
-            if (evicted == null) {
+            int toDrop = Math.max(1, count.get() / 10);
+            int actualDropped = 0;
+            long freedBytes = 0L;
+            for (int i = 0; i < toDrop; i++) {
+                LogEntry evicted = queue.poll();
+                if (evicted == null) {
+                    break;
+                }
+                freedBytes += evicted.estimateBytes();
+                actualDropped++;
+                if (!policy.isOverflow(incomingBytes)) {
+                    break;
+                }
+            }
+            if (actualDropped == 0) {
                 break;
             }
-            long evictedBytes = evicted.estimateBytes();
-            int remainingCount = count.decrementAndGet();
+            int remainingCount = count.addAndGet(-actualDropped);
             if (remainingCount < 0) {
                 count.set(0);
             }
-            long remainingBytes = bytes.addAndGet(-evictedBytes);
+            long remainingBytes = bytes.addAndGet(-freedBytes);
             if (remainingBytes < 0) {
                 bytes.set(0);
             }
             if (globalManager != null) {
-                globalManager.release(evictedBytes);
+                globalManager.release(freedBytes);
             }
-            policy.afterDrain(evictedBytes, 1);
-            policy.recordDropped();
+            policy.afterDrain(freedBytes, actualDropped);
+            policy.recordDropped(actualDropped);
             if (context != null) {
-                context.incrementDiscardedCount();
+                context.incrementDiscardedCount(actualDropped);
                 metricCall(context, "incrementDiscarded", context.getMethodSignature(), "buffer_full");
             }
         }
+    }
+
+    private List<LogEntry> retainWarnOrAbove(List<LogEntry> source) {
+        if (source == null || source.isEmpty()) {
+            return source;
+        }
+        List<LogEntry> kept = new ArrayList<LogEntry>(source.size());
+        for (LogEntry entry : source) {
+            if (entry != null && isHighLevel(entry.getLevel())) {
+                kept.add(entry);
+            }
+        }
+        return kept;
     }
 
     private LogCollectCircuitBreaker getBreaker(LogCollectContext context) {
@@ -316,8 +352,10 @@ public class SingleModeBuffer implements LogCollectBuffer {
                     reason,
                     config.getDegradeStorage(),
                     LocalDateTime.now()));
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LogCollectInternalLogger.warn("onDegrade callback failed", t);
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -383,7 +421,9 @@ public class SingleModeBuffer implements LogCollectBuffer {
                 }
                 return method.invoke(target, args);
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
+        } catch (Error e) {
+            throw e;
         }
         return null;
     }
@@ -433,7 +473,9 @@ public class SingleModeBuffer implements LogCollectBuffer {
                 method.invoke(target, args);
                 return true;
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
+        } catch (Error e) {
+            throw e;
         }
         return false;
     }
@@ -461,5 +503,39 @@ public class SingleModeBuffer implements LogCollectBuffer {
             return "global_memory_limit";
         }
         return "buffer_full";
+    }
+
+    private final class AsyncBufferFlushTask implements AsyncFlushExecutor.RejectedAwareTask {
+        private final LogCollectContext context;
+        private final boolean isFinal;
+        private final boolean warnOnly;
+
+        private AsyncBufferFlushTask(LogCollectContext context, boolean isFinal, boolean warnOnly) {
+            this.context = context;
+            this.isFinal = isFinal;
+            this.warnOnly = warnOnly;
+        }
+
+        @Override
+        public void run() {
+            doTriggerFlush(context, isFinal, warnOnly);
+        }
+
+        @Override
+        public Runnable downgradeForRetry() {
+            if (isFinal || warnOnly) {
+                return null;
+            }
+            return new AsyncBufferFlushTask(context, isFinal, true);
+        }
+
+        @Override
+        public void onDiscard(String reason) {
+            if (context != null) {
+                context.incrementDiscardedCount();
+                metricCall(context, "incrementDiscarded", context.getMethodSignature(), reason);
+            }
+            notifyDegrade(context, reason);
+        }
     }
 }

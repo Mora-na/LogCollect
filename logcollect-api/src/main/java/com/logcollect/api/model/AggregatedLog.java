@@ -8,6 +8,8 @@ import java.time.LocalDateTime;
  * <p>由缓冲区 flush 时构建，包含一段时间内所有格式化后的日志行拼接体。
  */
 public final class AggregatedLog {
+    /** 本次 flush 的唯一标识（UUID），用于幂等写入。 */
+    private final String flushId;
 
     /** 聚合后的完整日志文本（多行，由 formattedLine + separator 拼接） */
     private final String content;
@@ -37,13 +39,15 @@ public final class AggregatedLog {
      */
     private final boolean finalFlush;
 
-    public AggregatedLog(String content,
+    public AggregatedLog(String flushId,
+                         String content,
                          int entryCount,
                          long totalBytes,
                          String maxLevel,
                          LocalDateTime firstLogTime,
                          LocalDateTime lastLogTime,
                          boolean finalFlush) {
+        this.flushId = flushId;
         this.content = content;
         this.entryCount = entryCount;
         this.totalBytes = totalBytes;
@@ -51,6 +55,10 @@ public final class AggregatedLog {
         this.firstLogTime = firstLogTime;
         this.lastLogTime = lastLogTime;
         this.finalFlush = finalFlush;
+    }
+
+    public String getFlushId() {
+        return flushId;
     }
 
     public String getContent() {

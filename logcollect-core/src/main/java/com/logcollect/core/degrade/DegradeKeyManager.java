@@ -55,8 +55,10 @@ public class DegradeKeyManager {
                     return key;
                 }
             }
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn("Failed to load key providers", t);
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Failed to load key providers", e);
+        } catch (Error e) {
+            throw e;
         }
         return null;
     }
@@ -72,9 +74,11 @@ public class DegradeKeyManager {
                 return null;
             }
             return new SecretKeySpec(decoded, "AES");
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn("Failed to decode AES key", t);
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Failed to decode AES key", e);
             return null;
+        } catch (Error e) {
+            throw e;
         }
     }
 }

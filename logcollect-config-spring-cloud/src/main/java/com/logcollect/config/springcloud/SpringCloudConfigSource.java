@@ -120,11 +120,15 @@ public class SpringCloudConfigSource implements LogCollectConfigSource, Initiali
             for (Consumer<String> listener : listeners) {
                 try {
                     listener.accept("spring-cloud");
-                } catch (Throwable ignored) {
+                } catch (Exception ignored) {
+                } catch (Error e) {
+                    throw e;
                 }
             }
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LogCollectInternalLogger.warn("Refresh spring-cloud config failed", t);
+        } catch (Error e) {
+            throw e;
         }
     }
 

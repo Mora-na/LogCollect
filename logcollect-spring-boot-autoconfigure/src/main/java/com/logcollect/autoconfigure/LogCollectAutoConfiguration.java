@@ -115,8 +115,10 @@ public class LogCollectAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public LogCollectLifecycle logCollectLifecycle(LogCollectBufferRegistry registry) {
-        return new LogCollectLifecycle(registry);
+    public LogCollectLifecycle logCollectLifecycle(LogCollectBufferRegistry registry,
+                                                   LogCollectGlobalSwitch globalSwitch,
+                                                   ObjectProvider<LogCollectMetrics> metricsProvider) {
+        return new LogCollectLifecycle(registry, globalSwitch, metricsProvider.getIfAvailable(), 15_000L);
     }
 
     @Bean

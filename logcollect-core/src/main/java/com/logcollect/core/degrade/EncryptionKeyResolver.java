@@ -36,7 +36,9 @@ public final class EncryptionKeyResolver {
                             provider.getClass().getSimpleName());
                     return key;
                 }
-            } catch (Throwable ignored) {
+            } catch (Exception ignored) {
+            } catch (Error e) {
+                throw e;
             }
         }
 
@@ -56,7 +58,7 @@ public final class EncryptionKeyResolver {
                 ? null
                 : applicationContext.getEnvironment().getProperty("logcollect.global.degrade.file.encrypt-key");
         if (configKey != null && !configKey.isEmpty()) {
-            if (isProductionProfile(activeProfiles)) {
+            if (isProductionEnvironment(activeProfiles)) {
                 LogCollectInternalLogger.error(
                         "SECURITY: degrade file encryption key from config is rejected in production profile. "
                                 + "Use KMS/environment variable/Vault instead.");
@@ -94,25 +96,33 @@ public final class EncryptionKeyResolver {
             return Base64.getDecoder().decode(String.valueOf(key));
         } catch (ClassNotFoundException ignored) {
             return null;
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn("Resolve key from Spring Vault failed", t);
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Resolve key from Spring Vault failed", e);
             return null;
+        } catch (Error e) {
+            throw e;
         }
     }
 
-    private static boolean isProductionProfile(String[] profiles) {
-        if (profiles == null || profiles.length == 0) {
-            return false;
-        }
-        for (String profile : profiles) {
-            if (profile == null) {
-                continue;
+    private static boolean isProductionEnvironment(String[] profiles) {
+        boolean hasProductionProfile = false;
+        boolean hasExplicitDevTest = false;
+        if (profiles != null) {
+            for (String profile : profiles) {
+                if (profile == null) {
+                    continue;
+                }
+                String p = profile.trim().toLowerCase();
+                if (p.matches(".*(prod|production|prd).*")) {
+                    hasProductionProfile = true;
+                }
+                if (p.matches(".*(dev|development|test|local|staging).*")) {
+                    hasExplicitDevTest = true;
+                }
             }
-            String p = profile.toLowerCase();
-            if (p.contains("prod") || p.contains("production") || p.contains("prd")) {
-                return true;
-            }
         }
-        return false;
+        boolean hasK8sEnv = System.getenv("KUBERNETES_SERVICE_HOST") != null;
+        boolean hasCloudFoundry = System.getenv("VCAP_APPLICATION") != null;
+        return hasProductionProfile || hasK8sEnv || hasCloudFoundry || !hasExplicitDevTest;
     }
 }

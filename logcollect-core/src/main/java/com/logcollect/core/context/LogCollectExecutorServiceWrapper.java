@@ -10,7 +10,7 @@ import java.util.concurrent.*;
  * <p>对提交入口统一做上下文包装，确保线程池任务能继承父线程 LogCollect 上下文。
  * 线程池生命周期控制（shutdown/awaitTermination）完全委托给原始线程池。
  */
-public class LogCollectExecutorServiceWrapper implements ExecutorService {
+public class LogCollectExecutorServiceWrapper implements ExecutorService, LogCollectWrappedExecutor {
     /** 原始线程池。 */
     private final ExecutorService delegate;
 

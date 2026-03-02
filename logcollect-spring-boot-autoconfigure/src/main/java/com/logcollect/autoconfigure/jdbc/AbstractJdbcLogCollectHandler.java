@@ -29,7 +29,18 @@ public abstract class AbstractJdbcLogCollectHandler implements LogCollectHandler
     }
 
     @Override
-    public void flushAggregatedLog(LogCollectContext context, AggregatedLog aggregatedLog) {
+    public final void flushAggregatedLog(LogCollectContext context, AggregatedLog aggregatedLog) {
+        if (aggregatedLog == null) {
+            return;
+        }
+        String flushId = aggregatedLog.getFlushId();
+        if (flushId != null && !flushId.isEmpty() && existsFlushId(flushId)) {
+            return;
+        }
+        doFlushAggregatedLog(context, aggregatedLog);
+    }
+
+    protected void doFlushAggregatedLog(LogCollectContext context, AggregatedLog aggregatedLog) {
         Map<String, Object> params = new LinkedHashMap<String, Object>();
         params.put("trace_id", context == null ? null : context.getTraceId());
         params.put("content", aggregatedLog.getContent());
@@ -38,6 +49,16 @@ public abstract class AbstractJdbcLogCollectHandler implements LogCollectHandler
         params.put("is_final", aggregatedLog.isFinalFlush());
         params.put("last_time", aggregatedLog.getLastLogTime());
         insertWithParams(tableName(), params);
+    }
+
+    /**
+     * 幂等校验扩展点：子类可按 flushId 判断是否已写入。
+     *
+     * @param flushId flush 唯一标识
+     * @return true 表示已处理，当前 flush 将被跳过
+     */
+    protected boolean existsFlushId(String flushId) {
+        return false;
     }
 
     protected abstract String tableName();

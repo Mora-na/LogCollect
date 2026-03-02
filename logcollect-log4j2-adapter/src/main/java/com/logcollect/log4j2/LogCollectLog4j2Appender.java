@@ -1,12 +1,15 @@
 package com.logcollect.log4j2;
 
 import com.logcollect.api.enums.CollectMode;
+import com.logcollect.api.enums.SamplingStrategy;
+import com.logcollect.api.enums.TotalLimitPolicy;
 import com.logcollect.api.exception.LogCollectDegradeException;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.masker.LogMasker;
 import com.logcollect.api.model.*;
 import com.logcollect.api.sanitizer.LogSanitizer;
 import com.logcollect.core.buffer.AsyncFlushExecutor;
+import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.buffer.LogCollectBuffer;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.context.LogCollectContextManager;
@@ -32,11 +35,16 @@ import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Plugin(name = "LogCollect", category = Core.CATEGORY_NAME, elementType = Appender.ELEMENT_TYPE)
 public class LogCollectLog4j2Appender extends AbstractAppender {
 
     private static final String MDC_KEY = LogCollectContextManager.TRACE_ID_KEY;
+    private static final String INTERNAL_LOGGER_PREFIX = "com.logcollect.internal";
+    private static final String INTERNAL_LOGGER_PREFIX_V2 = "io.github.morana.logcollect.internal";
 
     private volatile SecurityComponentRegistry securityRegistry;
     private volatile Object metrics;
@@ -64,18 +72,21 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
     public void append(LogEvent event) {
         LogCollectContext context = null;
         try {
-            String traceId = event.getContextData().getValue(MDC_KEY);
-            if (traceId == null) {
+            String mdcTraceId = event.getContextData().getValue(MDC_KEY);
+            if (mdcTraceId == null || mdcTraceId.isEmpty()) {
                 return;
             }
             context = LogCollectContextManager.current();
-            if (context == null) {
+            if (context == null || !mdcTraceId.equals(context.getTraceId())) {
                 return;
             }
 
             LogCollectConfig config = context.getConfig();
             String methodKey = context.getMethodSignature();
             String loggerName = copyString(event.getLoggerName());
+            if (isInternalLogger(loggerName)) {
+                return;
+            }
             String level = event.getLevel() == null ? "INFO" : event.getLevel().toString();
             LogCollectDiag.debug("Appender received event: logger=%s level=%s", loggerName, level);
 
@@ -119,11 +130,16 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             LogEntry entry = securityProcess(config, methodKey, rawEntry, context);
             metricCall(context, "stopSecurityTimer", securityTimer, methodKey);
 
-            metricCall(context, "incrementCollected", methodKey, level, context.getCollectMode().name());
+            if (!allowByTotalLimitAndSampling(context, entry, methodKey)) {
+                return;
+            }
 
             Object buf = context.getBuffer();
             if (config.isUseBuffer() && buf instanceof LogCollectBuffer) {
-                ((LogCollectBuffer) buf).offer(context, entry);
+                boolean accepted = ((LogCollectBuffer) buf).offer(context, entry);
+                if (accepted) {
+                    metricCall(context, "incrementCollected", methodKey, level, context.getCollectMode().name());
+                }
             } else {
                 handleDirect(context, entry, methodKey);
             }
@@ -218,6 +234,134 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         return 0;
     }
 
+    private boolean isInternalLogger(String loggerName) {
+        if (loggerName == null) {
+            return false;
+        }
+        return loggerName.startsWith(INTERNAL_LOGGER_PREFIX)
+                || loggerName.startsWith(INTERNAL_LOGGER_PREFIX_V2);
+    }
+
+    private boolean allowByTotalLimitAndSampling(LogCollectContext context, LogEntry entry, String methodKey) {
+        LogCollectConfig config = context.getConfig();
+        long estimatedBytes = entry == null ? 0L : entry.estimateBytes();
+        String level = entry == null ? "INFO" : entry.getLevel();
+
+        if (isOverTotalLimit(context, config, estimatedBytes)) {
+            TotalLimitPolicy policy = config.getTotalLimitPolicy() == null
+                    ? TotalLimitPolicy.STOP_COLLECTING
+                    : config.getTotalLimitPolicy();
+            if (policy == TotalLimitPolicy.DOWNGRADE_LEVEL) {
+                if (!isWarnOrAbove(level)) {
+                    markDiscard(context, methodKey, "total_limit_downgrade");
+                    return false;
+                }
+            } else if (policy == TotalLimitPolicy.SAMPLE) {
+                if (!shouldSample(context, config, level, true)) {
+                    markDiscard(context, methodKey, "total_limit_sampled");
+                    return false;
+                }
+            } else {
+                markDiscard(context, methodKey, "total_limit_reached");
+                return false;
+            }
+        }
+
+        if (!shouldSample(context, config, level, false)) {
+            markDiscard(context, methodKey, "sampled_out");
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isOverTotalLimit(LogCollectContext context, LogCollectConfig config, long nextBytes) {
+        int maxTotalCollect = config == null ? 0 : config.getMaxTotalCollect();
+        if (maxTotalCollect > 0 && context.getTotalCollectedCount() >= maxTotalCollect) {
+            return true;
+        }
+        long maxTotalCollectBytes = config == null ? 0L : config.getMaxTotalCollectBytes();
+        return maxTotalCollectBytes > 0
+                && context.getTotalCollectedBytes() + Math.max(0L, nextBytes) > maxTotalCollectBytes;
+    }
+
+    private boolean shouldSample(LogCollectContext context,
+                                 LogCollectConfig config,
+                                 String level,
+                                 boolean totalLimitSampling) {
+        if (config == null) {
+            return true;
+        }
+        double rate = normalizeSamplingRate(config.getSamplingRate());
+        if (!totalLimitSampling && rate >= 1.0d) {
+            return true;
+        }
+        if (rate <= 0.0d) {
+            return false;
+        }
+        SamplingStrategy strategy = config.getSamplingStrategy() == null
+                ? SamplingStrategy.RATE
+                : config.getSamplingStrategy();
+        switch (strategy) {
+            case COUNT:
+                return shouldSampleByCount(context, rate);
+            case ADAPTIVE:
+                return shouldSampleAdaptive(context, level, rate);
+            case RATE:
+            default:
+                return ThreadLocalRandom.current().nextDouble() < rate;
+        }
+    }
+
+    private boolean shouldSampleByCount(LogCollectContext context, double rate) {
+        AtomicLong counter = context.getAttribute("__sampling_counter", AtomicLong.class);
+        if (counter == null) {
+            counter = new AtomicLong(0L);
+            context.setAttribute("__sampling_counter", counter);
+        }
+        long current = counter.incrementAndGet();
+        int interval = (int) Math.max(1L, Math.round(1.0d / rate));
+        return current % interval == 0;
+    }
+
+    private boolean shouldSampleAdaptive(LogCollectContext context, String level, double rate) {
+        Object managerObj = context.getAttribute("__globalBufferManager");
+        double utilization = 0.0d;
+        if (managerObj instanceof GlobalBufferMemoryManager) {
+            utilization = ((GlobalBufferMemoryManager) managerObj).utilization();
+        }
+        if (utilization < 0.5d) {
+            return true;
+        }
+        if (utilization < 0.8d) {
+            double adaptiveRate = Math.min(0.5d, rate);
+            return ThreadLocalRandom.current().nextDouble() < adaptiveRate;
+        }
+        return isWarnOrAbove(level);
+    }
+
+    private double normalizeSamplingRate(double rawRate) {
+        if (Double.isNaN(rawRate) || rawRate <= 0.0d) {
+            return 0.0d;
+        }
+        if (rawRate >= 1.0d) {
+            return 1.0d;
+        }
+        return rawRate;
+    }
+
+    private void markDiscard(LogCollectContext context, String methodKey, String reason) {
+        context.incrementDiscardedCount();
+        metricCall(context, "incrementDiscarded", methodKey, reason);
+    }
+
+    private boolean isWarnOrAbove(String level) {
+        if (level == null) {
+            return false;
+        }
+        String v = level.toUpperCase();
+        return "WARN".equals(v) || "ERROR".equals(v) || "FATAL".equals(v);
+    }
+
     private void handleDirect(LogCollectContext context, LogEntry entry, String methodKey) {
         Runnable writeTask = () -> doHandleDirect(context, entry, methodKey);
         if (context.getConfig().isAsync()) {
@@ -232,8 +376,6 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         if (handler == null) {
             return;
         }
-        context.incrementCollectedCount();
-        context.addCollectedBytes(entry.estimateBytes());
         LogCollectCircuitBreaker breaker = getBreaker(context);
         if (breaker != null && !breaker.allowWrite()) {
             context.incrementDiscardedCount();
@@ -245,6 +387,9 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                     entry.getLevel());
             return;
         }
+        context.incrementCollectedCount();
+        context.addCollectedBytes(entry.estimateBytes());
+        metricCall(context, "incrementCollected", methodKey, entry.getLevel(), context.getCollectMode().name());
 
         Object persistTimer = metricCallWithResult(context, "startPersistTimer");
         try {
@@ -258,6 +403,7 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                         line = entry.getContent();
                     }
                     AggregatedLog agg = new AggregatedLog(
+                            UUID.randomUUID().toString(),
                             line == null ? "" : line,
                             1,
                             estimateStringBytes(line),

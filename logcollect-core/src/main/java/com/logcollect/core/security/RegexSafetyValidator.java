@@ -55,9 +55,11 @@ public final class RegexSafetyValidator {
             return true;
         } catch (PatternSyntaxException e) {
             return false;
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn("Regex validation error", t);
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Regex validation error", e);
             return false;
+        } catch (Error e) {
+            throw e;
         }
     }
 

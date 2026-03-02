@@ -39,8 +39,10 @@ public class LogCollectLocalConfigCache {
                 props.store(out, "logcollect cache");
             }
             Files.move(tmp, cacheFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LogCollectInternalLogger.warn("Failed to save local config cache", t);
+        } catch (Error e) {
+            throw e;
         }
     }
 

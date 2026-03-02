@@ -2,6 +2,8 @@ package com.logcollect.api.annotation;
 
 import com.logcollect.api.enums.CollectMode;
 import com.logcollect.api.enums.DegradeStorage;
+import com.logcollect.api.enums.SamplingStrategy;
+import com.logcollect.api.enums.TotalLimitPolicy;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.masker.LogMasker;
 import com.logcollect.api.sanitizer.LogSanitizer;
@@ -45,6 +47,11 @@ public @interface LogCollect {
     int handlerTimeoutMs() default 5000;
     boolean transactionIsolation() default false;
     int maxNestingDepth() default 10;
+    int maxTotalCollect() default 100000;
+    String maxTotalCollectBytes() default "50MB";
+    TotalLimitPolicy totalLimitPolicy() default TotalLimitPolicy.STOP_COLLECTING;
+    double samplingRate() default 1.0d;
+    SamplingStrategy samplingStrategy() default SamplingStrategy.RATE;
 
     // ===== 可观测性配置 =====
     boolean enableMetrics() default true;

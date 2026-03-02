@@ -111,8 +111,10 @@ public class ApolloLogCollectConfigSource implements LogCollectConfigSource, Ini
             this.cachedProperties = properties;
             notifyListeners();
             LogCollectInternalLogger.info("Apollo config refreshed, {} keys", properties.size());
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LogCollectInternalLogger.warn("Refresh Apollo config failed", t);
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -137,8 +139,10 @@ public class ApolloLogCollectConfigSource implements LogCollectConfigSource, Ini
                     });
             Method addChangeListener = config.getClass().getMethod("addChangeListener", listenerClass);
             addChangeListener.invoke(config, listener);
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LogCollectInternalLogger.warn("Register Apollo config listener failed", t);
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -166,7 +170,9 @@ public class ApolloLogCollectConfigSource implements LogCollectConfigSource, Ini
         for (Consumer<String> listener : listeners) {
             try {
                 listener.accept("apollo");
-            } catch (Throwable ignored) {
+            } catch (Exception ignored) {
+            } catch (Error e) {
+                throw e;
             }
         }
     }

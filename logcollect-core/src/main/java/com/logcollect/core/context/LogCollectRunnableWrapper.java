@@ -30,14 +30,10 @@ public class LogCollectRunnableWrapper implements Runnable {
         LogCollectContextManager.restoreSnapshot(snapshot);
         try {
             delegate.run();
-        } catch (Throwable t) {
-            if (t instanceof RuntimeException) {
-                throw (RuntimeException) t;
-            }
-            if (t instanceof Error) {
-                throw (Error) t;
-            }
-            throw new RuntimeException(t);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Error e) {
+            throw e;
         } finally {
             LogCollectContextManager.clearSnapshotContext();
         }

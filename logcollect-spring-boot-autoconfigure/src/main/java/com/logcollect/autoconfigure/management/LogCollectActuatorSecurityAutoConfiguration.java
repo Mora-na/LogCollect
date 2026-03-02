@@ -28,8 +28,7 @@ public class LogCollectActuatorSecurityAutoConfiguration {
                         .hasRole("ADMIN")
                         .requestMatchers(new AntPathRequestMatcher("/actuator/logcollect/**", "PUT"))
                         .hasRole("ADMIN")
-                        .anyRequest().authenticated())
-                .csrf(csrf -> csrf.disable());
+                        .anyRequest().authenticated());
         return http.build();
     }
 }

@@ -58,9 +58,11 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
                 }
             });
             LogCollectInternalLogger.info("LogCollect Nacos config source initialized. dataId={}, group={}", dataId, group);
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LogCollectInternalLogger.warn("Init Nacos config source failed", t);
             loadFromLocalCache();
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -131,9 +133,11 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
         } catch (NacosException e) {
             LogCollectInternalLogger.warn("Fetch Nacos config failed, fallback to local cache", e);
             loadFromLocalCache();
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LogCollectInternalLogger.warn("Refresh Nacos config failed", t);
             loadFromLocalCache();
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -157,8 +161,10 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
             saveToLocalCache(properties);
             notifyListeners();
             LogCollectInternalLogger.info("Nacos config changed, {} keys refreshed", properties.size());
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LogCollectInternalLogger.warn("Process Nacos config change failed", t);
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -180,7 +186,9 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
         for (Consumer<String> listener : listeners) {
             try {
                 listener.accept("nacos");
-            } catch (Throwable ignored) {
+            } catch (Exception ignored) {
+            } catch (Error e) {
+                throw e;
             }
         }
     }
@@ -201,8 +209,10 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
             try (FileOutputStream fos = new FileOutputStream(file)) {
                 toSave.store(fos, "LogCollect nacos cache " + LocalDateTime.now());
             }
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LogCollectInternalLogger.warn("Save Nacos local cache failed", t);
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -222,8 +232,10 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
                 properties.load(fis);
             }
             cachedProperties = properties;
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LogCollectInternalLogger.warn("Load Nacos local cache failed", t);
+        } catch (Error e) {
+            throw e;
         }
     }
 

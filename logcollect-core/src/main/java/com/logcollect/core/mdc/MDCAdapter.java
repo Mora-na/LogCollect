@@ -11,14 +11,18 @@ public final class MDCAdapter {
     public static void put(String key, String value) {
         try {
             MDC.put(key, value);
-        } catch (Throwable ignore) {
+        } catch (Exception ignore) {
+        } catch (Error e) {
+            throw e;
         }
     }
 
     public static void remove(String key) {
         try {
             MDC.remove(key);
-        } catch (Throwable ignore) {
+        } catch (Exception ignore) {
+        } catch (Error e) {
+            throw e;
         }
     }
 
@@ -26,15 +30,19 @@ public final class MDCAdapter {
         try {
             Map<String, String> map = MDC.getCopyOfContextMap();
             return map == null ? Collections.<String, String>emptyMap() : map;
-        } catch (Throwable ignore) {
+        } catch (Exception ignore) {
             return Collections.<String, String>emptyMap();
+        } catch (Error e) {
+            throw e;
         }
     }
 
     public static void setContextMap(Map<String, String> map) {
         try {
             MDC.setContextMap(map);
-        } catch (Throwable ignore) {
+        } catch (Exception ignore) {
+        } catch (Error e) {
+            throw e;
         }
     }
 }

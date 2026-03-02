@@ -44,9 +44,11 @@ public class LogProcessingPipeline {
                 result = masked;
             }
             return result;
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn("Security pipeline error, returning raw content", t);
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Security pipeline error, returning raw content", e);
             return rawContent;
+        } catch (Error e) {
+            throw e;
         }
     }
 }

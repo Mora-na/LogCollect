@@ -542,8 +542,10 @@ public class LogCollectContext {
             Class<?> manager = Class.forName("com.logcollect.core.context.LogCollectContextManager");
             java.lang.reflect.Method method = manager.getMethod(methodName, paramTypes);
             return method.invoke(null, args);
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
             return null;
+        } catch (Error e) {
+            throw e;
         }
     }
 

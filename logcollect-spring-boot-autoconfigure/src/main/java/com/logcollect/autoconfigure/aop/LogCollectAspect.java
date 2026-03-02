@@ -3,6 +3,7 @@ package com.logcollect.autoconfigure.aop;
 import com.logcollect.api.annotation.LogCollect;
 import com.logcollect.api.enums.CollectMode;
 import com.logcollect.api.exception.LogCollectDegradeException;
+import com.logcollect.api.exception.LogCollectException;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
@@ -24,9 +25,11 @@ import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Method;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -96,6 +99,10 @@ public class LogCollectAspect {
         if (!config.isEnabled()) {
             return pjp.proceed();
         }
+        if (LogCollectContextManager.depth() >= config.getMaxNestingDepth()) {
+            LogCollectInternalLogger.warn("Max nesting depth {} reached, skip", config.getMaxNestingDepth());
+            return pjp.proceed();
+        }
         String methodKey = MethodKeyResolver.toDisplayKey(method);
         LogCollectCircuitBreaker breaker = getOrCreateBreaker(methodKey, config);
 
@@ -109,10 +116,6 @@ public class LogCollectAspect {
             if (metrics != null && config.isEnableMetrics()) {
                 metrics.recordActiveCollectionStart();
                 metrics.registerCircuitBreakerGauge(methodKey, breaker);
-            }
-            if (LogCollectContextManager.depth() >= config.getMaxNestingDepth()) {
-                LogCollectInternalLogger.warn("Max nesting depth {} reached, skip", config.getMaxNestingDepth());
-                return pjp.proceed();
             }
             LogCollectContextManager.push(ctx);
             final LogCollectContext finalCtx = ctx;
@@ -129,6 +132,7 @@ public class LogCollectAspect {
                 metrics.recordHandlerDuration(methodKey, "before", System.currentTimeMillis() - beforeStart);
             }
         } catch (Throwable t) {
+            forceOpenIfError(breaker, t);
             LogCollectInternalLogger.error("LogCollect before phase error", t);
             frameworkWarn("Failed to start collecting, skip", t);
             notifyHandlerError(ctx, t, "before");
@@ -178,6 +182,7 @@ public class LogCollectAspect {
                 metrics.recordHandlerDuration(methodKey, "after", System.currentTimeMillis() - afterStart);
             }
         } catch (Throwable t) {
+            forceOpenIfError(breaker, t);
             LogCollectInternalLogger.error("LogCollect after phase error", t);
             frameworkWarn("Failed to flush, data may be lost", t);
             notifyHandlerError(ctx, t, "after");
@@ -239,6 +244,9 @@ public class LogCollectAspect {
         if (degradeFileManager != null) {
             context.setAttribute("__degradeFileManager", degradeFileManager);
         }
+        if (manager != null) {
+            context.setAttribute("__globalBufferManager", manager);
+        }
         if (metrics != null && config.isEnableMetrics()) {
             context.setAttribute("__metrics", metrics);
         }
@@ -270,33 +278,62 @@ public class LogCollectAspect {
                 && config.getHandlerClass() != LogCollectHandler.class) {
             handlerClass = config.getHandlerClass();
         }
-        if (handlerClass == null || handlerClass == LogCollectHandler.class) {
-            try {
-                return applicationContext.getBean(LogCollectHandler.class);
-            } catch (Throwable t) {
-                LogCollectContext parent = LogCollectContextManager.current();
-                if (parent != null && parent.getHandler() != null) {
-                    LogCollectInternalLogger.warn("Default handler resolve failed, fallback to parent handler: {}",
-                            parent.getHandler().getClass().getName());
-                    return parent.getHandler();
-                }
-                LogCollectInternalLogger.warn("No default LogCollectHandler bean available, fallback to Noop", t);
-                return new NoopLogCollectHandler();
-            }
+        if (handlerClass != null && handlerClass != LogCollectHandler.class) {
+            return resolveSpecifiedHandler(handlerClass);
         }
-        try {
-            return applicationContext.getBean(handlerClass);
-        } catch (Throwable t) {
-            try {
-                LogCollectInternalLogger.warn("Handler bean {} not found, fallback to reflective newInstance",
-                        handlerClass.getName(), t);
-                return handlerClass.newInstance();
-            } catch (Exception e) {
-                LogCollectInternalLogger.warn("Handler {} instantiate failed, fallback to Noop",
-                        handlerClass.getName(), e);
-                return new NoopLogCollectHandler();
-            }
+        return resolveDefaultHandler();
+    }
+
+    private LogCollectHandler resolveSpecifiedHandler(Class<? extends LogCollectHandler> handlerClass) {
+        Map<String, ? extends LogCollectHandler> candidates = applicationContext.getBeansOfType(handlerClass);
+        if (candidates.isEmpty()) {
+            throw new LogCollectException("Handler " + handlerClass.getName() + " not found");
         }
+        if (candidates.size() == 1) {
+            return candidates.values().iterator().next();
+        }
+        LogCollectHandler primaryHandler = resolvePrimaryHandler(candidates);
+        if (primaryHandler != null) {
+            return primaryHandler;
+        }
+        throw new LogCollectException("Multiple beans found for handler "
+                + handlerClass.getName() + ", please mark one bean with @Primary");
+    }
+
+    private LogCollectHandler resolveDefaultHandler() {
+        Map<String, LogCollectHandler> handlers = applicationContext.getBeansOfType(LogCollectHandler.class);
+        if (handlers.isEmpty()) {
+            LogCollectContext parent = LogCollectContextManager.current();
+            if (parent != null && parent.getHandler() != null) {
+                return parent.getHandler();
+            }
+            LogCollectInternalLogger.warn("No default LogCollectHandler bean available, fallback to Noop");
+            return new NoopLogCollectHandler();
+        }
+        if (handlers.size() == 1) {
+            return handlers.values().iterator().next();
+        }
+        LogCollectHandler primaryHandler = resolvePrimaryHandler(handlers);
+        if (primaryHandler != null) {
+            return primaryHandler;
+        }
+        throw new LogCollectException(
+                "Multiple LogCollectHandler found, specify @LogCollect(handler=...) or mark one bean as @Primary");
+    }
+
+    private LogCollectHandler resolvePrimaryHandler(Map<String, ? extends LogCollectHandler> handlers) {
+        LogCollectHandler primary = null;
+        for (Map.Entry<String, ? extends LogCollectHandler> entry : handlers.entrySet()) {
+            Primary annotation = applicationContext.findAnnotationOnBean(entry.getKey(), Primary.class);
+            if (annotation == null) {
+                continue;
+            }
+            if (primary != null) {
+                throw new LogCollectException("Multiple @Primary LogCollectHandler beans found");
+            }
+            primary = entry.getValue();
+        }
+        return primary;
     }
 
     private void closeBuffer(LogCollectContext ctx) {
@@ -355,6 +392,7 @@ public class LogCollectAspect {
             return null;
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() == null ? e : e.getCause();
+            forceOpenIfError(context, cause);
             if (shouldPropagateDegradeException(context, cause)) {
                 if (cause instanceof RuntimeException) {
                     throw (RuntimeException) cause;
@@ -368,6 +406,7 @@ public class LogCollectAspect {
             notifyHandlerError(context, cause, phase);
             return null;
         } catch (Throwable t) {
+            forceOpenIfError(context, t);
             if (shouldPropagateDegradeException(context, t)) {
                 if (t instanceof RuntimeException) {
                     throw (RuntimeException) t;
@@ -434,6 +473,23 @@ public class LogCollectAspect {
             return preferred.resolve();
         }
         return CollectMode.AGGREGATE;
+    }
+
+    private void forceOpenIfError(LogCollectCircuitBreaker breaker, Throwable throwable) {
+        if (!(throwable instanceof Error) || breaker == null) {
+            return;
+        }
+        breaker.forceOpen();
+    }
+
+    private void forceOpenIfError(LogCollectContext context, Throwable throwable) {
+        if (!(throwable instanceof Error) || context == null) {
+            return;
+        }
+        Object circuitBreaker = context.getCircuitBreaker();
+        if (circuitBreaker instanceof LogCollectCircuitBreaker) {
+            ((LogCollectCircuitBreaker) circuitBreaker).forceOpen();
+        }
     }
 
     private BoundedBufferPolicy.OverflowStrategy parseOverflowStrategy(String raw) {

@@ -113,6 +113,18 @@ public class BoundedBufferPolicy {
     }
 
     /**
+     * 记录多条丢弃事件。
+     *
+     * @param delta 丢弃数量
+     */
+    public void recordDropped(int delta) {
+        if (delta <= 0) {
+            return;
+        }
+        droppedCount.addAndGet(delta);
+    }
+
+    /**
      * 获取累计丢弃条数。
      *
      * @return 累计丢弃数

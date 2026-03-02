@@ -1,14 +1,20 @@
 package com.logcollect.autoconfigure.async;
 
+import com.logcollect.core.context.LogCollectContextUtils;
+import com.logcollect.core.context.LogCollectWrappedExecutor;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.task.TaskDecorator;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Component;
+
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 
 /**
  * Spring 线程池后置处理器。
@@ -35,6 +41,26 @@ public class LogCollectThreadPoolBPP implements BeanPostProcessor {
         }
         if (bean instanceof ThreadPoolTaskScheduler) {
             wrapTaskDecorator((ThreadPoolTaskScheduler) bean, beanName);
+        }
+        return bean;
+    }
+
+    @Override
+    public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
+        if (!isEligibleForWrapping(bean, beanName)) {
+            return bean;
+        }
+        try {
+            if (bean instanceof ExecutorService) {
+                return LogCollectContextUtils.wrapExecutorService((ExecutorService) bean);
+            }
+            if (bean instanceof Executor) {
+                return LogCollectContextUtils.wrapExecutor((Executor) bean);
+            }
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Failed to wrap executor bean: {}", beanName, e);
+        } catch (Error e) {
+            throw e;
         }
         return bean;
     }
@@ -150,5 +176,18 @@ public class LogCollectThreadPoolBPP implements BeanPostProcessor {
             }
         }
         return null;
+    }
+
+    private boolean isEligibleForWrapping(Object bean, String beanName) {
+        if (bean == null) {
+            return false;
+        }
+        if (bean instanceof LogCollectWrappedExecutor) {
+            return false;
+        }
+        if (bean instanceof ThreadPoolTaskExecutor || bean instanceof TaskScheduler) {
+            return false;
+        }
+        return beanName == null || !beanName.startsWith("logCollect");
     }
 }

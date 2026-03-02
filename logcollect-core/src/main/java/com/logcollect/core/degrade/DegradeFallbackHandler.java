@@ -67,9 +67,11 @@ public final class DegradeFallbackHandler {
                 default:
                     fallbackSuccess = false;
             }
-        } catch (Throwable t) {
+        } catch (Exception t) {
             fallbackError = t;
             LogCollectInternalLogger.warn("Degrade fallback failed", t);
+        } catch (Error e) {
+            throw e;
         }
 
         if (!fallbackSuccess) {
@@ -154,7 +156,9 @@ public final class DegradeFallbackHandler {
                 method.invoke(metrics, args);
                 return;
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
+        } catch (Error e) {
+            throw e;
         }
     }
 
