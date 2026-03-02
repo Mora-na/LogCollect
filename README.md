@@ -2312,6 +2312,15 @@ logcollect-parent/
 | 并发与性能 | 缓冲区 `ConcurrentLinkedQueue + Atomic*`；flush 后二次阈值检查；`@LogCollect` Handler 解析按 `Method` 缓存并在配置刷新后失效；AGGREGATE 按 pattern 版本切批 |
 | 工程一致性 | 默认 `Sanitizer/Masker` 统一在 core；新增 `BackpressureCallback` / `@LogCollectIgnore`；README 与实现参数名同步（`minLevel` / `messageSummary` / `backpressure` 等） |
 
+**补丁记录（2026-03-02）**
+
+| 类型 | 记录 |
+|------|------|
+| 问题 | GitHub Actions 执行 `.github/workflows/ci.yml` 时，`jdk8-17` 与 `spring-boot 2.7.18-3.4.1` 组合下，`DefaultLogMaskerTest.mask_multiplePatterns_allMasked`、`SecurityPipelineTest.process_contentWithPhone_masked` 失败，手机号未脱敏（`13812345678` 未替换为 `138****5678`） |
+| 根因 | 内置手机号/身份证/银行卡规则使用 `\\b...\\b` 边界，在“中文紧邻数字”文本中跨 JDK 正则边界行为不一致，导致匹配漏掉 |
+| 修复 | 将规则调整为显式 ASCII 边界：`(?<![0-9A-Za-z_])...(?![0-9A-Za-z_])`，确保中文上下文命中，同时避免在英文单词内部误匹配 |
+| 回归验证 | 新增中文上下文身份证/银行卡用例与 ASCII 单词嵌入手机号防误匹配用例；在 JDK 8/17 + Spring Boot 2.7.18/3.0.13/3.2.5/3.4.1 相关测试通过 |
+
 ### 依赖范围控制原则
 
 | 模块 | 外部依赖 | scope |

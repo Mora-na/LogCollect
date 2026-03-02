@@ -36,7 +36,7 @@ public class DefaultLogMasker implements LogMasker {
     }
 
     private void addBuiltinRules() {
-        Pattern phone = Pattern.compile("\\b1[3-9]\\d{9}\\b");
+        Pattern phone = Pattern.compile("(?<![0-9A-Za-z_])1[3-9]\\d{9}(?![0-9A-Za-z_])");
         rules.add(new MaskRule(phone, new Function<Matcher, String>() {
             @Override
             public String apply(Matcher m) {
@@ -45,7 +45,7 @@ public class DefaultLogMasker implements LogMasker {
             }
         }, "1"));
 
-        Pattern id = Pattern.compile("\\b\\d{17}[0-9Xx]\\b");
+        Pattern id = Pattern.compile("(?<![0-9A-Za-z_])\\d{17}[0-9Xx](?![0-9A-Za-z_])");
         rules.add(new MaskRule(id, new Function<Matcher, String>() {
             @Override
             public String apply(Matcher m) {
@@ -54,7 +54,7 @@ public class DefaultLogMasker implements LogMasker {
             }
         }));
 
-        Pattern bank = Pattern.compile("\\b\\d{12,19}\\b");
+        Pattern bank = Pattern.compile("(?<![0-9A-Za-z_])\\d{12,19}(?![0-9A-Za-z_])");
         rules.add(new MaskRule(bank, new Function<Matcher, String>() {
             @Override
             public String apply(Matcher m) {

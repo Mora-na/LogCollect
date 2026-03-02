@@ -41,6 +41,13 @@ class DefaultLogMaskerTest extends CoreUnitTestBase {
     }
 
     @Test
+    void mask_phoneEmbeddedInAsciiWord_notMasked() {
+        String input = "tokenA13812345678B";
+        String result = masker.mask(input);
+        assertThat(result).isEqualTo(input);
+    }
+
+    @Test
     void mask_idCard18_keepFirst6Last4() {
         String result = masker.mask("110105199001011234");
         assertThat(result).isEqualTo("110105********1234");
@@ -53,9 +60,21 @@ class DefaultLogMaskerTest extends CoreUnitTestBase {
     }
 
     @Test
+    void mask_idCardInChineseContext_masked() {
+        String result = masker.mask("用户身份证110105199001011234已登记");
+        assertThat(result).contains("110105********1234");
+    }
+
+    @Test
     void mask_bankCard_keepFirst4Last4() {
         String result = masker.mask("6222021234567890123");
         assertThat(result).isEqualTo("6222****0123");
+    }
+
+    @Test
+    void mask_bankCardInChineseContext_masked() {
+        String result = masker.mask("银行卡6222021234567890123已绑定");
+        assertThat(result).contains("6222****0123");
     }
 
     @Test
