@@ -33,6 +33,9 @@ public interface LogSanitizer {
 
     /**
      * 带修改标记的消息净化。
+     *
+     * @param raw 原始消息
+     * @return 净化结果（含是否发生修改）
      */
     default SanitizeResult sanitizeWithStats(String raw) {
         String result = sanitize(raw);
@@ -41,6 +44,9 @@ public interface LogSanitizer {
 
     /**
      * 带修改标记的堆栈净化。
+     *
+     * @param raw 原始堆栈字符串
+     * @return 净化结果（含是否发生修改）
      */
     default SanitizeResult sanitizeThrowableWithStats(String raw) {
         String result = sanitizeThrowable(raw);

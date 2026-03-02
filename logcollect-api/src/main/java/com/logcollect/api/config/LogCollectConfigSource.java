@@ -9,6 +9,8 @@ public interface LogCollectConfigSource {
 
     /**
      * 全局配置，返回相对 key（如 buffer.max-size、degrade.fail-threshold）。
+     *
+     * @return 全局配置键值对
      */
     default Map<String, String> getGlobalProperties() {
         return Collections.emptyMap();
@@ -16,6 +18,9 @@ public interface LogCollectConfigSource {
 
     /**
      * 方法级配置，返回相对 key（如 level、async、buffer.max-size）。
+     *
+     * @param methodKey 方法唯一标识
+     * @return 方法级配置键值对
      */
     default Map<String, String> getMethodProperties(String methodKey) {
         return Collections.emptyMap();
@@ -23,6 +28,8 @@ public interface LogCollectConfigSource {
 
     /**
      * 全量配置（含全局 + 方法级），返回完整 key（如 logcollect.global.xxx / logcollect.methods.xxx.xxx）。
+     *
+     * @return 全量配置键值对（完整 key）
      */
     default Map<String, String> getAllProperties() {
         Map<String, String> all = new LinkedHashMap<String, String>();
@@ -37,6 +44,8 @@ public interface LogCollectConfigSource {
 
     /**
      * 注册配置变更监听器。
+     *
+     * @param listener 变更回调监听器
      */
     default void addChangeListener(Consumer<String> listener) {
         // no-op

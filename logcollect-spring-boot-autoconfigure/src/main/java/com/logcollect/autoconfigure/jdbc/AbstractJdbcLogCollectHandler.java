@@ -9,6 +9,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import java.time.LocalDateTime;
 import java.util.*;
 
+/**
+ * JDBC 处理器抽象基类。
+ *
+ * <p>提供 SINGLE/AGGREGATE 两种模式下的落库公共逻辑，以及参数化 SQL 拼装能力。
+ */
 public abstract class AbstractJdbcLogCollectHandler implements LogCollectHandler {
     private final JdbcTemplate jdbcTemplate;
 
@@ -39,6 +44,12 @@ public abstract class AbstractJdbcLogCollectHandler implements LogCollectHandler
 
     /**
      * 新接口：构建参数。
+     *
+     * @param traceId 链路 ID
+     * @param content 日志内容
+     * @param level   日志级别
+     * @param time    日志时间
+     * @return 待写入字段参数映射
      */
     protected Map<String, Object> buildInsertParams(String traceId,
                                                     String content,

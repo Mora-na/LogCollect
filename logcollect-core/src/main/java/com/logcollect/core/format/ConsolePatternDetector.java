@@ -16,9 +16,16 @@ public interface ConsolePatternDetector {
 
     /**
      * 当前检测器是否可用（对应的日志框架是否在 classpath 中）。
+     *
+     * @return true 表示当前运行环境可用该检测器
      */
     boolean isAvailable();
 
+    /**
+     * 检测器优先级，值越小优先级越高。
+     *
+     * @return 排序优先级
+     */
     default int getOrder() {
         return 0;
     }

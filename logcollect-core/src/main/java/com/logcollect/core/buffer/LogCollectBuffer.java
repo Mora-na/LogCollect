@@ -7,7 +7,7 @@ import com.logcollect.api.model.LogEntry;
  * 日志缓冲区抽象接口。
  *
  * <p>不同收集模式（SINGLE / AGGREGATE）对应不同缓冲实现，
- * 但都遵循“入队 -> 条件触发 flush -> 结束时强制 flush”的统一契约。
+ * 但都遵循“入队 -&gt; 条件触发 flush -&gt; 结束时强制 flush”的统一契约。
  */
 public interface LogCollectBuffer {
     /**
@@ -43,6 +43,8 @@ public interface LogCollectBuffer {
 
     /**
      * 调试/降级用文本快照。
+     *
+     * @return 当前缓冲内容的可读字符串；无内容时可返回空串
      */
     default String dumpAsString() {
         return "";

@@ -56,6 +56,8 @@ public interface LogCollectHandler {
      *
      * <p>支持配置中心动态覆盖：
      * logcollect.global.format.log-line-pattern=...
+     *
+     * @return 生效中的日志行 pattern
      */
     default String logLinePattern() {
         return LogLineDefaults.getEffectivePattern();
@@ -71,6 +73,9 @@ public interface LogCollectHandler {
      * </ul>
      *
      * <p>默认实现基于 {@link #logLinePattern()} 的 pattern 进行格式化。
+     *
+     * @param entry 单条日志对象
+     * @return 格式化后的单行日志文本
      */
     default String formatLogLine(LogEntry entry) {
         return LogLinePatternParser.format(entry, logLinePattern());
@@ -78,6 +83,8 @@ public interface LogCollectHandler {
 
     /**
      * 聚合日志块中行与行之间的分隔符。
+     *
+     * @return 分隔符字符串
      */
     default String aggregatedLogSeparator() {
         return "\n";
@@ -93,6 +100,7 @@ public interface LogCollectHandler {
      * @param context 当前上下文
      * @param level 日志级别
      * @param messageSummary 消息摘要（已做控制字符清理并截断）
+     * @return true 表示允许收集
      */
     default boolean shouldCollect(LogCollectContext context, String level, String messageSummary) {
         return true;
@@ -102,6 +110,11 @@ public interface LogCollectHandler {
     // 模式偏好
     // =====================================================================
 
+    /**
+     * 声明处理器期望的收集模式。
+     *
+     * @return 期望模式，默认 {@link CollectMode#AUTO}
+     */
     default CollectMode preferredMode() {
         return CollectMode.AUTO;
     }

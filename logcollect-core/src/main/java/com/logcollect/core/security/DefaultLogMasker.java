@@ -8,9 +8,17 @@ import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 默认脱敏器实现。
+ *
+ * <p>内置手机号、身份证号、银行卡号、邮箱等规则，并支持运行时追加自定义规则。
+ */
 public class DefaultLogMasker implements LogMasker {
     private final List<MaskRule> rules = new CopyOnWriteArrayList<MaskRule>();
 
+    /**
+     * 创建默认脱敏器并注册内置规则。
+     */
     public DefaultLogMasker() {
         addBuiltinRules();
     }
@@ -58,6 +66,13 @@ public class DefaultLogMasker implements LogMasker {
         }, "@"));
     }
 
+    /**
+     * 添加一条自定义脱敏规则。
+     *
+     * @param regex    正则表达式
+     * @param replacer 替换函数
+     * @return true 表示规则添加成功
+     */
     public boolean addRule(String regex, Function<Matcher, String> replacer) {
         Pattern pattern = RegexSafetyValidator.safeCompile(regex);
         if (pattern == null) {
@@ -79,6 +94,12 @@ public class DefaultLogMasker implements LogMasker {
         return result;
     }
 
+    /**
+     * 粗略判断字符串是否可能命中脱敏规则，用于快速短路。
+     *
+     * @param content 待检测文本
+     * @return true 表示可能包含需要脱敏的内容
+     */
     public boolean hasPotentialMatch(String content) {
         if (content == null || content.isEmpty()) {
             return false;

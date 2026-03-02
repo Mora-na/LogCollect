@@ -11,6 +11,11 @@ import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * 降级兜底处理器。
+ *
+ * <p>按配置优先级在文件、内存、丢弃策略之间切换，并在必要时抛出阻断异常。
+ */
 public final class DegradeFallbackHandler {
 
     private static final int MAX_MEMORY_QUEUE_SIZE = 1000;
@@ -20,6 +25,15 @@ public final class DegradeFallbackHandler {
     private DegradeFallbackHandler() {
     }
 
+    /**
+     * 执行降级兜底写入。
+     *
+     * @param context 当前调用上下文
+     * @param reason  触发降级原因
+     * @param lines   待降级写入的日志行
+     * @param level   当前日志级别
+     * @return true 表示至少一种降级策略执行成功
+     */
     public static boolean handleDegraded(LogCollectContext context, String reason, List<String> lines, String level) {
         if (context == null || context.getConfig() == null) {
             return false;

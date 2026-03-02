@@ -13,6 +13,11 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * 降级文件存储管理器。
+ *
+ * <p>负责降级日志落盘、容量控制、过期清理及文件权限收敛。
+ */
 public class DegradeFileManager {
 
     private static final long DISK_FREE_MIN_BYTES = 100L * 1024 * 1024;
@@ -26,6 +31,14 @@ public class DegradeFileManager {
     private final AtomicLong currentTotalSize = new AtomicLong(0);
     private ScheduledExecutorService scheduler;
 
+    /**
+     * 创建降级文件管理器。
+     *
+     * @param baseDir       降级文件目录
+     * @param maxTotalBytes 降级文件最大总大小
+     * @param ttlDays       文件保留天数
+     * @param encryptor     可选加解密器，为 null 表示明文落盘
+     */
     public DegradeFileManager(Path baseDir, long maxTotalBytes, int ttlDays, DegradeFileEncryptor encryptor) {
         this.baseDir = baseDir;
         this.maxTotalBytes = maxTotalBytes;
@@ -33,6 +46,9 @@ public class DegradeFileManager {
         this.encryptor = encryptor;
     }
 
+    /**
+     * 初始化目录、加载现有大小并启动定时清理任务。
+     */
     public void initialize() {
         try {
             if (baseDir == null) {
@@ -52,10 +68,21 @@ public class DegradeFileManager {
         }
     }
 
+    /**
+     * 判断管理器是否已初始化。
+     *
+     * @return true 表示已初始化
+     */
     public boolean isInitialized() {
         return initialized;
     }
 
+    /**
+     * 按日志行列表写入降级文件。
+     *
+     * @param traceId  追踪 ID
+     * @param logLines 日志行列表
+     */
     public void write(String traceId, List<String> logLines) {
         StringBuilder builder = new StringBuilder();
         if (logLines != null) {
@@ -66,6 +93,15 @@ public class DegradeFileManager {
         write(traceId, "unknown", builder.toString());
     }
 
+    /**
+     * 写入降级文件。
+     *
+     * @param traceId         追踪 ID
+     * @param methodSignature 方法签名
+     * @param content         日志内容
+     * @throws IllegalStateException  管理器未初始化时抛出
+     * @throws DegradeStorageException 写入失败时抛出
+     */
     public void write(String traceId, String methodSignature, String content) {
         if (!initialized) {
             throw new IllegalStateException("DegradeFileManager not initialized");
@@ -96,14 +132,30 @@ public class DegradeFileManager {
         }
     }
 
+    /**
+     * 清理过期降级文件。
+     *
+     * @return 清理结果
+     */
     public CleanupResult cleanExpiredFiles() {
         return cleanup(false);
     }
 
+    /**
+     * 清理全部降级文件。
+     *
+     * @return 清理结果
+     */
     public CleanupResult cleanAllFiles() {
         return cleanup(true);
     }
 
+    /**
+     * 执行清理。
+     *
+     * @param force true 表示忽略 TTL 强制清理全部文件
+     * @return 清理结果
+     */
     public CleanupResult cleanup(boolean force) {
         int deletedCount = 0;
         long deletedBytes = 0;
@@ -140,6 +192,11 @@ public class DegradeFileManager {
         return new CleanupResult(deletedCount, deletedBytes);
     }
 
+    /**
+     * 获取降级目录中的文件数量。
+     *
+     * @return 文件数量
+     */
     public long getFileCount() {
         if (baseDir == null || !Files.exists(baseDir)) {
             return 0;
@@ -157,14 +214,29 @@ public class DegradeFileManager {
         return count;
     }
 
+    /**
+     * 获取降级目录当前估算总字节数。
+     *
+     * @return 总字节数
+     */
     public long getTotalSizeBytes() {
         return Math.max(0, currentTotalSize.get());
     }
 
+    /**
+     * 获取降级目录当前总大小（可读格式）。
+     *
+     * @return 可读大小字符串
+     */
     public String getTotalSizeHuman() {
         return DataSizeParser.formatBytes(getTotalSizeBytes());
     }
 
+    /**
+     * 获取降级目录所在磁盘可用空间。
+     *
+     * @return 可用字节数；不可用时返回 -1
+     */
     public long getDiskFreeSpace() {
         if (baseDir == null) {
             return -1;
@@ -180,18 +252,38 @@ public class DegradeFileManager {
         }
     }
 
+    /**
+     * 获取磁盘可用空间（可读格式）。
+     *
+     * @return 可读大小字符串
+     */
     public String getDiskFreeSpaceHuman() {
         return DataSizeParser.formatBytes(getDiskFreeSpace());
     }
 
+    /**
+     * 获取降级目录。
+     *
+     * @return 目录路径
+     */
     public Path getBaseDir() {
         return baseDir;
     }
 
+    /**
+     * 获取最大总容量阈值。
+     *
+     * @return 最大总字节数
+     */
     public long getMaxTotalBytes() {
         return maxTotalBytes;
     }
 
+    /**
+     * 获取文件保留天数。
+     *
+     * @return 保留天数
+     */
     public int getTtlDays() {
         return ttlDays;
     }
@@ -312,19 +404,38 @@ public class DegradeFileManager {
         }
     }
 
+    /**
+     * 清理结果。
+     */
     public static class CleanupResult {
         private final int deletedCount;
         private final long deletedBytes;
 
+        /**
+         * 创建清理结果。
+         *
+         * @param deletedCount 删除文件数
+         * @param deletedBytes 删除总字节数
+         */
         public CleanupResult(int deletedCount, long deletedBytes) {
             this.deletedCount = deletedCount;
             this.deletedBytes = deletedBytes;
         }
 
+        /**
+         * 获取删除文件数。
+         *
+         * @return 删除文件数
+         */
         public int getDeletedCount() {
             return deletedCount;
         }
 
+        /**
+         * 获取删除总字节数。
+         *
+         * @return 删除总字节数
+         */
         public long getDeletedBytes() {
             return deletedBytes;
         }

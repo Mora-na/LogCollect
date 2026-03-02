@@ -76,6 +76,10 @@ public final class LogCollectContextUtils {
 
     /**
      * 包装 Consumer，使其在执行时自动恢复父线程上下文。
+     *
+     * @param consumer 原始消费函数
+     * @param <T>      消费入参类型
+     * @return 包装后的 Consumer；若无活跃上下文则返回原 Consumer；入参为 null 返回 null
      */
     public static <T> Consumer<T> wrapConsumer(Consumer<T> consumer) {
         if (consumer == null) {
@@ -117,6 +121,12 @@ public final class LogCollectContextUtils {
         return new LogCollectExecutorServiceWrapper(executor);
     }
 
+    /**
+     * 包装 ScheduledExecutorService，使其提交的延迟/周期任务自动带上上下文传播。
+     *
+     * @param executor 原始调度线程池
+     * @return 包装后的调度线程池；若已包装或入参为 null 则原样返回
+     */
     public static ScheduledExecutorService wrapScheduledExecutorService(ScheduledExecutorService executor) {
         if (executor == null) {
             return null;
@@ -237,6 +247,10 @@ public final class LogCollectContextUtils {
 
     /**
      * 包装 Supplier（包级可见，供工具类内部复用）。
+     *
+     * @param supplier 原始供应函数
+     * @param <U>      返回值类型
+     * @return 包装后的 Supplier；若无活跃上下文则返回原 Supplier；入参为 null 返回 null
      */
     static <U> Supplier<U> wrapSupplier(final Supplier<U> supplier) {
         if (supplier == null) {
@@ -261,6 +275,10 @@ public final class LogCollectContextUtils {
 
     /**
      * 批量包装 Callable 集合（包级可见，供 ExecutorService 包装器调用）。
+     *
+     * @param tasks 原始任务集合
+     * @param <T>   返回值类型
+     * @return 包装后的任务列表；当入参为 null 时返回空列表
      */
     static <T> List<Callable<T>> wrapCallables(Collection<? extends Callable<T>> tasks) {
         List<Callable<T>> wrapped = new ArrayList<Callable<T>>();

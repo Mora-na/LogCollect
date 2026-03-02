@@ -205,6 +205,9 @@ public class LogCollectContext {
 
     /**
      * 按前缀判断 logger 是否应排除。
+     *
+     * @param loggerName 待判断的 logger 名称
+     * @return true 表示命中排除前缀
      */
     public boolean isLoggerExcluded(String loggerName) {
         if (loggerName == null || excludeLoggers.length == 0) {

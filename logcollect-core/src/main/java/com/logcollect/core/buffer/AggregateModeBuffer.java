@@ -17,6 +17,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * 聚合模式日志缓冲实现。
+ *
+ * <p>在内存中缓存已格式化日志行，达到阈值或结束时聚合为一条批量日志交给
+ * {@link LogCollectHandler#flushAggregatedLog(LogCollectContext, AggregatedLog)} 写出。
+ */
 public class AggregateModeBuffer implements LogCollectBuffer {
     private static final String DEFAULT_SEPARATOR = "\n";
 
@@ -56,6 +62,14 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         }
     }
 
+    /**
+     * 创建聚合缓冲区（默认溢出策略为 {@code FLUSH_EARLY}）。
+     *
+     * @param maxCount      最大条数阈值
+     * @param maxBytes      最大字节阈值
+     * @param globalManager 全局内存管理器，可为 null
+     * @param handler       业务处理器，可为 null
+     */
     public AggregateModeBuffer(int maxCount,
                                long maxBytes,
                                GlobalBufferMemoryManager globalManager,
@@ -64,6 +78,15 @@ public class AggregateModeBuffer implements LogCollectBuffer {
                 new BoundedBufferPolicy(maxBytes, maxCount, BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY));
     }
 
+    /**
+     * 创建聚合缓冲区。
+     *
+     * @param maxCount      最大条数阈值
+     * @param maxBytes      最大字节阈值
+     * @param globalManager 全局内存管理器，可为 null
+     * @param handler       业务处理器，可为 null
+     * @param policy        本地容量策略，为 null 时使用默认策略
+     */
     public AggregateModeBuffer(int maxCount,
                                long maxBytes,
                                GlobalBufferMemoryManager globalManager,

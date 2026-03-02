@@ -61,6 +61,8 @@ public final class LogEntry {
 
     /**
      * 保留原有访问方式，按 timestamp 延迟计算本地时间。
+     *
+     * @return 基于系统时区换算后的本地时间
      */
     public LocalDateTime getTime() {
         return LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), ZoneId.systemDefault());

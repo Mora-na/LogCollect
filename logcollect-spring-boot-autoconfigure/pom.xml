@@ -5,9 +5,9 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>com.logcollect</groupId>
+        <groupId>io.github.mora-na</groupId>
         <artifactId>logcollect-parent</artifactId>
-        <version>1.0.0</version>
+        <version>1.0.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>logcollect-spring-boot-autoconfigure</artifactId>
@@ -15,16 +15,16 @@
 
     <dependencies>
         <dependency>
-            <groupId>com.logcollect</groupId>
+            <groupId>io.github.mora-na</groupId>
             <artifactId>logcollect-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.logcollect</groupId>
+            <groupId>io.github.mora-na</groupId>
             <artifactId>logcollect-logback-adapter</artifactId>
             <optional>true</optional>
         </dependency>
         <dependency>
-            <groupId>com.logcollect</groupId>
+            <groupId>io.github.mora-na</groupId>
             <artifactId>logcollect-log4j2-adapter</artifactId>
             <optional>true</optional>
         </dependency>

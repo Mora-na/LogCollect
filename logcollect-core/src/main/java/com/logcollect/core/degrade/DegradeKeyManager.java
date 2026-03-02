@@ -6,7 +6,17 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.util.*;
 
+/**
+ * 降级文件加密密钥解析器。
+ *
+ * <p>按优先级从 SPI Provider、环境变量、系统属性中解析 AES 密钥。
+ */
 public class DegradeKeyManager {
+    /**
+     * 解析可用密钥。
+     *
+     * @return 解析到的密钥；未配置时返回 null
+     */
     public SecretKey resolveKey() {
         SecretKey key = resolveFromProviders();
         if (key != null) {

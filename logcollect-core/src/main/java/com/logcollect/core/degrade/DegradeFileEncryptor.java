@@ -5,16 +5,31 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import java.security.SecureRandom;
 
+/**
+ * 降级文件 AES-GCM 加解密器。
+ */
 public class DegradeFileEncryptor {
     private static final int IV_LENGTH = 12;
     private static final int TAG_LENGTH = 128;
     private final SecretKey key;
     private final SecureRandom random = new SecureRandom();
 
+    /**
+     * 创建加解密器。
+     *
+     * @param key AES 密钥
+     */
     public DegradeFileEncryptor(SecretKey key) {
         this.key = key;
     }
 
+    /**
+     * 加密明文。
+     *
+     * @param plaintext 明文字节数组
+     * @return 密文字节数组（前缀包含 IV）
+     * @throws DegradeStorageException 加密失败时抛出
+     */
     public byte[] encrypt(byte[] plaintext) {
         try {
             byte[] iv = new byte[IV_LENGTH];
@@ -31,6 +46,13 @@ public class DegradeFileEncryptor {
         }
     }
 
+    /**
+     * 解密密文。
+     *
+     * @param ciphertext 密文字节数组（前缀需包含 IV）
+     * @return 解密后的明文字节数组
+     * @throws DegradeStorageException 解密失败时抛出
+     */
     public byte[] decrypt(byte[] ciphertext) {
         try {
             byte[] iv = new byte[IV_LENGTH];

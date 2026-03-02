@@ -19,6 +19,11 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * 负责合并多来源配置并输出方法级 {@link LogCollectConfig} 的解析器。
+ *
+ * <p>解析结果会按方法缓存；当配置中心变更时可通过 {@link #onConfigChange()} 清空缓存并同步关键全局项。
+ */
 public class LogCollectConfigResolver {
 
     private static final String GLOBAL_PREFIX = "logcollect.global.";
@@ -45,10 +50,24 @@ public class LogCollectConfigResolver {
     private volatile Map<String, String> latestGlobalProperties = Collections.emptyMap();
     private volatile Map<String, String> startupOnlySnapshot = Collections.emptyMap();
 
+    /**
+     * 构造解析器（不绑定全局开关与指标对象）。
+     *
+     * @param sources 配置源集合，可为 null
+     * @param cache   本地缓存，可为 null
+     */
     public LogCollectConfigResolver(List<LogCollectConfigSource> sources, LogCollectLocalConfigCache cache) {
         this(sources, cache, null, null);
     }
 
+    /**
+     * 构造解析器。
+     *
+     * @param sources      配置源集合，可为 null
+     * @param cache        本地缓存，可为 null
+     * @param globalSwitch 全局开关同步目标，可为 null
+     * @param metrics      指标桥接对象（反射调用），可为 null
+     */
     public LogCollectConfigResolver(List<LogCollectConfigSource> sources,
                                     LogCollectLocalConfigCache cache,
                                     LogCollectGlobalSwitch globalSwitch,
@@ -69,7 +88,11 @@ public class LogCollectConfigResolver {
 
     /**
      * 四级合并：
-     * ④ 框架默认 <- ③ 注解显式 <- ② 配置中心方法级 <- ① 配置中心全局
+     * ④ 框架默认 &lt;- ③ 注解显式 &lt;- ② 配置中心方法级 &lt;- ① 配置中心全局
+     *
+     * @param method     目标方法
+     * @param annotation 方法上的 {@link LogCollect} 注解，可为 null
+     * @return 解析后的最终配置
      */
     public LogCollectConfig resolve(Method method, LogCollect annotation) {
         String displayMethodKey = MethodKeyResolver.toDisplayKey(method);
@@ -95,10 +118,18 @@ public class LogCollectConfigResolver {
         return config;
     }
 
+    /**
+     * 处理配置变更，默认来源标记为 {@code unknown}。
+     */
     public void onConfigChange() {
         onConfigChange("unknown");
     }
 
+    /**
+     * 处理配置变更：清理解析缓存并重新同步关键全局项。
+     *
+     * @param source 变更来源标识，可为 null
+     */
     public void onConfigChange(String source) {
         Map<String, String> before = startupOnlySnapshot;
         clearCache();
@@ -110,6 +141,11 @@ public class LogCollectConfigResolver {
                 source == null ? "unknown" : source);
     }
 
+    /**
+     * 清空解析缓存。
+     *
+     * @return 清理前缓存大小
+     */
     public int clearCache() {
         int size = resolvedCache.size();
         resolvedCache.clear();
@@ -117,18 +153,39 @@ public class LogCollectConfigResolver {
         return size;
     }
 
+    /**
+     * 获取当前解析缓存条目数。
+     *
+     * @return 缓存大小
+     */
     public int getCacheSize() {
         return resolvedCache.size();
     }
 
+    /**
+     * 获取最近一次缓存刷新时间的可读字符串。
+     *
+     * @return ISO-8601 时间字符串；若从未刷新返回 {@code never}
+     */
     public String getLastRefreshTimeFormatted() {
         return lastRefreshTime != null ? lastRefreshTime.toString() : "never";
     }
 
+    /**
+     * 获取最近一次缓存刷新时间。
+     *
+     * @return 最近刷新时间；若从未刷新返回 null
+     */
     public Instant getLastRefreshTime() {
         return lastRefreshTime;
     }
 
+    /**
+     * 按方法键读取已缓存的配置。
+     *
+     * @param methodKey 方法键（展示键或规范化键）
+     * @return 命中的缓存配置；未命中返回 null
+     */
     public LogCollectConfig getCachedConfig(String methodKey) {
         if (methodKey == null) {
             return null;
@@ -141,14 +198,27 @@ public class LogCollectConfigResolver {
         return config;
     }
 
+    /**
+     * 返回当前缓存的只读视图。
+     *
+     * @return 所有已缓存配置
+     */
     public Map<String, LogCollectConfig> getAllCachedConfigs() {
         return Collections.unmodifiableMap(resolvedCache);
     }
 
+    /**
+     * 返回最近一次全局配置加载结果的只读快照。
+     *
+     * @return 全局配置键值对
+     */
     public Map<String, String> getLatestGlobalProperties() {
         return latestGlobalProperties;
     }
 
+    /**
+     * 将当前可获取到的配置源内容持久化到本地缓存。
+     */
     public void saveToLocalCache() {
         if (cache == null) {
             return;

@@ -7,6 +7,11 @@ import java.util.Base64;
 import java.util.Map;
 import java.util.ServiceLoader;
 
+/**
+ * 降级文件加密密钥解析器（Spring 环境）。
+ *
+ * <p>按 KMS SPI、环境变量、Vault、配置中心顺序解析密钥。
+ */
 public final class EncryptionKeyResolver {
 
     private static final String ENV_KEY = "LOGCOLLECT_DEGRADE_FILE_KEY";
@@ -14,6 +19,14 @@ public final class EncryptionKeyResolver {
     private EncryptionKeyResolver() {
     }
 
+    /**
+     * 解析降级文件加密密钥。
+     *
+     * @param applicationContext Spring 上下文，可为 null
+     * @param activeProfiles     当前激活 profile，可为 null
+     * @return 密钥字节数组
+     * @throws IllegalStateException 未找到可用密钥时抛出
+     */
     public static byte[] resolveKey(ApplicationContext applicationContext, String[] activeProfiles) {
         for (KmsKeyProvider provider : ServiceLoader.load(KmsKeyProvider.class)) {
             try {

@@ -6,6 +6,12 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 数据大小解析与格式化工具。
+ *
+ * <p>支持形如 {@code 512KB}、{@code 1MB}、{@code 1.5GB} 的单位表达，
+ * 同时也支持直接传入纯数字字节值。
+ */
 public final class DataSizeParser {
 
     private static final Pattern SIZE_PATTERN =
@@ -26,6 +32,13 @@ public final class DataSizeParser {
     private DataSizeParser() {
     }
 
+    /**
+     * 解析大小字符串为字节数。
+     *
+     * @param sizeStr 大小字符串，例如 {@code 1MB}、{@code 512KB}、{@code 1024}
+     * @return 对应字节数
+     * @throws IllegalArgumentException 当格式非法或为空时抛出
+     */
     public static long parseToBytes(String sizeStr) {
         if (sizeStr == null || sizeStr.trim().isEmpty()) {
             throw new IllegalArgumentException("Size string cannot be null or empty");
@@ -46,6 +59,12 @@ public final class DataSizeParser {
         return (long) (value * UNITS.get(unit));
     }
 
+    /**
+     * 将字节数格式化为可读字符串。
+     *
+     * @param bytes 字节数
+     * @return 人类可读格式（B/KB/MB/GB）
+     */
     public static String formatBytes(long bytes) {
         if (bytes < 1024) {
             return bytes + " B";

@@ -123,9 +123,9 @@
 <dependencyManagement>
     <dependencies>
         <dependency>
-            <groupId>com.logcollect</groupId>
+            <groupId>io.github.mora-na</groupId>
             <artifactId>logcollect-bom</artifactId>
-            <version>1.0.0</version>
+            <version>1.0.0-SNAPSHOT</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -135,19 +135,19 @@
 <dependencies>
     <!-- 核心 Starter（必须） -->
     <dependency>
-        <groupId>com.logcollect</groupId>
+        <groupId>io.github.mora-na</groupId>
         <artifactId>logcollect-spring-boot-starter</artifactId>
     </dependency>
     
     <!-- Nacos 配置中心适配（可选） -->
     <dependency>
-        <groupId>com.logcollect</groupId>
+        <groupId>io.github.mora-na</groupId>
         <artifactId>logcollect-config-nacos</artifactId>
     </dependency>
 
     <!-- 若项目使用 Log4j2（替代默认 Logback）需额外引入 -->
     <dependency>
-        <groupId>com.logcollect</groupId>
+        <groupId>io.github.mora-na</groupId>
         <artifactId>logcollect-log4j2-adapter</artifactId>
     </dependency>
 </dependencies>
@@ -1693,7 +1693,7 @@ public void criticalOperation() { ... }
 
 ```xml
 <dependency>
-    <groupId>com.logcollect</groupId>
+    <groupId>io.github.mora-na</groupId>
     <artifactId>logcollect-config-nacos</artifactId>
 </dependency>
 ```
@@ -1711,7 +1711,7 @@ logcollect:
 
 ```xml
 <dependency>
-    <groupId>com.logcollect</groupId>
+    <groupId>io.github.mora-na</groupId>
     <artifactId>logcollect-config-apollo</artifactId>
 </dependency>
 ```
@@ -2391,7 +2391,7 @@ logcollect:
 
 ```xml
 <dependency>
-    <groupId>com.logcollect</groupId>
+    <groupId>io.github.mora-na</groupId>
     <artifactId>logcollect-test-support</artifactId>
     <scope>test</scope>
 </dependency>
