@@ -1,0 +1,41 @@
+spring:
+  main:
+    banner-mode: off
+    web-application-type: none
+
+logcollect:
+  global:
+    enabled: true
+    async: true
+    level: INFO
+    collect-mode: AGGREGATE
+    buffer:
+      enabled: true
+      max-size: 200
+      max-bytes: 5MB
+      total-max-bytes: 200MB
+    security:
+      sanitize:
+        enabled: true
+      mask:
+        enabled: true
+    metrics:
+      enabled: false
+    degrade:
+      enabled: true
+      fail-threshold: 5
+      storage: LIMITED_MEMORY
+  internal:
+    log-level: WARN
+
+logging:
+  config: classpath:logback-benchmark.xml
+  level:
+    root: INFO
+    com.logcollect.internal: WARN
+    org.springframework: WARN
+
+benchmark:
+  stress:
+    max-thread-cap: 128
+    task-timeout-seconds: 60

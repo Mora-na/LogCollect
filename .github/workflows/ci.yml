@@ -46,7 +46,7 @@ jobs:
           mvn -B clean verify \
             -Dspring-boot.version=${{ matrix.spring-boot }} \
             -Dlog-framework=${{ matrix.log-framework }} \
-            -pl '!logcollect-samples' \
+            -pl '!logcollect-samples,!logcollect-benchmark' \
             -Dgpg.skip=true \
             -DskipPublishing=true \
             -DskipDeploy=true \
@@ -86,7 +86,7 @@ jobs:
           EOF
       - name: Checkstyle Quality Gate
         run: |
-          mvn -B -pl '!logcollect-samples' -am \
+          mvn -B -pl '!logcollect-samples,!logcollect-benchmark' -am \
             org.apache.maven.plugins:maven-checkstyle-plugin:3.3.1:check \
             -Dcheckstyle.config.location=.github/checkstyle/checkstyle.xml \
             -Dcheckstyle.failOnViolation=true \
@@ -132,7 +132,7 @@ jobs:
             SONAR_ARGS+=("-Dsonar.organization=${{ steps.sonar.outputs.organization }}")
           fi
 
-          mvn -B -pl '!logcollect-samples' -am \
+          mvn -B -pl '!logcollect-samples,!logcollect-benchmark' -am \
             org.sonarsource.scanner.maven:sonar-maven-plugin:3.11.0.3922:sonar \
             "${SONAR_ARGS[@]}" \
             -DskipTests=true \
@@ -145,6 +145,56 @@ jobs:
           echo "Sonar scan skipped: SONAR_TOKEN is not configured."
           echo "Default free mode is SonarCloud (https://sonarcloud.io) when SONAR_HOST_URL is not set."
           echo "Optional repo variables: SONAR_HOST_URL, SONAR_ORGANIZATION, SONAR_PROJECT_KEY."
+
+  benchmark-gate:
+    name: Performance Gate
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        java: [11, 17]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: temurin
+      - name: Cache Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+      - name: Build framework (skip tests)
+        run: mvn -B install -DskipTests -q -pl '!logcollect-benchmark,!logcollect-samples'
+      - name: Run JMH gate tests
+        run: |
+          mvn -B test \
+            -pl logcollect-benchmark \
+            -am \
+            -P benchmark-ci \
+            -Dsurefire.includes="**/*CIGate*" \
+            -Djmh.mode=ci
+        timeout-minutes: 5
+      - name: Run stress gate tests
+        run: |
+          mvn -B test \
+            -pl logcollect-benchmark \
+            -am \
+            -P benchmark-ci \
+            -Dsurefire.includes="**/StressCIGateTest" \
+            -Dspring.profiles.active=stress
+        timeout-minutes: 5
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-jdk${{ matrix.java }}
+          path: |
+            logcollect-benchmark/target/surefire-reports/
+            logcollect-benchmark/target/jmh-results/
+          retention-days: 30
 
   coverage:
     runs-on: ubuntu-latest

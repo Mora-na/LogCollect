@@ -2307,6 +2307,13 @@ logcollect-parent/
 │   ├── LogCollectTestUtils                    测试工具
 │   └── LogCollectAssertions                   断言工具
 │
+├── logcollect-benchmark/                      性能模块（JMH + Stress + Profiler）
+│   ├── jmh/                                   第一层：微基准（可进 CI 门禁）
+│   ├── stress/                                第二层：集成压测（Spring Boot 全链路）
+│   ├── profiler/                              第三层：Profiler 辅助入口
+│   ├── src/test/gate/                         CI 门禁测试（JMH/Stress）
+│   └── scripts/                               本地执行脚本（JMH/Stress/JFR/async-profiler）
+│
 └── logcollect-samples/                        示例工程
     ├── logcollect-sample-boot27-logback/      Boot 2.7 + Logback
     ├── logcollect-sample-boot27-log4j2/       Boot 2.7 + Log4j2
@@ -2336,6 +2343,7 @@ logcollect-parent/
 | 可靠性 | `BoundedBufferPolicy` 上限与溢出策略；`ResilientFlusher` 批级重试（含抖动退避，异步 flush 非阻塞退避）+ 本地兜底；降级 FILE 默认异步单线程写入（与 flush 线程池隔离）；`GlobalBufferMemoryManager` 支持 `EXACT_CAS/STRIPED_LONG_ADDER` 双计数模式；`LogCollectLifecycle` 优雅停机强制刷写 |
 | 并发与性能 | 缓冲区 `ConcurrentLinkedQueue + Atomic*`；flush 后二次阈值检查；`@LogCollect` Handler 解析按 `Method` 缓存并在配置刷新后失效；AGGREGATE 按 pattern 版本切批；`AsyncFlushExecutor` 使用 `CallerRunsPolicy` 并支持 `logcollect.global.flush.*` 调参 |
 | 性能与解耦 | Appender/Buffer/内存管控以及 ConfigResolver 配置刷新回调的 Metrics 调用统一改为 `logcollect-api` 接口直调（`LogCollectMetrics` / `TransactionExecutor`），移除 `invokeReflective` 热路径；`SecurityPipeline` 会话级复用；`processRaw` 消除中间 `LogEntry`；MDC 惰性拷贝；`LogEntry.estimateBytes()` 构造期缓存；`%d` 时间格式秒级缓存 |
+| 性能工程化 | 新增 `logcollect-benchmark` 模块：三层基准体系（JMH 微基准 / 集成压测 / Profiler 脚本），并新增 `benchmark-ci` Profile 与 `JmhCIGateTest`、`StressCIGateTest` 性能门禁 |
 | 工程一致性 | 默认 `Sanitizer/Masker` 统一在 core；新增 `BackpressureCallback` / `@LogCollectIgnore`；README 与实现参数名同步（`minLevel` / `messageSummary` / `backpressure` 等） |
 
 **补丁记录（2026-03-02）**
@@ -2346,6 +2354,60 @@ logcollect-parent/
 | 根因 | 内置手机号/身份证/银行卡规则使用 `\\b...\\b` 边界，在“中文紧邻数字”文本中跨 JDK 正则边界行为不一致，导致匹配漏掉 |
 | 修复 | 将规则调整为显式 ASCII 边界：`(?<![0-9A-Za-z_])...(?![0-9A-Za-z_])`，确保中文上下文命中，同时避免在英文单词内部误匹配 |
 | 回归验证 | 新增中文上下文身份证/银行卡用例与 ASCII 单词嵌入手机号防误匹配用例；在 JDK 8/17 + Spring Boot 2.7.18/3.0.13/3.2.5/3.4.1 相关测试通过 |
+
+### 15.2 压测与性能分析模块（`logcollect-benchmark`）
+
+**三层架构**
+
+```
+logcollect-benchmark/
+├── 第一层：JMH 微基准（单组件隔离，CI 可跑 smoke 门禁）
+├── 第二层：集成压测（真实 Spring Boot 上下文 + @LogCollect 全链路）
+└── 第三层：Profiler（async-profiler / JFR，本地按需运行）
+```
+
+**CI 与本地边界**
+
+| 场景 | 执行位置 | 时间预算 | 目标 |
+|------|---------|---------|------|
+| JMH 门禁（smoke） | CI | <= 3 分钟 | 防回退（关键路径预算） |
+| 集成压测冒烟 | CI | <= 2 分钟 | 吞吐不低于门槛，GC 开销可控 |
+| JMH 完整基准 | 本地 | ~30 分钟 | 基线采样与对比 |
+| 集成压测完整 | 本地 | ~10 分钟 | 吞吐/延迟/GC 综合分析 |
+| async-profiler/JFR | 本地 | 按需 | 热点、分配、锁竞争定位 |
+
+**关键文件**
+
+- `logcollect-benchmark/src/main/java/com/logcollect/benchmark/jmh/**`：微基准套件（安全链路、反射分发、模型构建、时间格式化、缓冲区）
+- `logcollect-benchmark/src/main/java/com/logcollect/benchmark/stress/**`：压测场景与统一 Runner
+- `logcollect-benchmark/src/test/java/com/logcollect/benchmark/gate/**`：CI 门禁测试
+- `logcollect-benchmark/scripts/*`：本地执行脚本（JMH、Stress、Profiler、JFR、基线对比）
+- `logcollect-benchmark/src/main/resources/benchmark-baseline.json`：基线文件（JMH JSON）
+
+**快速命令**
+
+```bash
+# 构建 benchmark 模块
+mvn -pl logcollect-benchmark -am package -DskipTests
+
+# CI 门禁（JMH + Stress）
+mvn -pl logcollect-benchmark -am -Pbenchmark-ci test
+
+# 本地完整基准（脚本）
+./logcollect-benchmark/scripts/run-jmh-full.sh
+./logcollect-benchmark/scripts/run-stress-full.sh
+
+# Profiler（按需）
+./logcollect-benchmark/scripts/run-profiler-cpu.sh 30
+./logcollect-benchmark/scripts/run-profiler-alloc.sh 30
+./logcollect-benchmark/scripts/run-profiler-lock.sh 30
+./logcollect-benchmark/scripts/run-jfr.sh 60
+```
+
+**压测参数（`application-stress.yml`）**
+
+- `benchmark.stress.max-thread-cap`：`MultiThreadScenario` 线程池上限（默认 `128`）
+- `benchmark.stress.task-timeout-seconds`：并发任务等待超时（默认 `60` 秒）
 
 ### 依赖范围控制原则
 
@@ -2694,6 +2756,13 @@ mvn clean verify -Dspring-boot.version=3.2.5
 mvn verify \
   -pl logcollect-api,logcollect-core,logcollect-logback-adapter,logcollect-log4j2-adapter,logcollect-spring-boot-autoconfigure \
   -am
+
+# 性能门禁（JMH + Stress）
+mvn test -pl logcollect-benchmark -am -Pbenchmark-ci
+
+# 本地完整性能基准
+./logcollect-benchmark/scripts/run-jmh-full.sh
+./logcollect-benchmark/scripts/run-stress-full.sh
 ```
 
 ### 测试矩阵

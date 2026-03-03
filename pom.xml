@@ -64,6 +64,7 @@
         <module>logcollect-config-apollo</module>
         <module>logcollect-config-spring-cloud</module>
         <module>logcollect-test-support</module>
+        <module>logcollect-benchmark</module>
         <module>logcollect-samples</module>
     </modules>
 

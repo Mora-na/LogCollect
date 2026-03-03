@@ -40,3 +40,16 @@ build/
 ### Node ###
 **/node_modules/
 **/dist/
+
+# Benchmark artifacts
+logcollect-benchmark/target/
+logcollect-benchmark/*.jfr
+logcollect-benchmark/target/profiler/
+
+# async-profiler output
+*.html
+!logcollect-benchmark/src/**/*.html
+
+# JMH result output (keep baseline file)
+logcollect-benchmark/target/jmh-results/
+!logcollect-benchmark/src/main/resources/benchmark-baseline.json

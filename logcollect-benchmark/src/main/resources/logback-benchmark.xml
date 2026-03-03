@@ -1,0 +1,23 @@
+<configuration>
+    <statusListener class="ch.qos.logback.core.status.NopStatusListener" />
+
+    <appender name="DEVNULL" class="ch.qos.logback.core.helpers.NOPAppender" />
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>WARN</level>
+        </filter>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="DEVNULL" />
+        <appender-ref ref="CONSOLE" />
+    </root>
+
+    <logger name="com.logcollect.benchmark.stress" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE" />
+    </logger>
+</configuration>
