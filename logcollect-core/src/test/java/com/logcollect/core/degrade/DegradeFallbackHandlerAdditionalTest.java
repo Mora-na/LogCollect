@@ -71,6 +71,7 @@ class DegradeFallbackHandlerAdditionalTest {
                 context, "persist_failed", Collections.singletonList("line"), "WARN");
 
         assertThat(success).isTrue();
+        waitUntilFileCountAtLeast(manager, 1, 2000L);
         assertThat(manager.getFileCount()).isEqualTo(1);
     }
 
@@ -119,6 +120,17 @@ class DegradeFallbackHandlerAdditionalTest {
         Field sizeField = DegradeFallbackHandler.class.getDeclaredField("MEMORY_QUEUE_SIZE");
         sizeField.setAccessible(true);
         return (AtomicInteger) sizeField.get(null);
+    }
+
+    private void waitUntilFileCountAtLeast(DegradeFileManager manager, long expected, long timeoutMs)
+            throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (manager.getFileCount() >= expected) {
+                return;
+            }
+            Thread.sleep(20L);
+        }
     }
 
     @SuppressWarnings("unused")

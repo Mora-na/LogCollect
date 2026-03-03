@@ -5,6 +5,8 @@ import com.logcollect.api.backpressure.BackpressureCallback;
 import com.logcollect.api.config.LogCollectConfigSource;
 import com.logcollect.api.enums.*;
 import com.logcollect.api.format.LogLineDefaults;
+import com.logcollect.api.metrics.LogCollectMetrics;
+import com.logcollect.api.metrics.NoopLogCollectMetrics;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.core.format.PatternCleaner;
 import com.logcollect.core.format.PatternValidator;
@@ -41,7 +43,7 @@ public class LogCollectConfigResolver {
     private final List<LogCollectConfigSource> sources;
     private final LogCollectLocalConfigCache cache;
     private final LogCollectGlobalSwitch globalSwitch;
-    private final Object metrics;
+    private final LogCollectMetrics metrics;
 
     private final ConcurrentHashMap<String, LogCollectConfig> resolvedCache =
             new ConcurrentHashMap<String, LogCollectConfig>();
@@ -65,12 +67,12 @@ public class LogCollectConfigResolver {
      * @param sources      配置源集合，可为 null
      * @param cache        本地缓存，可为 null
      * @param globalSwitch 全局开关同步目标，可为 null
-     * @param metrics      指标桥接对象（反射调用），可为 null
+     * @param metrics      指标桥接对象，可为 null
      */
     public LogCollectConfigResolver(List<LogCollectConfigSource> sources,
                                     LogCollectLocalConfigCache cache,
                                     LogCollectGlobalSwitch globalSwitch,
-                                    Object metrics) {
+                                    LogCollectMetrics metrics) {
         List<LogCollectConfigSource> sorted = new ArrayList<LogCollectConfigSource>();
         if (sources != null) {
             sorted.addAll(sources);
@@ -79,7 +81,7 @@ public class LogCollectConfigResolver {
         this.sources = Collections.unmodifiableList(sorted);
         this.cache = cache;
         this.globalSwitch = globalSwitch;
-        this.metrics = metrics;
+        this.metrics = metrics == null ? NoopLogCollectMetrics.INSTANCE : metrics;
         syncGlobalEnabledFromSources();
         syncGlobalLogLinePatternFromSources();
         refreshStartupOnlySnapshot();
@@ -137,7 +139,7 @@ public class LogCollectConfigResolver {
         syncGlobalEnabledFromSources();
         syncGlobalLogLinePatternFromSources();
         logStartupOnlyRuntimeChanges(before, source);
-        invokeMetrics("incrementConfigRefresh", source == null ? "unknown" : source);
+        metrics.incrementConfigRefresh(source == null ? "unknown" : source);
         LogCollectInternalLogger.info("Config cache cleared due to config change from: {}",
                 source == null ? "unknown" : source);
     }
@@ -744,42 +746,4 @@ public class LogCollectConfigResolver {
         }
     }
 
-    private void invokeMetrics(String methodName, Object... args) {
-        if (metrics == null) {
-            return;
-        }
-        try {
-            MethodLoop:
-            for (java.lang.reflect.Method method : metrics.getClass().getMethods()) {
-                if (!method.getName().equals(methodName) || method.getParameterTypes().length != args.length) {
-                    continue;
-                }
-                Class<?>[] paramTypes = method.getParameterTypes();
-                for (int i = 0; i < paramTypes.length; i++) {
-                    if (args[i] == null) {
-                        continue;
-                    }
-                    if (!wrap(paramTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
-                        continue MethodLoop;
-                    }
-                }
-                method.invoke(metrics, args);
-                return;
-            }
-        } catch (Exception ignored) {
-        } catch (Error e) {
-            throw e;
-        }
-    }
-
-    private Class<?> wrap(Class<?> type) {
-        if (!type.isPrimitive()) {
-            return type;
-        }
-        if (type == int.class) return Integer.class;
-        if (type == long.class) return Long.class;
-        if (type == boolean.class) return Boolean.class;
-        if (type == double.class) return Double.class;
-        return type;
-    }
 }

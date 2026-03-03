@@ -1,15 +1,13 @@
 package com.logcollect.core.buffer;
 
+import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.api.model.LogEntry;
 import com.logcollect.core.test.CoreUnitTestBase;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.util.List;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -122,108 +120,45 @@ class BufferInfrastructureTest extends CoreUnitTestBase {
     }
 
     @Test
-    void asyncFlushExecutor_handleRejected_reflectionCoversBranches() throws Exception {
-        Method method = AsyncFlushExecutor.class.getDeclaredMethod(
-                "handleRejected", Runnable.class, ThreadPoolExecutor.class, String.class);
-        method.setAccessible(true);
-
-        ThreadPoolExecutor withSpace = new ThreadPoolExecutor(
-                1, 1, 1, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(10));
+    void asyncFlushExecutor_callerRunsWhenPoolSaturated() throws Exception {
         try {
-            AtomicBoolean discarded = new AtomicBoolean(false);
-            AtomicInteger downgradedRun = new AtomicInteger(0);
-            AsyncFlushExecutor.RejectedAwareTask task = new AsyncFlushExecutor.RejectedAwareTask() {
-                @Override
-                public Runnable downgradeForRetry() {
-                    return downgradedRun::incrementAndGet;
-                }
+            AsyncFlushExecutor.configure(1, 1, 1);
+            CountDownLatch block = new CountDownLatch(1);
+            CountDownLatch finished = new CountDownLatch(2);
+            AtomicReference<String> callerThread = new AtomicReference<String>();
 
-                @Override
-                public void onDiscard(String reason) {
-                    discarded.set(true);
+            AsyncFlushExecutor.submitOrRun(() -> {
+                try {
+                    block.await(2, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    finished.countDown();
                 }
-
-                @Override
-                public void run() {
-                }
-            };
-            method.invoke(null, task, withSpace, "test_reason");
-            Runnable queued = withSpace.getQueue().poll();
-            assertThat(queued).isNotNull();
-            queued.run();
-            assertThat(downgradedRun.get()).isEqualTo(1);
-            assertThat(discarded.get()).isFalse();
-        } finally {
-            withSpace.shutdownNow();
-        }
-
-        ThreadPoolExecutor fullQueue = new ThreadPoolExecutor(
-                1, 1, 1, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(1));
-        try {
-            fullQueue.getQueue().offer(() -> {
             });
-            AtomicBoolean discarded = new AtomicBoolean(false);
-            AsyncFlushExecutor.RejectedAwareTask noRetry = new AsyncFlushExecutor.RejectedAwareTask() {
-                @Override
-                public Runnable downgradeForRetry() {
-                    return null;
-                }
+            AsyncFlushExecutor.submitOrRun(finished::countDown);
 
-                @Override
-                public void onDiscard(String reason) {
-                    discarded.set("queue_full".equals(reason));
-                }
+            String testThread = Thread.currentThread().getName();
+            AsyncFlushExecutor.submitOrRun(() -> callerThread.set(Thread.currentThread().getName()));
 
-                @Override
-                public void run() {
-                }
-            };
-            method.invoke(null, noRetry, fullQueue, "queue_full");
-            assertThat(discarded.get()).isTrue();
+            assertThat(callerThread.get()).isEqualTo(testThread);
+            block.countDown();
+            assertThat(finished.await(2, TimeUnit.SECONDS)).isTrue();
         } finally {
-            fullQueue.shutdownNow();
+            AsyncFlushExecutor.configure(2, 4, 4096);
         }
+    }
 
-        ThreadPoolExecutor shutdownExecutor = new ThreadPoolExecutor(
-                1, 1, 1, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(1));
-        shutdownExecutor.shutdown();
+    @Test
+    void asyncFlushExecutor_submitAfterShutdown_runsInlineFallback() {
         try {
-            AtomicBoolean ranAfterShutdown = new AtomicBoolean(false);
-            Runnable plain = () -> ranAfterShutdown.set(true);
-            method.invoke(null, plain, shutdownExecutor, "shutdown");
-            assertThat(ranAfterShutdown.get()).isTrue();
+            AsyncFlushExecutor.configure(1, 1, 8);
+            AsyncFlushExecutor.shutdownAndAwait(100);
+            AtomicBoolean ran = new AtomicBoolean(false);
+            AsyncFlushExecutor.submitOrRun(() -> ran.set(true));
+            assertThat(ran.get()).isTrue();
         } finally {
-            shutdownExecutor.shutdownNow();
-        }
-
-        ThreadPoolExecutor shutdownWithRuntimeException = new ThreadPoolExecutor(
-                1, 1, 1, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(1));
-        shutdownWithRuntimeException.shutdown();
-        try {
-            method.invoke(null, (Runnable) () -> {
-                throw new IllegalStateException("run-failed");
-            }, shutdownWithRuntimeException, "shutdown");
-        } finally {
-            shutdownWithRuntimeException.shutdownNow();
-        }
-
-        ThreadPoolExecutor shutdownWithError = new ThreadPoolExecutor(
-                1, 1, 1, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(1));
-        shutdownWithError.shutdown();
-        try {
-            boolean threw = false;
-            try {
-                method.invoke(null, (Runnable) () -> {
-                    throw new AssertionError("fatal");
-                }, shutdownWithError, "shutdown");
-            } catch (InvocationTargetException ex) {
-                threw = true;
-                assertThat(ex.getCause()).isInstanceOf(AssertionError.class);
-                assertThat(ex.getCause()).hasMessageContaining("fatal");
-            }
-            assertThat(threw).isTrue();
-        } finally {
-            shutdownWithError.shutdownNow();
+            AsyncFlushExecutor.configure(2, 4, 4096);
         }
     }
 
@@ -242,12 +177,78 @@ class BufferInfrastructureTest extends CoreUnitTestBase {
         }
     }
 
-    static class MetricsStub {
+    static class MetricsStub implements LogCollectMetrics {
         volatile double lastUtilization = -1.0d;
 
-        @SuppressWarnings("unused")
+        @Override
         public void updateGlobalBufferUtilization(double utilization) {
             this.lastUtilization = utilization;
+        }
+
+        @Override
+        public void incrementDiscarded(String methodKey, String reason) {
+        }
+
+        @Override
+        public void incrementCollected(String methodKey, String level, String mode) {
+        }
+
+        @Override
+        public void incrementPersisted(String methodKey, String mode) {
+        }
+
+        @Override
+        public void incrementPersistFailed(String methodKey) {
+        }
+
+        @Override
+        public void incrementFlush(String methodKey, String mode, String trigger) {
+        }
+
+        @Override
+        public void incrementBufferOverflow(String methodKey, String overflowPolicy) {
+        }
+
+        @Override
+        public void incrementDegradeTriggered(String type, String methodKey) {
+        }
+
+        @Override
+        public void incrementCircuitRecovered(String methodKey) {
+        }
+
+        @Override
+        public void incrementSanitizeHits(String methodKey) {
+        }
+
+        @Override
+        public void incrementMaskHits(String methodKey) {
+        }
+
+        @Override
+        public void incrementHandlerTimeout(String methodKey) {
+        }
+
+        @Override
+        public void updateBufferUtilization(String methodKey, double utilization) {
+        }
+
+        @Override
+        public Object startSecurityTimer() {
+            return null;
+        }
+
+        @Override
+        public void stopSecurityTimer(Object timerSample, String methodKey) {
+        }
+
+        @Override
+        public Object startPersistTimer() {
+            return null;
+        }
+
+        @Override
+        public void stopPersistTimer(Object timerSample, String methodKey, String mode) {
         }
     }
 }

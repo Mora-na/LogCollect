@@ -2,59 +2,60 @@ package com.logcollect.core.buffer;
 
 import com.logcollect.core.internal.LogCollectInternalLogger;
 
-import java.util.concurrent.*;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 聚合/单条缓冲区的异步 flush 执行器。
  *
- * <p>线程池饱和时执行分级降级，避免业务线程被 {@code CallerRunsPolicy} 阻塞。
+ * <p>默认使用 {@link java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy}，
+ * 在线程池饱和时由调用线程执行任务，提供自然反压并避免数据丢失。
  */
 public final class AsyncFlushExecutor {
 
     public interface RejectedAwareTask extends Runnable {
-        /**
-         * 返回降级后的重试任务；返回 null 表示无可重试任务。
-         */
-        Runnable downgradeForRetry();
+        default Runnable downgradeForRetry() {
+            return null;
+        }
 
-        /**
-         * 最终丢弃时回调。
-         */
-        void onDiscard(String reason);
+        default void onDiscard(String reason) {
+        }
     }
 
     private static final AtomicLong REJECTED_COUNT = new AtomicLong(0);
 
-    private static final ThreadPoolExecutor EXECUTOR = new ThreadPoolExecutor(
-            1,
-            4,
-            60L,
-            TimeUnit.SECONDS,
-            new LinkedBlockingQueue<Runnable>(1000),
-            r -> {
-                Thread thread = new Thread(r, "logcollect-async-flush");
-                thread.setDaemon(true);
-                return thread;
-            },
-            new LogCollectRejectedHandler());
+    private static final Object EXECUTOR_LOCK = new Object();
+    private static volatile ThreadPoolExecutor executor = newExecutor(
+            defaultCoreThreads(),
+            defaultMaxThreads(),
+            4096);
 
     private AsyncFlushExecutor() {
     }
 
-    /**
-     * 提交 flush 任务。
-     *
-     * @param task flush 任务
-     */
     public static void submitOrRun(Runnable task) {
         if (task == null) {
             return;
         }
+        ThreadPoolExecutor current = executor;
+        if (current.isShutdown()) {
+            runSafely(task, "executor_shutdown");
+            return;
+        }
         try {
-            EXECUTOR.execute(task);
+            current.execute(task);
         } catch (RejectedExecutionException e) {
-            handleRejected(task, EXECUTOR, "executor_rejected");
+            REJECTED_COUNT.incrementAndGet();
+            if (current.isShutdown()) {
+                runSafely(task, "executor_shutdown");
+                return;
+            }
+            // CallerRunsPolicy 在正常运行时不应触发该分支，兜底保护。
+            runSafely(task, "executor_rejected_fallback");
         }
     }
 
@@ -62,50 +63,78 @@ public final class AsyncFlushExecutor {
         return REJECTED_COUNT.get();
     }
 
+    public static void configure(int coreThreads, int maxThreads, int queueCapacity) {
+        int normalizedCore = Math.max(1, coreThreads);
+        int normalizedMax = Math.max(normalizedCore, maxThreads);
+        int normalizedQueue = Math.max(1, queueCapacity);
+        ThreadPoolExecutor replacement = newExecutor(normalizedCore, normalizedMax, normalizedQueue);
+        ThreadPoolExecutor old;
+        synchronized (EXECUTOR_LOCK) {
+            old = executor;
+            executor = replacement;
+        }
+        if (old != null) {
+            old.shutdown();
+        }
+    }
+
+    public static void resize(int coreThreads, int maxThreads) {
+        ThreadPoolExecutor current = executor;
+        int normalizedCore = Math.max(1, coreThreads);
+        int normalizedMax = Math.max(normalizedCore, maxThreads);
+        current.setMaximumPoolSize(normalizedMax);
+        current.setCorePoolSize(normalizedCore);
+    }
+
     public static void shutdownAndAwait(long timeoutMs) {
-        EXECUTOR.shutdown();
+        ThreadPoolExecutor current = executor;
+        current.shutdown();
         if (timeoutMs <= 0) {
             return;
         }
         try {
-            if (!EXECUTOR.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS)) {
-                EXECUTOR.shutdownNow();
+            if (!current.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS)) {
+                current.shutdownNow();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            EXECUTOR.shutdownNow();
+            current.shutdownNow();
         }
     }
 
-    private static final class LogCollectRejectedHandler implements RejectedExecutionHandler {
-        @Override
-        public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
-            handleRejected(r, executor, "async_queue_full");
-        }
+    private static ThreadPoolExecutor newExecutor(int coreThreads, int maxThreads, int queueCapacity) {
+        AtomicInteger threadCounter = new AtomicInteger(0);
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(
+                coreThreads,
+                maxThreads,
+                60L,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<Runnable>(queueCapacity),
+                r -> {
+                    Thread thread = new Thread(r, "logcollect-flush-" + threadCounter.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                },
+                new ThreadPoolExecutor.CallerRunsPolicy());
+        pool.allowCoreThreadTimeOut(true);
+        return pool;
     }
 
-    private static void handleRejected(Runnable task,
-                                       ThreadPoolExecutor executor,
-                                       String reason) {
-        REJECTED_COUNT.incrementAndGet();
-        if (task instanceof RejectedAwareTask) {
-            RejectedAwareTask awareTask = (RejectedAwareTask) task;
-            Runnable downgraded = awareTask.downgradeForRetry();
-            if (downgraded != null && executor != null && executor.getQueue().offer(downgraded)) {
-                return;
-            }
-            awareTask.onDiscard(reason);
-        }
-        LogCollectInternalLogger.warn("Async flush rejected, task discarded. reason={}, rejectedCount={}",
-                reason, REJECTED_COUNT.get());
-        if (executor != null && executor.isShutdown()) {
-            try {
-                task.run();
-            } catch (Exception ex) {
-                LogCollectInternalLogger.warn("Run async flush task after shutdown failed", ex);
-            } catch (Error e) {
-                throw e;
-            }
+    private static int defaultCoreThreads() {
+        return Math.max(2, Runtime.getRuntime().availableProcessors() / 4);
+    }
+
+    private static int defaultMaxThreads() {
+        return Math.max(4, Runtime.getRuntime().availableProcessors());
+    }
+
+    private static void runSafely(Runnable task, String reason) {
+        try {
+            task.run();
+        } catch (Exception ex) {
+            LogCollectInternalLogger.warn("Run async flush task failed, reason={}", reason, ex);
+        } catch (Error e) {
+            throw e;
         }
     }
 }

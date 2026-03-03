@@ -42,6 +42,8 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
     private static final String MDC_KEY = LogCollectContextManager.TRACE_ID_KEY;
     private static final String INTERNAL_LOGGER_PREFIX = "com.logcollect.internal";
     private static final String INTERNAL_LOGGER_PREFIX_V2 = "io.github.morana.logcollect.internal";
+    private static final String ATTR_SECURITY_PIPELINE = "__securityPipeline";
+    private static final String ATTR_SECURITY_METRICS = "__securityMetrics";
 
     private volatile SecurityComponentRegistry securityRegistry;
     private volatile LogCollectMetrics metrics = NoopLogCollectMetrics.INSTANCE;
@@ -119,19 +121,19 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             String throwable = StringLengthGuard.guardThrowable(
                     extractThrowableString(event), config.getGuardMaxThrowableLength());
 
-            LogEntry rawEntry = LogEntry.builder()
-                    .traceId(context.getTraceId())
-                    .content(content)
-                    .level(level)
-                    .timestamp(eventTimestamp)
-                    .threadName(event.getThreadName())
-                    .loggerName(loggerName)
-                    .throwableString(throwable)
-                    .mdcContext(mdc)
-                    .build();
-
             Object securityTimer = m.startSecurityTimer();
-            LogEntry entry = securityProcess(config, methodKey, rawEntry, m);
+            LogEntry entry = securityProcess(
+                    context,
+                    config,
+                    methodKey,
+                    content,
+                    level,
+                    eventTimestamp,
+                    event.getThreadName(),
+                    loggerName,
+                    throwable,
+                    mdc,
+                    m);
             m.stopSecurityTimer(securityTimer, methodKey);
 
             if (!allowByTotalLimitAndSampling(context, entry, methodKey, m)) {
@@ -166,35 +168,59 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         return this.metrics;
     }
 
-    private LogEntry securityProcess(LogCollectConfig config,
+    private LogEntry securityProcess(LogCollectContext context,
+                                     LogCollectConfig config,
                                      String methodKey,
-                                     LogEntry rawEntry,
+                                     String content,
+                                     String level,
+                                     long timestamp,
+                                     String threadName,
+                                     String loggerName,
+                                     String throwable,
+                                     Map<String, String> mdc,
                                      LogCollectMetrics m) {
-        LogSanitizer sanitizer = resolveSanitizer(config);
-        LogMasker masker = resolveMasker(config);
+        SecurityPipeline pipeline = context.getAttribute(ATTR_SECURITY_PIPELINE, SecurityPipeline.class);
+        SecurityPipeline.SecurityMetrics secMetrics =
+                context.getAttribute(ATTR_SECURITY_METRICS, SecurityPipeline.SecurityMetrics.class);
+        if (secMetrics == null) {
+            secMetrics = SecurityPipeline.SecurityMetrics.NOOP;
+        }
+        if (pipeline == null) {
+            LogSanitizer sanitizer = resolveSanitizer(config);
+            LogMasker masker = resolveMasker(config);
+            pipeline = new SecurityPipeline(sanitizer, masker);
+            secMetrics = new SecurityPipeline.SecurityMetrics() {
+                @Override
+                public void onContentSanitized() {
+                    m.incrementSanitizeHits(methodKey);
+                }
 
-        SecurityPipeline pipeline = new SecurityPipeline(sanitizer, masker);
-        return pipeline.process(rawEntry, new SecurityPipeline.SecurityMetrics() {
-            @Override
-            public void onContentSanitized() {
-                m.incrementSanitizeHits(methodKey);
-            }
+                @Override
+                public void onThrowableSanitized() {
+                    m.incrementSanitizeHits(methodKey);
+                }
 
-            @Override
-            public void onThrowableSanitized() {
-                m.incrementSanitizeHits(methodKey);
-            }
+                @Override
+                public void onContentMasked() {
+                    m.incrementMaskHits(methodKey);
+                }
 
-            @Override
-            public void onContentMasked() {
-                m.incrementMaskHits(methodKey);
-            }
-
-            @Override
-            public void onThrowableMasked() {
-                m.incrementMaskHits(methodKey);
-            }
-        });
+                @Override
+                public void onThrowableMasked() {
+                    m.incrementMaskHits(methodKey);
+                }
+            };
+        }
+        return pipeline.processRaw(
+                context.getTraceId(),
+                content,
+                level,
+                timestamp,
+                threadName,
+                loggerName,
+                throwable,
+                mdc,
+                secMetrics);
     }
 
     private String extractThrowableString(ILoggingEvent event) {

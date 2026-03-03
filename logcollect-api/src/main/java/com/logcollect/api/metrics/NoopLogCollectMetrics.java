@@ -30,7 +30,19 @@ public final class NoopLogCollectMetrics implements LogCollectMetrics {
     }
 
     @Override
+    public void incrementFlush(String methodKey, String mode, String trigger) {
+    }
+
+    @Override
+    public void incrementBufferOverflow(String methodKey, String overflowPolicy) {
+    }
+
+    @Override
     public void incrementDegradeTriggered(String type, String methodKey) {
+    }
+
+    @Override
+    public void incrementCircuitRecovered(String methodKey) {
     }
 
     @Override
@@ -39,6 +51,18 @@ public final class NoopLogCollectMetrics implements LogCollectMetrics {
 
     @Override
     public void incrementMaskHits(String methodKey) {
+    }
+
+    @Override
+    public void incrementHandlerTimeout(String methodKey) {
+    }
+
+    @Override
+    public void updateBufferUtilization(String methodKey, double utilization) {
+    }
+
+    @Override
+    public void updateGlobalBufferUtilization(double utilization) {
     }
 
     @Override

@@ -2,6 +2,9 @@ package com.logcollect.api.format;
 
 import com.logcollect.api.model.LogEntry;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,6 +29,7 @@ public final class LogLinePatternParser {
 
     private static final ConcurrentMap<String, DateTimeFormatter> DTF_CACHE =
             new ConcurrentHashMap<String, DateTimeFormatter>(4);
+    private static final ZoneId SYSTEM_ZONE = ZoneId.systemDefault();
 
     private LogLinePatternParser() {
     }
@@ -186,10 +190,14 @@ public final class LogLinePatternParser {
                     ? argument
                     : "yyyy-MM-dd HH:mm:ss.SSS";
             try {
+                if ("yyyy-MM-dd HH:mm:ss.SSS".equals(datePattern)) {
+                    return CachedTimestampFormatter.format(entry.getTimestamp());
+                }
                 DateTimeFormatter formatter = DTF_CACHE.computeIfAbsent(datePattern, DateTimeFormatter::ofPattern);
-                return entry.getTime().format(formatter);
+                LocalDateTime dateTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(entry.getTimestamp()), SYSTEM_ZONE);
+                return dateTime.format(formatter);
             } catch (Exception e) {
-                return entry.getTime().toString();
+                return LocalDateTime.ofInstant(Instant.ofEpochMilli(entry.getTimestamp()), SYSTEM_ZONE).toString();
             }
         }
 
@@ -258,5 +266,42 @@ public final class LogLinePatternParser {
             sb.append(abbreviated[i] ? segments[i].charAt(0) : segments[i]);
         }
         return sb.toString();
+    }
+
+    private static final class CachedTimestampFormatter {
+        private static final DateTimeFormatter BASE_FORMATTER =
+                DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        private static final ThreadLocal<CacheEntry> CACHE = ThreadLocal.withInitial(CacheEntry::new);
+
+        private static String format(long epochMillis) {
+            CacheEntry cache = CACHE.get();
+            long epochSeconds = epochMillis / 1000L;
+            int millis = (int) (epochMillis % 1000L);
+            if (millis < 0) {
+                millis += 1000;
+            }
+            if (epochSeconds != cache.cachedEpochSeconds) {
+                LocalDateTime dateTime = LocalDateTime.ofInstant(
+                        Instant.ofEpochMilli(epochSeconds * 1000L), SYSTEM_ZONE);
+                cache.cachedBase = dateTime.format(BASE_FORMATTER);
+                cache.cachedEpochSeconds = epochSeconds;
+            }
+            return cache.cachedBase + '.' + padMillis(millis);
+        }
+
+        private static String padMillis(int millis) {
+            if (millis < 10) {
+                return "00" + millis;
+            }
+            if (millis < 100) {
+                return "0" + millis;
+            }
+            return String.valueOf(millis);
+        }
+    }
+
+    private static final class CacheEntry {
+        private long cachedEpochSeconds = Long.MIN_VALUE;
+        private String cachedBase = "";
     }
 }

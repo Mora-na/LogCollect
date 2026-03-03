@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -21,6 +21,7 @@ public final class LogEntry {
     private final String loggerName;
     private final String throwableString;
     private final Map<String, String> mdcContext;
+    private final long estimatedBytes;
 
     private LogEntry(Builder builder) {
         this.traceId = builder.traceId;
@@ -32,9 +33,12 @@ public final class LogEntry {
         this.throwableString = builder.throwableString;
         if (builder.mdcContext == null || builder.mdcContext.isEmpty()) {
             this.mdcContext = Collections.emptyMap();
+        } else if (isUnmodifiableMap(builder.mdcContext)) {
+            this.mdcContext = builder.mdcContext;
         } else {
-            this.mdcContext = Collections.unmodifiableMap(new HashMap<String, String>(builder.mdcContext));
+            this.mdcContext = Collections.unmodifiableMap(new LinkedHashMap<String, String>(builder.mdcContext));
         }
+        this.estimatedBytes = computeEstimateBytes();
     }
 
     private long resolveTimestamp(Builder builder) {
@@ -93,6 +97,10 @@ public final class LogEntry {
     }
 
     public long estimateBytes() {
+        return estimatedBytes;
+    }
+
+    private long computeEstimateBytes() {
         long size = 112;
         size += estimateString(traceId);
         size += estimateString(content);
@@ -109,6 +117,17 @@ public final class LogEntry {
             }
         }
         return size;
+    }
+
+    private static boolean isUnmodifiableMap(Map<?, ?> map) {
+        if (map == null) {
+            return false;
+        }
+        if (map == Collections.emptyMap()) {
+            return true;
+        }
+        String className = map.getClass().getName();
+        return className.contains("Unmodifiable") || className.contains("ImmutableMap");
     }
 
     private static long estimateString(String value) {

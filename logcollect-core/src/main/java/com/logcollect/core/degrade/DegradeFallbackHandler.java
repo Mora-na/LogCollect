@@ -2,6 +2,8 @@ package com.logcollect.core.degrade;
 
 import com.logcollect.api.enums.DegradeStorage;
 import com.logcollect.api.exception.LogCollectDegradeException;
+import com.logcollect.api.metrics.LogCollectMetrics;
+import com.logcollect.api.metrics.NoopLogCollectMetrics;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
 import com.logcollect.core.internal.LogCollectInternalLogger;
@@ -109,9 +111,13 @@ public final class DegradeFallbackHandler {
         if (!fileManager.isInitialized()) {
             return false;
         }
-        List<String> copy = lines == null ? new ArrayList<String>() : lines;
-        fileManager.write(context.getTraceId(), copy);
-        return true;
+        List<String> copy = lines == null ? new ArrayList<String>() : new ArrayList<String>(lines);
+        // blockWhenDegradeFail=true 场景要求当场感知失败，保持同步写入语义。
+        if (context.getConfig() != null && context.getConfig().isBlockWhenDegradeFail()) {
+            fileManager.write(context.getTraceId(), copy);
+            return true;
+        }
+        return fileManager.writeAsync(context.getTraceId(), copy);
     }
 
     private static boolean degradeToMemory(LogCollectContext context, List<String> lines) {
@@ -134,42 +140,17 @@ public final class DegradeFallbackHandler {
     }
 
     private static void metricCall(LogCollectContext context, String methodName, Object... args) {
-        Object metrics = context.getAttribute("__metrics");
-        if (metrics == null || context.getConfig() == null || !context.getConfig().isEnableMetrics()) {
+        if (context == null || context.getConfig() == null || !context.getConfig().isEnableMetrics()) {
             return;
         }
-        try {
-            MethodLoop:
-            for (java.lang.reflect.Method method : metrics.getClass().getMethods()) {
-                if (!method.getName().equals(methodName) || method.getParameterTypes().length != args.length) {
-                    continue;
-                }
-                Class<?>[] paramTypes = method.getParameterTypes();
-                for (int i = 0; i < paramTypes.length; i++) {
-                    if (args[i] == null) {
-                        continue;
-                    }
-                    if (!wrap(paramTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
-                        continue MethodLoop;
-                    }
-                }
-                method.invoke(metrics, args);
-                return;
-            }
-        } catch (Exception ignored) {
-        } catch (Error e) {
-            throw e;
+        LogCollectMetrics metrics = context.getAttribute("__metrics", LogCollectMetrics.class);
+        if (metrics == null) {
+            metrics = NoopLogCollectMetrics.INSTANCE;
         }
-    }
-
-    private static Class<?> wrap(Class<?> type) {
-        if (!type.isPrimitive()) {
-            return type;
+        if ("incrementDiscarded".equals(methodName) && args.length == 2) {
+            String method = args[0] == null ? context.getMethodSignature() : String.valueOf(args[0]);
+            String reason = args[1] == null ? "unknown" : String.valueOf(args[1]);
+            metrics.incrementDiscarded(method, reason);
         }
-        if (type == int.class) return Integer.class;
-        if (type == long.class) return Long.class;
-        if (type == boolean.class) return Boolean.class;
-        if (type == double.class) return Double.class;
-        return type;
     }
 }

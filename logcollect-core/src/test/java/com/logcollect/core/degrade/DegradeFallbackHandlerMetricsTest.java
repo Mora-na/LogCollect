@@ -3,13 +3,13 @@ package com.logcollect.core.degrade;
 import com.logcollect.api.enums.CollectMode;
 import com.logcollect.api.enums.DegradeStorage;
 import com.logcollect.api.handler.LogCollectHandler;
+import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -61,18 +61,6 @@ class DegradeFallbackHandlerMetricsTest {
         assertThat(metrics.callCount.get()).isEqualTo(1);
     }
 
-    @Test
-    void privateWrap_coverPrimitiveBranches() throws Exception {
-        Method wrap = DegradeFallbackHandler.class.getDeclaredMethod("wrap", Class.class);
-        wrap.setAccessible(true);
-
-        assertThat(wrap.invoke(null, int.class)).isEqualTo(Integer.class);
-        assertThat(wrap.invoke(null, long.class)).isEqualTo(Long.class);
-        assertThat(wrap.invoke(null, boolean.class)).isEqualTo(Boolean.class);
-        assertThat(wrap.invoke(null, double.class)).isEqualTo(Double.class);
-        assertThat(wrap.invoke(null, String.class)).isEqualTo(String.class);
-    }
-
     private AtomicInteger memoryQueueSize() throws Exception {
         Field sizeField = DegradeFallbackHandler.class.getDeclaredField("MEMORY_QUEUE_SIZE");
         sizeField.setAccessible(true);
@@ -84,13 +72,80 @@ class DegradeFallbackHandlerMetricsTest {
     }
 
     @SuppressWarnings("unused")
-    public static final class MetricsStub {
+    public static final class MetricsStub implements LogCollectMetrics {
         private final AtomicInteger callCount = new AtomicInteger(0);
         private volatile String lastReason;
 
+        @Override
         public void incrementDiscarded(String method, String reason) {
             callCount.incrementAndGet();
             lastReason = reason;
+        }
+
+        @Override
+        public void incrementCollected(String methodKey, String level, String mode) {
+        }
+
+        @Override
+        public void incrementPersisted(String methodKey, String mode) {
+        }
+
+        @Override
+        public void incrementPersistFailed(String methodKey) {
+        }
+
+        @Override
+        public void incrementFlush(String methodKey, String mode, String trigger) {
+        }
+
+        @Override
+        public void incrementBufferOverflow(String methodKey, String overflowPolicy) {
+        }
+
+        @Override
+        public void incrementDegradeTriggered(String type, String methodKey) {
+        }
+
+        @Override
+        public void incrementCircuitRecovered(String methodKey) {
+        }
+
+        @Override
+        public void incrementSanitizeHits(String methodKey) {
+        }
+
+        @Override
+        public void incrementMaskHits(String methodKey) {
+        }
+
+        @Override
+        public void incrementHandlerTimeout(String methodKey) {
+        }
+
+        @Override
+        public void updateBufferUtilization(String methodKey, double utilization) {
+        }
+
+        @Override
+        public void updateGlobalBufferUtilization(double utilization) {
+        }
+
+        @Override
+        public Object startSecurityTimer() {
+            return null;
+        }
+
+        @Override
+        public void stopSecurityTimer(Object timerSample, String methodKey) {
+        }
+
+        @Override
+        public Object startPersistTimer() {
+            return null;
+        }
+
+        @Override
+        public void stopPersistTimer(Object timerSample, String methodKey, String mode) {
         }
     }
 }

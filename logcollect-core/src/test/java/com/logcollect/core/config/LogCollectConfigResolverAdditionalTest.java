@@ -161,11 +161,82 @@ class LogCollectConfigResolverAdditionalTest {
     }
 
     @SuppressWarnings("unused")
-    public static class MetricsStub {
+    public static class MetricsStub implements com.logcollect.api.metrics.LogCollectMetrics {
         private String refreshSource;
 
+        @Override
         public void incrementConfigRefresh(String source) {
             this.refreshSource = source;
+        }
+
+        @Override
+        public void incrementDiscarded(String methodKey, String reason) {
+        }
+
+        @Override
+        public void incrementCollected(String methodKey, String level, String mode) {
+        }
+
+        @Override
+        public void incrementPersisted(String methodKey, String mode) {
+        }
+
+        @Override
+        public void incrementPersistFailed(String methodKey) {
+        }
+
+        @Override
+        public void incrementFlush(String methodKey, String mode, String trigger) {
+        }
+
+        @Override
+        public void incrementBufferOverflow(String methodKey, String overflowPolicy) {
+        }
+
+        @Override
+        public void incrementDegradeTriggered(String type, String methodKey) {
+        }
+
+        @Override
+        public void incrementCircuitRecovered(String methodKey) {
+        }
+
+        @Override
+        public void incrementSanitizeHits(String methodKey) {
+        }
+
+        @Override
+        public void incrementMaskHits(String methodKey) {
+        }
+
+        @Override
+        public void incrementHandlerTimeout(String methodKey) {
+        }
+
+        @Override
+        public void updateBufferUtilization(String methodKey, double utilization) {
+        }
+
+        @Override
+        public void updateGlobalBufferUtilization(double utilization) {
+        }
+
+        @Override
+        public Object startSecurityTimer() {
+            return null;
+        }
+
+        @Override
+        public void stopSecurityTimer(Object timerSample, String methodKey) {
+        }
+
+        @Override
+        public Object startPersistTimer() {
+            return null;
+        }
+
+        @Override
+        public void stopPersistTimer(Object timerSample, String methodKey, String mode) {
         }
     }
 }

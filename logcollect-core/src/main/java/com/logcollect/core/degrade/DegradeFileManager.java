@@ -8,9 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.*;
 import java.util.*;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 
@@ -23,6 +21,11 @@ public class DegradeFileManager {
 
     private static final long DISK_FREE_MIN_BYTES = 100L * 1024 * 1024;
     private static final Pattern SAFE_TRACE_ID_PATTERN = Pattern.compile("^[0-9a-fA-F\\-]{36}$");
+    private static final ExecutorService DEGRADE_WRITER = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "logcollect-degrade-writer");
+        t.setDaemon(true);
+        return t;
+    });
 
     private final Path baseDir;
     private final long maxTotalBytes;
@@ -96,6 +99,35 @@ public class DegradeFileManager {
             }
         }
         write(traceId, "unknown", builder.toString());
+    }
+
+    /**
+     * 异步写入降级文件（单线程串行，避免阻塞调用线程）。
+     *
+     * @param traceId  追踪 ID
+     * @param logLines 日志行列表
+     * @return true 表示任务已成功提交
+     */
+    public boolean writeAsync(String traceId, List<String> logLines) {
+        try {
+            DEGRADE_WRITER.execute(() -> {
+                try {
+                    write(traceId, logLines);
+                } catch (Exception e) {
+                    LogCollectInternalLogger.error("Async degrade file write failed", e);
+                } catch (Error e) {
+                    LogCollectInternalLogger.error("Async degrade file write failed with fatal error", e);
+                    throw e;
+                }
+            });
+            return true;
+        } catch (RejectedExecutionException e) {
+            LogCollectInternalLogger.warn("Submit async degrade file write rejected", e);
+            return false;
+        } catch (RuntimeException e) {
+            LogCollectInternalLogger.warn("Submit async degrade file write failed", e);
+            return false;
+        }
     }
 
     /**

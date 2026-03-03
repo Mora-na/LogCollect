@@ -452,7 +452,37 @@ class LogCollectLogbackAppenderBranchTest {
         }
 
         @Override
+        public void incrementFlush(String methodKey, String mode, String trigger) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void incrementBufferOverflow(String methodKey, String overflowPolicy) {
+            securityTimerStarted++;
+        }
+
+        @Override
         public void incrementDegradeTriggered(String type, String methodKey) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void incrementCircuitRecovered(String methodKey) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void incrementHandlerTimeout(String methodKey) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void updateBufferUtilization(String methodKey, double utilization) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void updateGlobalBufferUtilization(double utilization) {
             securityTimerStarted++;
         }
 

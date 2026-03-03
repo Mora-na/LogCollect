@@ -1,6 +1,6 @@
 package com.logcollect.autoconfigure.circuitbreaker;
 
-import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
+import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.util.MethodKeyResolver;
 

@@ -24,8 +24,20 @@ public class DefaultLogSanitizer implements LogSanitizer {
         if (raw == null) {
             return null;
         }
-        String cleaned = removeHtmlTags(removeAnsiCodes(raw));
-        return MESSAGE_CONTROL_CHARS.matcher(cleaned).replaceAll(" ");
+        if (!containsAnsiEscape(raw) && !containsHtmlMarker(raw) && !containsMessageControl(raw)) {
+            return raw;
+        }
+        String cleaned = raw;
+        if (containsAnsiEscape(cleaned)) {
+            cleaned = removeAnsiCodes(cleaned);
+        }
+        if (containsHtmlMarker(cleaned)) {
+            cleaned = removeHtmlTags(cleaned);
+        }
+        if (containsMessageControl(cleaned)) {
+            cleaned = MESSAGE_CONTROL_CHARS.matcher(cleaned).replaceAll(" ");
+        }
+        return cleaned;
     }
 
     @Override
@@ -33,9 +45,27 @@ public class DefaultLogSanitizer implements LogSanitizer {
         if (throwableString == null) {
             return null;
         }
+        boolean hasLineBreak = containsLineBreak(throwableString);
+        boolean needsCleanup = containsAnsiEscape(throwableString)
+                || containsHtmlMarker(throwableString)
+                || containsThrowableDangerousControl(throwableString);
+        if (!needsCleanup && !hasLineBreak) {
+            return throwableString;
+        }
 
-        String cleaned = removeHtmlTags(removeAnsiCodes(throwableString));
-        cleaned = THROWABLE_DANGEROUS_CHARS.matcher(cleaned).replaceAll("");
+        String cleaned = throwableString;
+        if (containsAnsiEscape(cleaned)) {
+            cleaned = removeAnsiCodes(cleaned);
+        }
+        if (containsHtmlMarker(cleaned)) {
+            cleaned = removeHtmlTags(cleaned);
+        }
+        if (containsThrowableDangerousControl(cleaned)) {
+            cleaned = THROWABLE_DANGEROUS_CHARS.matcher(cleaned).replaceAll("");
+        }
+        if (!containsLineBreak(cleaned)) {
+            return cleaned;
+        }
 
         String[] lines = cleaned.split("\\n", -1);
         StringBuilder sb = new StringBuilder(cleaned.length() + lines.length * 12);
@@ -66,6 +96,41 @@ public class DefaultLogSanitizer implements LogSanitizer {
 
     private static String removeAnsiCodes(String input) {
         return ANSI_ESCAPE.matcher(input).replaceAll("");
+    }
+
+    private static boolean containsAnsiEscape(String input) {
+        return input.indexOf('\u001B') >= 0;
+    }
+
+    private static boolean containsHtmlMarker(String input) {
+        return input.indexOf('<') >= 0 && input.indexOf('>') >= 0;
+    }
+
+    private static boolean containsLineBreak(String input) {
+        return input.indexOf('\n') >= 0;
+    }
+
+    private static boolean containsMessageControl(String input) {
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            if (c <= 0x1F || c == 0x7F) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsThrowableDangerousControl(String input) {
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            if (c == '\n' || c == '\r' || c == '\t') {
+                continue;
+            }
+            if ((c >= 0x00 && c <= 0x08) || c == 0x0B || c == 0x0C || (c >= 0x0E && c <= 0x1F) || c == 0x7F) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isStandardStackLine(String line) {

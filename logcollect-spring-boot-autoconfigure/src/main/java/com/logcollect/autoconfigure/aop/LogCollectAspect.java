@@ -6,8 +6,11 @@ import com.logcollect.api.enums.CollectMode;
 import com.logcollect.api.exception.LogCollectDegradeException;
 import com.logcollect.api.exception.LogCollectException;
 import com.logcollect.api.handler.LogCollectHandler;
+import com.logcollect.api.masker.LogMasker;
+import com.logcollect.api.metrics.NoopLogCollectMetrics;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
+import com.logcollect.api.sanitizer.LogSanitizer;
 import com.logcollect.api.transaction.TransactionExecutor;
 import com.logcollect.autoconfigure.circuitbreaker.CircuitBreakerRegistry;
 import com.logcollect.autoconfigure.jdbc.TransactionalLogCollectHandlerWrapper;
@@ -19,7 +22,11 @@ import com.logcollect.core.context.LogCollectContextManager;
 import com.logcollect.core.degrade.DegradeFileManager;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.mdc.MDCAdapter;
+import com.logcollect.core.pipeline.SecurityPipeline;
 import com.logcollect.core.runtime.LogCollectGlobalSwitch;
+import com.logcollect.core.security.DefaultLogMasker;
+import com.logcollect.core.security.DefaultLogSanitizer;
+import com.logcollect.core.security.SecurityComponentRegistry;
 import com.logcollect.core.util.MethodKeyResolver;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
@@ -65,21 +72,24 @@ public class LogCollectAspect {
     private LogCollectMetrics metrics;
 
     @Autowired(required = false)
+    private SecurityComponentRegistry securityRegistry;
+
+    @Autowired(required = false)
     private DegradeFileManager degradeFileManager;
 
     @Autowired(required = false)
     private com.logcollect.autoconfigure.LogCollectBufferRegistry bufferRegistry;
 
+    private static final String ATTR_SECURITY_PIPELINE = "__securityPipeline";
+    private static final String ATTR_SECURITY_METRICS = "__securityMetrics";
+
     private static volatile GlobalBufferMemoryManager fallbackGlobalBufferManager;
     private static final NoopLogCollectHandler NOOP_HANDLER = new NoopLogCollectHandler();
-    private static final ExecutorService HANDLER_TIMEOUT_EXECUTOR =
-            Executors.newCachedThreadPool(new ThreadFactory() {
-                @Override
-                public Thread newThread(Runnable r) {
-                    Thread t = new Thread(r, "logcollect-handler-timeout");
-                    t.setDaemon(true);
-                    return t;
-                }
+    private static final ScheduledExecutorService TIMEOUT_SCHEDULER =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "logcollect-timeout-guard");
+                t.setDaemon(true);
+                return t;
             });
 
     private final ConcurrentHashMap<String, LogCollectCircuitBreaker> breakerCache =
@@ -267,9 +277,8 @@ public class LogCollectAspect {
         if (manager != null) {
             context.setAttribute("__globalBufferManager", manager);
         }
-        if (metrics != null && config.isEnableMetrics()) {
-            context.setAttribute("__metrics", metrics);
-        }
+        com.logcollect.api.metrics.LogCollectMetrics bridgeMetrics = resolveMetricsBridge(config);
+        context.setAttribute("__metrics", bridgeMetrics);
         if (txWrapper != null && config.isTransactionIsolation()) {
             context.setAttribute("__txWrapper", (TransactionExecutor) txWrapper);
         }
@@ -277,7 +286,66 @@ public class LogCollectAspect {
         if (backpressureCallback != null) {
             context.setAttribute("__backpressureCallback", backpressureCallback);
         }
+        prepareSecuritySession(context, config, context.getMethodSignature(), bridgeMetrics);
         return context;
+    }
+
+    private void prepareSecuritySession(LogCollectContext context,
+                                        LogCollectConfig config,
+                                        String methodKey,
+                                        com.logcollect.api.metrics.LogCollectMetrics bridgeMetrics) {
+        LogSanitizer sanitizer = resolveSanitizer(config);
+        LogMasker masker = resolveMasker(config);
+        SecurityPipeline pipeline = new SecurityPipeline(sanitizer, masker);
+        context.setAttribute(ATTR_SECURITY_PIPELINE, pipeline);
+        context.setAttribute(ATTR_SECURITY_METRICS, new SecurityPipeline.SecurityMetrics() {
+            @Override
+            public void onContentSanitized() {
+                bridgeMetrics.incrementSanitizeHits(methodKey);
+            }
+
+            @Override
+            public void onThrowableSanitized() {
+                bridgeMetrics.incrementSanitizeHits(methodKey);
+            }
+
+            @Override
+            public void onContentMasked() {
+                bridgeMetrics.incrementMaskHits(methodKey);
+            }
+
+            @Override
+            public void onThrowableMasked() {
+                bridgeMetrics.incrementMaskHits(methodKey);
+            }
+        });
+    }
+
+    private com.logcollect.api.metrics.LogCollectMetrics resolveMetricsBridge(LogCollectConfig config) {
+        if (config == null || !config.isEnableMetrics() || metrics == null) {
+            return NoopLogCollectMetrics.INSTANCE;
+        }
+        return metrics;
+    }
+
+    private LogSanitizer resolveSanitizer(LogCollectConfig config) {
+        if (securityRegistry != null) {
+            return securityRegistry.getSanitizer(config);
+        }
+        if (config == null || !config.isEnableSanitize()) {
+            return null;
+        }
+        return new DefaultLogSanitizer();
+    }
+
+    private LogMasker resolveMasker(LogCollectConfig config) {
+        if (securityRegistry != null) {
+            return securityRegistry.getMasker(config);
+        }
+        if (config == null || !config.isEnableMask()) {
+            return null;
+        }
+        return new DefaultLogMasker();
     }
 
     private GlobalBufferMemoryManager getGlobalBufferManager(LogCollectConfig config) {
@@ -469,52 +537,36 @@ public class LogCollectAspect {
 
     private <T> T safeInvoke(Callable<T> callable, int timeoutMs, boolean transactionIsolation,
                              LogCollectContext context, String phase) {
-        Future<T> future = null;
+        boolean interruptedBefore = Thread.currentThread().isInterrupted();
+        AtomicBoolean timeoutTriggered = new AtomicBoolean(false);
+        AtomicBoolean timeoutHandled = new AtomicBoolean(false);
+        ScheduledFuture<?> interruptGuard = null;
         try {
-            if (timeoutMs <= 0) {
-                return invokeWithIsolation(callable, transactionIsolation);
+            if (timeoutMs > 0) {
+                Thread currentThread = Thread.currentThread();
+                interruptGuard = TIMEOUT_SCHEDULER.schedule(() -> {
+                    timeoutTriggered.set(true);
+                    currentThread.interrupt();
+                    if (metrics != null && context != null && context.getConfig() != null && context.getConfig().isEnableMetrics()) {
+                        metrics.incrementHandlerTimeout(context.getMethodSignature());
+                    }
+                    LogCollectInternalLogger.warn("Handler {} timed out after {}ms", phase, timeoutMs);
+                }, timeoutMs, TimeUnit.MILLISECONDS);
             }
-            future = HANDLER_TIMEOUT_EXECUTOR.submit(new Callable<T>() {
-                @Override
-                public T call() throws Exception {
-                    return invokeWithIsolation(callable, transactionIsolation);
-                }
-            });
-            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
-        } catch (TimeoutException e) {
-            boolean cancelled = false;
-            if (future != null) {
-                cancelled = future.cancel(true);
+
+            T result = invokeWithIsolation(callable, transactionIsolation);
+            if (timeoutTriggered.get()) {
+                handleTimeoutOnce(context, phase, timeoutMs, timeoutHandled);
+                return null;
             }
-            LogCollectInternalLogger.warn("Handler {} timed out after {}ms (interrupted={})",
-                    phase, timeoutMs, cancelled);
-            notifyHandlerError(context, e, phase);
-            if (metrics != null && context != null && context.getConfig() != null && context.getConfig().isEnableMetrics()) {
-                metrics.incrementHandlerTimeout(context.getMethodSignature());
-            }
-            return null;
+            return result;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            notifyHandlerError(context, e, phase);
-            return null;
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause() == null ? e : e.getCause();
-            if (cause instanceof Error) {
-                forceOpenIfError(context, cause);
-                throw (Error) cause;
+            if (timeoutTriggered.get()) {
+                handleTimeoutOnce(context, phase, timeoutMs, timeoutHandled);
+            } else {
+                notifyHandlerError(context, e, phase);
             }
-            forceOpenIfError(context, cause);
-            if (shouldPropagateDegradeException(context, cause)) {
-                if (cause instanceof RuntimeException) {
-                    throw (RuntimeException) cause;
-                }
-                if (cause instanceof Error) {
-                    throw (Error) cause;
-                }
-                throw new RuntimeException(cause);
-            }
-            LogCollectInternalLogger.error("Handler execution error", cause);
-            notifyHandlerError(context, cause, phase);
             return null;
         } catch (Exception e) {
             forceOpenIfError(context, e);
@@ -527,7 +579,26 @@ public class LogCollectAspect {
             LogCollectInternalLogger.error("Handler execution error", e);
             notifyHandlerError(context, e, phase);
             return null;
+        } finally {
+            if (interruptGuard != null) {
+                interruptGuard.cancel(false);
+            }
+            if (!interruptedBefore) {
+                Thread.interrupted();
+            } else {
+                Thread.currentThread().interrupt();
+            }
         }
+    }
+
+    private void handleTimeoutOnce(LogCollectContext context,
+                                   String phase,
+                                   int timeoutMs,
+                                   AtomicBoolean timeoutHandled) {
+        if (!timeoutHandled.compareAndSet(false, true)) {
+            return;
+        }
+        notifyHandlerError(context, new TimeoutException("Handler " + phase + " timeout=" + timeoutMs + "ms"), phase);
     }
 
     private <T> T invokeWithIsolation(Callable<T> callable, boolean transactionIsolation) throws Exception {
@@ -666,26 +737,13 @@ public class LogCollectAspect {
                 return;
             }
             context.incrementDiscardedCount(dropped);
-            Object metrics = context.getAttribute("__metrics");
+            com.logcollect.api.metrics.LogCollectMetrics metrics =
+                    context.getAttribute("__metrics", com.logcollect.api.metrics.LogCollectMetrics.class);
             if (metrics == null) {
-                return;
+                metrics = NoopLogCollectMetrics.INSTANCE;
             }
             for (int i = 0; i < dropped; i++) {
-                invokeMetric(metrics, context.getMethodSignature(), "noop_handler");
-            }
-        }
-
-        private void invokeMetric(Object metrics, String methodKey, String reason) {
-            try {
-                for (Method method : metrics.getClass().getMethods()) {
-                    if (!"incrementDiscarded".equals(method.getName())
-                            || method.getParameterTypes().length != 2) {
-                        continue;
-                    }
-                    method.invoke(metrics, methodKey, reason);
-                    return;
-                }
-            } catch (Throwable ignored) {
+                metrics.incrementDiscarded(context.getMethodSignature(), "noop_handler");
             }
         }
     }

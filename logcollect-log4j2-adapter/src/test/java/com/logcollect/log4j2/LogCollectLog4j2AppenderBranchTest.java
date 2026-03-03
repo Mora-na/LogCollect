@@ -264,7 +264,8 @@ class LogCollectLog4j2AppenderBranchTest {
         appender.setSecurityRegistry(null);
 
         assertThat(LogCollectLog4j2Appender.createAppender("factory", null)).isNotNull();
-        assertThat(invoke(appender, "copyString", new Class[]{String.class}, (Object) null)).isNull();
+        assertThat(invoke(appender, "safeIntern", new Class[]{String.class}, (Object) null)).isNull();
+        assertThat(invoke(appender, "safeIntern", new Class[]{String.class}, "worker-1")).isEqualTo("worker-1");
 
         LogCollectConfig disabled = LogCollectConfig.frameworkDefaults();
         disabled.setEnableSanitize(false);
@@ -460,7 +461,37 @@ class LogCollectLog4j2AppenderBranchTest {
         }
 
         @Override
+        public void incrementFlush(String methodKey, String mode, String trigger) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void incrementBufferOverflow(String methodKey, String overflowPolicy) {
+            securityTimerStarted++;
+        }
+
+        @Override
         public void incrementDegradeTriggered(String type, String methodKey) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void incrementCircuitRecovered(String methodKey) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void incrementHandlerTimeout(String methodKey) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void updateBufferUtilization(String methodKey, double utilization) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void updateGlobalBufferUtilization(double utilization) {
             securityTimerStarted++;
         }
 

@@ -2,7 +2,10 @@ package com.logcollect.core.buffer;
 
 import com.logcollect.api.format.LogLineDefaults;
 import com.logcollect.api.handler.LogCollectHandler;
+import com.logcollect.api.metrics.LogCollectMetrics;
+import com.logcollect.api.metrics.NoopLogCollectMetrics;
 import com.logcollect.api.model.*;
+import com.logcollect.api.transaction.TransactionExecutor;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.diagnostics.LogCollectDiag;
@@ -117,7 +120,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         if (closed.get()) {
             if (context != null) {
                 context.incrementDiscardedCount();
-                metricCall(context, "incrementDiscarded", context.getMethodSignature(), "buffer_closed");
+                resolveMetrics(context).incrementDiscarded(context.getMethodSignature(), "buffer_closed");
             }
             notifyDegrade(context, "buffer_closed");
             return false;
@@ -148,7 +151,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         if (maxBytes > 0 && lineBytes > maxBytes) {
             if (context != null) {
                 context.incrementDiscardedCount();
-                metricCall(context, "incrementDiscarded", context.getMethodSignature(), "buffer_entry_too_large");
+                resolveMetrics(context).incrementDiscarded(context.getMethodSignature(), "buffer_entry_too_large");
             }
             notifyDegrade(context, "buffer_entry_too_large");
             return false;
@@ -160,7 +163,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             } else {
                 if (context != null) {
                     context.incrementDiscardedCount();
-                    metricCall(context, "incrementDiscarded", context.getMethodSignature(), "global_memory_limit");
+                    resolveMetrics(context).incrementDiscarded(context.getMethodSignature(), "global_memory_limit");
                 }
                 notifyDegrade(context, "global_memory_limit");
                 return false;
@@ -178,8 +181,9 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             }
             if (context != null) {
                 context.incrementDiscardedCount();
-                metricCall(context, "incrementDiscarded",
-                        context.getMethodSignature(), toDiscardReason(rejectReason));
+                LogCollectMetrics metrics = resolveMetrics(context);
+                metrics.incrementDiscarded(context.getMethodSignature(), toDiscardReason(rejectReason));
+                metrics.incrementBufferOverflow(context.getMethodSignature(), policy.getStrategy().name());
             }
             notifyDegrade(context, "buffer_overflow_drop_newest");
             return false;
@@ -266,20 +270,20 @@ public class AggregateModeBuffer implements LogCollectBuffer {
                         int dropped = originalSize - drained.size();
                         if (dropped > 0 && context != null) {
                             context.incrementDiscardedCount(dropped);
-                            metricCall(context, "incrementDiscarded",
+                            resolveMetrics(context).incrementDiscarded(
                                     context.getMethodSignature(), "async_queue_full_low_level");
                         }
                     }
                 }
                 if (!drained.isEmpty()) {
                     String methodKey = context == null ? "unknown" : context.getMethodSignature();
-                    metricCall(context, "incrementFlush", methodKey, "AGGREGATE",
-                            warnOnly ? "degraded" : (isFinal ? "final" : "threshold"));
+                    resolveMetrics(context).incrementFlush(
+                            methodKey, "AGGREGATE", warnOnly ? "degraded" : (isFinal ? "final" : "threshold"));
                     List<List<LogSegment>> batches = splitByPatternVersion(drained);
                     for (List<LogSegment> batch : batches) {
                         AggregatedLog agg = buildAggregatedLog(batch, isFinal);
                         if (agg != null) {
-                            flushAggregated(context, agg);
+                            flushAggregated(context, agg, isFinal || warnOnly);
                         }
                     }
                     if (context != null) {
@@ -401,15 +405,16 @@ public class AggregateModeBuffer implements LogCollectBuffer {
                 isFinal);
     }
 
-    private void flushAggregated(LogCollectContext context, AggregatedLog agg) {
+    private void flushAggregated(LogCollectContext context, AggregatedLog agg, boolean isFinal) {
         String methodKey = context == null ? "unknown" : context.getMethodSignature();
+        LogCollectMetrics metrics = resolveMetrics(context);
         LogCollectCircuitBreaker breaker = getBreaker(context);
         if (breaker != null && !breaker.allowWrite()) {
             if (context != null) {
                 context.incrementDiscardedCount(agg.getEntryCount());
             }
             notifyDegrade(context, "circuit_open");
-            metricCall(context, "incrementDegradeTriggered", "circuit_open", methodKey);
+            metrics.incrementDegradeTriggered("circuit_open", methodKey);
             if (context != null) {
                 DegradeFallbackHandler.handleDegraded(context, "circuit_open",
                         Collections.singletonList(agg.getContent()), agg.getMaxLevel());
@@ -417,33 +422,35 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             return;
         }
 
-        boolean success = resilientFlusher.flush(() -> {
-            if (handler != null) {
-                executeWithTx(context, () -> handler.flushAggregatedLog(context, agg));
+        Runnable writeAction = () -> {
+            if (handler == null) {
+                return;
             }
-        }, agg::getContent);
-
-        if (success) {
+            TransactionExecutor txExecutor = resolveTransactionExecutor(context);
+            txExecutor.executeInNewTransaction(() -> handler.flushAggregatedLog(context, agg));
+        };
+        Runnable onSuccess = () -> {
             if (breaker != null) {
                 breaker.recordSuccess();
             }
-            metricCall(context, "incrementPersisted", methodKey, "AGGREGATE");
-            return;
-        }
-
-        if (breaker != null) {
-            breaker.recordFailure();
-        }
-        if (context != null) {
-            context.incrementDiscardedCount(agg.getEntryCount());
-        }
-        notifyDegrade(context, "handler_error");
-        metricCall(context, "incrementPersistFailed", methodKey);
-        metricCall(context, "incrementDegradeTriggered", "persist_failed", methodKey);
-        if (context != null) {
-            DegradeFallbackHandler.handleDegraded(context, "handler_error",
-                    Collections.singletonList(agg.getContent()), agg.getMaxLevel());
-        }
+            metrics.incrementPersisted(methodKey, "AGGREGATE");
+        };
+        Runnable onExhausted = () -> {
+            if (breaker != null) {
+                breaker.recordFailure();
+            }
+            if (context != null) {
+                context.incrementDiscardedCount(agg.getEntryCount());
+            }
+            notifyDegrade(context, "persist_exhausted");
+            metrics.incrementPersistFailed(methodKey);
+            metrics.incrementDegradeTriggered("persist_exhausted", methodKey);
+            if (context != null) {
+                DegradeFallbackHandler.handleDegraded(context, "persist_exhausted",
+                        Collections.singletonList(agg.getContent()), agg.getMaxLevel());
+            }
+        };
+        resilientFlusher.flushBatch(writeAction, onSuccess, onExhausted, agg::getContent, isFinal);
     }
 
     private void evictOldestUntilFit(LogCollectContext context, long incomingBytes) {
@@ -480,7 +487,9 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             policy.recordDropped(actualDropped);
             if (context != null) {
                 context.incrementDiscardedCount(actualDropped);
-                metricCall(context, "incrementDiscarded", context.getMethodSignature(), "buffer_full");
+                LogCollectMetrics metrics = resolveMetrics(context);
+                metrics.incrementDiscarded(context.getMethodSignature(), "buffer_full");
+                metrics.incrementBufferOverflow(context.getMethodSignature(), policy.getStrategy().name());
             }
         }
     }
@@ -565,92 +574,23 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         }
     }
 
-    private void metricCall(LogCollectContext context, String methodName, Object... args) {
+    private LogCollectMetrics resolveMetrics(LogCollectContext context) {
         if (context == null || context.getConfig() == null || !context.getConfig().isEnableMetrics()) {
-            return;
+            return NoopLogCollectMetrics.INSTANCE;
         }
-        Object metrics = context.getAttribute("__metrics");
-        if (metrics == null) {
-            return;
-        }
-        invokeReflective(metrics, methodName, args);
+        LogCollectMetrics metrics = context.getAttribute("__metrics", LogCollectMetrics.class);
+        return metrics == null ? NoopLogCollectMetrics.INSTANCE : metrics;
     }
 
-    private Object invokeReflective(Object target, String methodName, Object... args) {
-        try {
-            MethodLoop:
-            for (java.lang.reflect.Method method : target.getClass().getMethods()) {
-                if (!method.getName().equals(methodName) || method.getParameterTypes().length != args.length) {
-                    continue;
-                }
-                Class<?>[] paramTypes = method.getParameterTypes();
-                for (int i = 0; i < paramTypes.length; i++) {
-                    if (args[i] == null) {
-                        continue;
-                    }
-                    if (!wrap(paramTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
-                        continue MethodLoop;
-                    }
-                }
-                return method.invoke(target, args);
-            }
-        } catch (Exception ignored) {
-        } catch (Error e) {
-            throw e;
-        }
-        return null;
-    }
-
-    private Class<?> wrap(Class<?> type) {
-        if (!type.isPrimitive()) {
-            return type;
-        }
-        if (type == int.class) return Integer.class;
-        if (type == long.class) return Long.class;
-        if (type == boolean.class) return Boolean.class;
-        if (type == double.class) return Double.class;
-        return type;
-    }
-
-    private void executeWithTx(LogCollectContext context, Runnable action) {
+    private TransactionExecutor resolveTransactionExecutor(LogCollectContext context) {
         if (context == null || context.getConfig() == null || !context.getConfig().isTransactionIsolation()) {
-            action.run();
-            return;
+            return TransactionExecutor.DIRECT;
         }
-        Object txWrapper = context.getAttribute("__txWrapper");
-        if (txWrapper == null) {
-            action.run();
-            return;
+        TransactionExecutor txExecutor = context.getAttribute("__txWrapper", TransactionExecutor.class);
+        if (txExecutor != null) {
+            return txExecutor;
         }
-        if (!invokeIfPresent(txWrapper, "executeInNewTransaction", action)) {
-            action.run();
-        }
-    }
-
-    private boolean invokeIfPresent(Object target, String methodName, Object... args) {
-        try {
-            MethodLoop:
-            for (java.lang.reflect.Method method : target.getClass().getMethods()) {
-                if (!method.getName().equals(methodName) || method.getParameterTypes().length != args.length) {
-                    continue;
-                }
-                Class<?>[] paramTypes = method.getParameterTypes();
-                for (int i = 0; i < paramTypes.length; i++) {
-                    if (args[i] == null) {
-                        continue;
-                    }
-                    if (!wrap(paramTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
-                        continue MethodLoop;
-                    }
-                }
-                method.invoke(target, args);
-                return true;
-            }
-        } catch (Exception ignored) {
-        } catch (Error e) {
-            throw e;
-        }
-        return false;
+        return TransactionExecutor.DIRECT;
     }
 
     private void updateUtilization(LogCollectContext context) {
@@ -668,7 +608,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         } else if (utilization > 1.0d) {
             utilization = 1.0d;
         }
-        metricCall(context, "updateBufferUtilization", context.getMethodSignature(), utilization);
+        resolveMetrics(context).updateBufferUtilization(context.getMethodSignature(), utilization);
     }
 
     private String toDiscardReason(BoundedBufferPolicy.RejectReason reason) {
@@ -706,7 +646,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         public void onDiscard(String reason) {
             if (context != null) {
                 context.incrementDiscardedCount();
-                metricCall(context, "incrementDiscarded", context.getMethodSignature(), reason);
+                resolveMetrics(context).incrementDiscarded(context.getMethodSignature(), reason);
             }
             notifyDegrade(context, reason);
         }

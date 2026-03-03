@@ -8,6 +8,7 @@ import com.logcollect.api.sanitizer.LogSanitizer;
 import com.logcollect.autoconfigure.circuitbreaker.CircuitBreakerRegistry;
 import com.logcollect.autoconfigure.config.LocalPropertiesLogCollectConfigSource;
 import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
+import com.logcollect.core.buffer.AsyncFlushExecutor;
 import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.config.LogCollectConfigResolver;
 import com.logcollect.core.config.LogCollectLocalConfigCache;
@@ -92,9 +93,13 @@ public class LogCollectAutoConfiguration {
     public GlobalBufferMemoryManager logCollectGlobalBufferMemoryManager(
             LogCollectProperties props,
             ObjectProvider<LogCollectMetrics> metricsProvider) {
+        LogCollectProperties.Buffer buffer = props.getGlobal().getBuffer();
+        GlobalBufferMemoryManager.CounterMode counterMode =
+                GlobalBufferMemoryManager.CounterMode.from(buffer.getCounterMode());
         GlobalBufferMemoryManager manager = new GlobalBufferMemoryManager(
-                props.getGlobal().getBuffer().getTotalMaxBytesValue());
-        Object metrics = metricsProvider.getIfAvailable();
+                buffer.getTotalMaxBytesValue(),
+                counterMode);
+        com.logcollect.api.metrics.LogCollectMetrics metrics = metricsProvider.getIfAvailable();
         if (metrics != null) {
             manager.setMetrics(metrics);
         }
@@ -160,6 +165,20 @@ public class LogCollectAutoConfiguration {
     @Bean
     public org.springframework.beans.factory.InitializingBean logCollectDiagInitializer(LogCollectProperties props) {
         return () -> LogCollectDiag.setEnabled(props != null && props.isDebug());
+    }
+
+    @Bean
+    public org.springframework.beans.factory.InitializingBean logCollectAsyncFlushExecutorInitializer(LogCollectProperties props) {
+        return () -> {
+            if (props == null || props.getGlobal() == null || props.getGlobal().getFlush() == null) {
+                return;
+            }
+            LogCollectProperties.Flush flush = props.getGlobal().getFlush();
+            AsyncFlushExecutor.configure(
+                    flush.getCoreThreads(),
+                    flush.getMaxThreads(),
+                    flush.getQueueCapacity());
+        };
     }
 
     @Bean

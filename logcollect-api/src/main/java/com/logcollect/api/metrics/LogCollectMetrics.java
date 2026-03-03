@@ -19,11 +19,26 @@ public interface LogCollectMetrics {
 
     void incrementPersistFailed(String methodKey);
 
+    void incrementFlush(String methodKey, String mode, String trigger);
+
+    void incrementBufferOverflow(String methodKey, String overflowPolicy);
+
     void incrementDegradeTriggered(String type, String methodKey);
+
+    void incrementCircuitRecovered(String methodKey);
 
     void incrementSanitizeHits(String methodKey);
 
     void incrementMaskHits(String methodKey);
+
+    void incrementHandlerTimeout(String methodKey);
+
+    default void incrementConfigRefresh(String source) {
+    }
+
+    void updateBufferUtilization(String methodKey, double utilization);
+
+    void updateGlobalBufferUtilization(double utilization);
 
     Object startSecurityTimer();
 

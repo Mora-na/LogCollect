@@ -3,9 +3,11 @@ package com.logcollect.core.buffer;
 import com.logcollect.api.enums.CollectMode;
 import com.logcollect.api.enums.DegradeStorage;
 import com.logcollect.api.handler.LogCollectHandler;
+import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
 import com.logcollect.api.model.LogEntry;
+import com.logcollect.api.transaction.TransactionExecutor;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.test.CoreUnitTestBase;
 import org.junit.jupiter.api.Test;
@@ -97,7 +99,7 @@ class SingleModeBufferBranchTest extends CoreUnitTestBase {
     }
 
     @Test
-    void privateHelpers_coverReflectiveInvocationAndTxExecution() throws Exception {
+    void privateHelpers_coverInterfaceInvocationAndTxExecution() throws Exception {
         LogCollectConfig config = baseConfig();
         config.setTransactionIsolation(true);
         LogCollectHandler handler = mock(LogCollectHandler.class);
@@ -110,27 +112,17 @@ class SingleModeBufferBranchTest extends CoreUnitTestBase {
 
         SingleModeBuffer buffer = new SingleModeBuffer(20, parseBytes("1MB"), null);
 
-        call(buffer, "metricCall",
-                new Class[]{LogCollectContext.class, String.class, Object[].class},
-                context, "incrementDiscarded",
-                new Object[]{context.getMethodSignature(), "unit_reason"});
+        Object resolvedMetrics = call(buffer, "resolveMetrics", new Class[]{LogCollectContext.class}, context);
+        assertThat(resolvedMetrics).isSameAs(metrics);
+        metrics.incrementDiscarded(context.getMethodSignature(), "unit_reason");
         assertThat(metrics.discardedCalls.get()).isEqualTo(1);
 
-        AtomicInteger executed = new AtomicInteger(0);
-        call(buffer, "executeWithTx",
-                new Class[]{LogCollectContext.class, Runnable.class},
-                context, (Runnable) executed::incrementAndGet);
-        assertThat(executed.get()).isEqualTo(1);
+        TransactionExecutor txExecutor = (TransactionExecutor) call(
+                buffer, "resolveTransactionExecutor", new Class[]{LogCollectContext.class}, context);
+        AtomicInteger actionInvocations = new AtomicInteger(0);
+        txExecutor.executeInNewTransaction(actionInvocations::incrementAndGet);
         assertThat(txWrapper.invocations.get()).isEqualTo(1);
-
-        call(buffer, "invokeIfPresent",
-                new Class[]{Object.class, String.class, Object[].class},
-                txWrapper, "notExisting", new Object[]{(Runnable) () -> {
-                }});
-        call(buffer, "invokeReflective",
-                new Class[]{Object.class, String.class, Object[].class},
-                metrics, "incrementDiscarded", new Object[]{context.getMethodSignature(), "r2"});
-        assertThat(metrics.discardedCalls.get()).isEqualTo(2);
+        assertThat(actionInvocations.get()).isEqualTo(1);
 
         assertThat((Integer) call(buffer, "levelRank", new Class[]{String.class}, "FATAL")).isEqualTo(5);
         assertThat((Integer) call(buffer, "levelRank", new Class[]{String.class}, "ERROR")).isEqualTo(4);
@@ -138,12 +130,6 @@ class SingleModeBufferBranchTest extends CoreUnitTestBase {
         assertThat((Integer) call(buffer, "levelRank", new Class[]{String.class}, "INFO")).isEqualTo(2);
         assertThat((Integer) call(buffer, "levelRank", new Class[]{String.class}, "DEBUG")).isEqualTo(1);
         assertThat((Integer) call(buffer, "levelRank", new Class[]{String.class}, (Object) null)).isZero();
-
-        assertThat(call(buffer, "wrap", new Class[]{Class.class}, int.class)).isEqualTo(Integer.class);
-        assertThat(call(buffer, "wrap", new Class[]{Class.class}, long.class)).isEqualTo(Long.class);
-        assertThat(call(buffer, "wrap", new Class[]{Class.class}, boolean.class)).isEqualTo(Boolean.class);
-        assertThat(call(buffer, "wrap", new Class[]{Class.class}, double.class)).isEqualTo(Double.class);
-        assertThat(call(buffer, "wrap", new Class[]{Class.class}, String.class)).isEqualTo(String.class);
 
         assertThat((Boolean) call(buffer, "isHighLevel", new Class[]{String.class}, "WARN")).isTrue();
         assertThat((Boolean) call(buffer, "isHighLevel", new Class[]{String.class}, "fatal")).isTrue();
@@ -172,6 +158,9 @@ class SingleModeBufferBranchTest extends CoreUnitTestBase {
         List<String> lines = (List<String>) call(buffer, "toLines", new Class[]{List.class},
                 Arrays.asList(createTestEntry("x", "INFO"), createTestEntry("y", "ERROR")));
         assertThat(lines).containsExactly("x", "y");
+        assertThat(call(buffer, "joinContents", new Class[]{List.class},
+                Arrays.asList(createTestEntry("x", "INFO"), createTestEntry("y", "ERROR"))))
+                .isEqualTo("x\ny");
         assertThat(call(buffer, "maxLevel", new Class[]{List.class},
                 Arrays.asList(createTestEntry("x", "INFO"), createTestEntry("y", "ERROR"))))
                 .isEqualTo("ERROR");
@@ -245,22 +234,86 @@ class SingleModeBufferBranchTest extends CoreUnitTestBase {
     }
 
     @SuppressWarnings("unused")
-    public static final class MetricsStub {
+    public static final class MetricsStub implements LogCollectMetrics {
         private final AtomicInteger discardedCalls = new AtomicInteger(0);
 
+        @Override
         public void incrementDiscarded(String method, String reason) {
             discardedCalls.incrementAndGet();
         }
 
+        @Override
+        public void incrementCollected(String methodKey, String level, String mode) {
+        }
+
+        @Override
+        public void incrementPersisted(String methodKey, String mode) {
+        }
+
+        @Override
+        public void incrementPersistFailed(String methodKey) {
+        }
+
+        @Override
+        public void incrementFlush(String methodKey, String mode, String trigger) {
+        }
+
+        @Override
+        public void incrementBufferOverflow(String methodKey, String overflowPolicy) {
+        }
+
+        @Override
+        public void incrementDegradeTriggered(String type, String methodKey) {
+        }
+
+        @Override
+        public void incrementCircuitRecovered(String methodKey) {
+        }
+
+        @Override
+        public void incrementSanitizeHits(String methodKey) {
+        }
+
+        @Override
+        public void incrementMaskHits(String methodKey) {
+        }
+
+        @Override
+        public void incrementHandlerTimeout(String methodKey) {
+        }
+
+        @Override
         public void updateBufferUtilization(String method, double utilization) {
-            // no-op
+        }
+
+        @Override
+        public void updateGlobalBufferUtilization(double utilization) {
+        }
+
+        @Override
+        public Object startSecurityTimer() {
+            return null;
+        }
+
+        @Override
+        public void stopSecurityTimer(Object timerSample, String methodKey) {
+        }
+
+        @Override
+        public Object startPersistTimer() {
+            return null;
+        }
+
+        @Override
+        public void stopPersistTimer(Object timerSample, String methodKey, String mode) {
         }
     }
 
     @SuppressWarnings("unused")
-    public static final class TxWrapper {
+    public static final class TxWrapper implements TransactionExecutor {
         private final AtomicInteger invocations = new AtomicInteger(0);
 
+        @Override
         public void executeInNewTransaction(Runnable action) {
             invocations.incrementAndGet();
             action.run();

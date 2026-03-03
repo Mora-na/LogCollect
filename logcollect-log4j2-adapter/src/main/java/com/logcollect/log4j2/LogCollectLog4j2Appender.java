@@ -51,6 +51,8 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
     private static final String MDC_KEY = LogCollectContextManager.TRACE_ID_KEY;
     private static final String INTERNAL_LOGGER_PREFIX = "com.logcollect.internal";
     private static final String INTERNAL_LOGGER_PREFIX_V2 = "io.github.morana.logcollect.internal";
+    private static final String ATTR_SECURITY_PIPELINE = "__securityPipeline";
+    private static final String ATTR_SECURITY_METRICS = "__securityMetrics";
 
     private volatile SecurityComponentRegistry securityRegistry;
     private volatile LogCollectMetrics metrics = NoopLogCollectMetrics.INSTANCE;
@@ -89,11 +91,11 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
 
             LogCollectConfig config = context.getConfig();
             String methodKey = context.getMethodSignature();
-            String loggerName = copyString(event.getLoggerName());
+            String loggerName = safeIntern(event.getLoggerName());
             if (isInternalLogger(loggerName)) {
                 return;
             }
-            String level = event.getLevel() == null ? "INFO" : event.getLevel().toString();
+            String level = event.getLevel() == null ? "INFO" : event.getLevel().name();
             LogCollectDiag.debug("Appender received event: logger=%s level=%s", loggerName, level);
 
             LogCollectMetrics m = resolveMetrics(config);
@@ -129,23 +131,24 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             }
 
             long eventTimestamp = event.getTimeMillis();
-            String content = StringLengthGuard.guardContent(copyString(rawMessage), config.getGuardMaxContentLength());
+            String content = StringLengthGuard.guardContent(rawMessage, config.getGuardMaxContentLength());
             String throwable = StringLengthGuard.guardThrowable(extractThrowableString(event), config.getGuardMaxThrowableLength());
+            String threadName = safeIntern(event.getThreadName());
 
             Map<String, String> mdc = new HashMap<String, String>(event.getContextData().toMap());
-            LogEntry rawEntry = LogEntry.builder()
-                    .traceId(context.getTraceId())
-                    .content(content)
-                    .level(copyString(level))
-                    .timestamp(eventTimestamp)
-                    .threadName(copyString(event.getThreadName()))
-                    .loggerName(loggerName)
-                    .throwableString(throwable)
-                    .mdcContext(mdc)
-                    .build();
-
             Object securityTimer = m.startSecurityTimer();
-            LogEntry entry = securityProcess(config, methodKey, rawEntry, m);
+            LogEntry entry = securityProcess(
+                    context,
+                    config,
+                    methodKey,
+                    content,
+                    level,
+                    eventTimestamp,
+                    threadName,
+                    loggerName,
+                    throwable,
+                    mdc,
+                    m);
             m.stopSecurityTimer(securityTimer, methodKey);
 
             if (!allowByTotalLimitAndSampling(context, entry, methodKey, m)) {
@@ -178,35 +181,59 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         return this.metrics;
     }
 
-    private LogEntry securityProcess(LogCollectConfig config,
+    private LogEntry securityProcess(LogCollectContext context,
+                                     LogCollectConfig config,
                                      String methodKey,
-                                     LogEntry rawEntry,
+                                     String content,
+                                     String level,
+                                     long timestamp,
+                                     String threadName,
+                                     String loggerName,
+                                     String throwable,
+                                     Map<String, String> mdc,
                                      LogCollectMetrics m) {
-        LogSanitizer sanitizer = resolveSanitizer(config);
-        LogMasker masker = resolveMasker(config);
+        SecurityPipeline pipeline = context.getAttribute(ATTR_SECURITY_PIPELINE, SecurityPipeline.class);
+        SecurityPipeline.SecurityMetrics secMetrics =
+                context.getAttribute(ATTR_SECURITY_METRICS, SecurityPipeline.SecurityMetrics.class);
+        if (secMetrics == null) {
+            secMetrics = SecurityPipeline.SecurityMetrics.NOOP;
+        }
+        if (pipeline == null) {
+            LogSanitizer sanitizer = resolveSanitizer(config);
+            LogMasker masker = resolveMasker(config);
+            pipeline = new SecurityPipeline(sanitizer, masker);
+            secMetrics = new SecurityPipeline.SecurityMetrics() {
+                @Override
+                public void onContentSanitized() {
+                    m.incrementSanitizeHits(methodKey);
+                }
 
-        SecurityPipeline pipeline = new SecurityPipeline(sanitizer, masker);
-        return pipeline.process(rawEntry, new SecurityPipeline.SecurityMetrics() {
-            @Override
-            public void onContentSanitized() {
-                m.incrementSanitizeHits(methodKey);
-            }
+                @Override
+                public void onThrowableSanitized() {
+                    m.incrementSanitizeHits(methodKey);
+                }
 
-            @Override
-            public void onThrowableSanitized() {
-                m.incrementSanitizeHits(methodKey);
-            }
+                @Override
+                public void onContentMasked() {
+                    m.incrementMaskHits(methodKey);
+                }
 
-            @Override
-            public void onContentMasked() {
-                m.incrementMaskHits(methodKey);
-            }
-
-            @Override
-            public void onThrowableMasked() {
-                m.incrementMaskHits(methodKey);
-            }
-        });
+                @Override
+                public void onThrowableMasked() {
+                    m.incrementMaskHits(methodKey);
+                }
+            };
+        }
+        return pipeline.processRaw(
+                context.getTraceId(),
+                content,
+                level,
+                timestamp,
+                threadName,
+                loggerName,
+                throwable,
+                mdc,
+                secMetrics);
     }
 
     private String extractThrowableString(LogEvent event) {
@@ -221,8 +248,14 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         return sw.toString();
     }
 
-    private String copyString(String value) {
-        return value == null ? null : new String(value);
+    private String safeIntern(String value) {
+        if (value == null) {
+            return null;
+        }
+        if (value.length() > 256) {
+            return new String(value);
+        }
+        return value.intern();
     }
 
     private LogSanitizer resolveSanitizer(LogCollectConfig config) {

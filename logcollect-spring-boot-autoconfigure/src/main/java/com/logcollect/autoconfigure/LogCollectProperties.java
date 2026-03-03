@@ -86,6 +86,9 @@ public class LogCollectProperties {
         private Buffer buffer = new Buffer();
 
         @NestedConfigurationProperty
+        private Flush flush = new Flush();
+
+        @NestedConfigurationProperty
         private Degrade degrade = new Degrade();
 
         @NestedConfigurationProperty
@@ -148,6 +151,14 @@ public class LogCollectProperties {
             this.buffer = buffer;
         }
 
+        public Flush getFlush() {
+            return flush;
+        }
+
+        public void setFlush(Flush flush) {
+            this.flush = flush;
+        }
+
         public Degrade getDegrade() {
             return degrade;
         }
@@ -203,6 +214,7 @@ public class LogCollectProperties {
         private String maxBytes = "1MB";
         private String overflowStrategy = "FLUSH_EARLY";
         private String totalMaxBytes = "100MB";
+        private String counterMode = "EXACT_CAS";
 
         public boolean isEnabled() {
             return enabled;
@@ -244,12 +256,50 @@ public class LogCollectProperties {
             this.overflowStrategy = overflowStrategy;
         }
 
+        public String getCounterMode() {
+            return counterMode;
+        }
+
+        public void setCounterMode(String counterMode) {
+            this.counterMode = counterMode;
+        }
+
         public long getMaxBytesValue() {
             return DataSizeParser.parseToBytes(maxBytes);
         }
 
         public long getTotalMaxBytesValue() {
             return DataSizeParser.parseToBytes(totalMaxBytes);
+        }
+    }
+
+    public static class Flush {
+        private int coreThreads = 2;
+        private int maxThreads = 4;
+        private int queueCapacity = 4096;
+
+        public int getCoreThreads() {
+            return coreThreads;
+        }
+
+        public void setCoreThreads(int coreThreads) {
+            this.coreThreads = coreThreads;
+        }
+
+        public int getMaxThreads() {
+            return maxThreads;
+        }
+
+        public void setMaxThreads(int maxThreads) {
+            this.maxThreads = maxThreads;
+        }
+
+        public int getQueueCapacity() {
+            return queueCapacity;
+        }
+
+        public void setQueueCapacity(int queueCapacity) {
+            this.queueCapacity = queueCapacity;
         }
     }
 

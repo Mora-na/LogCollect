@@ -1,16 +1,39 @@
 package com.logcollect.core.buffer;
 
+import com.logcollect.api.metrics.LogCollectMetrics;
+import com.logcollect.api.metrics.NoopLogCollectMetrics;
+
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * 全局缓冲内存配额管理器。
  *
- * <p>用于限制多个方法缓冲区累计内存占用，并可通过反射回调更新外部指标。
+ * <p>用于限制多个方法缓冲区累计内存占用，并通过 {@link LogCollectMetrics} 直连更新外部指标。
  */
 public class GlobalBufferMemoryManager {
+    public enum CounterMode {
+        EXACT_CAS,
+        STRIPED_LONG_ADDER;
+
+        public static CounterMode from(String raw) {
+            if (raw == null || raw.trim().isEmpty()) {
+                return EXACT_CAS;
+            }
+            try {
+                return CounterMode.valueOf(raw.trim().toUpperCase());
+            } catch (IllegalArgumentException ignored) {
+                return EXACT_CAS;
+            }
+        }
+    }
+
     private final AtomicLong totalUsed = new AtomicLong(0);
+    private final LongAdder stripedTotalUsed = new LongAdder();
+    private final Object stripedClampLock = new Object();
     private final long maxTotalBytes;
-    private volatile Object metrics;
+    private final CounterMode counterMode;
+    private volatile LogCollectMetrics metrics = NoopLogCollectMetrics.INSTANCE;
 
     /**
      * 创建全局配额管理器。
@@ -18,7 +41,18 @@ public class GlobalBufferMemoryManager {
      * @param maxTotalBytes 全局最大字节预算
      */
     public GlobalBufferMemoryManager(long maxTotalBytes) {
+        this(maxTotalBytes, CounterMode.EXACT_CAS);
+    }
+
+    /**
+     * 创建全局配额管理器。
+     *
+     * @param maxTotalBytes 全局最大字节预算
+     * @param counterMode   计数模式（精确 CAS / 分段 LongAdder）
+     */
+    public GlobalBufferMemoryManager(long maxTotalBytes, CounterMode counterMode) {
         this.maxTotalBytes = maxTotalBytes;
+        this.counterMode = counterMode == null ? CounterMode.EXACT_CAS : counterMode;
     }
 
     /**
@@ -29,6 +63,16 @@ public class GlobalBufferMemoryManager {
      */
     public boolean tryAllocate(long bytes) {
         if (bytes <= 0) {
+            return true;
+        }
+        if (counterMode == CounterMode.STRIPED_LONG_ADDER) {
+            stripedTotalUsed.add(bytes);
+            if (stripedTotalUsed.sum() > maxTotalBytes) {
+                stripedTotalUsed.add(-bytes);
+                updateMetrics();
+                return false;
+            }
+            updateMetrics();
             return true;
         }
         while (true) {
@@ -53,7 +97,11 @@ public class GlobalBufferMemoryManager {
         if (bytes <= 0) {
             return;
         }
-        totalUsed.addAndGet(bytes);
+        if (counterMode == CounterMode.STRIPED_LONG_ADDER) {
+            stripedTotalUsed.add(bytes);
+        } else {
+            totalUsed.addAndGet(bytes);
+        }
         updateMetrics();
     }
 
@@ -66,9 +114,22 @@ public class GlobalBufferMemoryManager {
         if (bytes <= 0) {
             return;
         }
-        long remaining = totalUsed.addAndGet(-bytes);
-        if (remaining < 0) {
-            totalUsed.set(0);
+        if (counterMode == CounterMode.STRIPED_LONG_ADDER) {
+            stripedTotalUsed.add(-bytes);
+            long remaining = stripedTotalUsed.sum();
+            if (remaining < 0) {
+                synchronized (stripedClampLock) {
+                    long current = stripedTotalUsed.sum();
+                    if (current < 0) {
+                        stripedTotalUsed.add(-current);
+                    }
+                }
+            }
+        } else {
+            long remaining = totalUsed.addAndGet(-bytes);
+            if (remaining < 0) {
+                totalUsed.set(0);
+            }
         }
         updateMetrics();
     }
@@ -79,7 +140,8 @@ public class GlobalBufferMemoryManager {
      * @return 使用率（0~1，若上限为 0 则返回 0）
      */
     public double utilization() {
-        return maxTotalBytes == 0 ? 0.0 : (double) totalUsed.get() / (double) maxTotalBytes;
+        long used = getTotalUsed();
+        return maxTotalBytes == 0 ? 0.0 : (double) used / (double) maxTotalBytes;
     }
 
     /**
@@ -88,6 +150,10 @@ public class GlobalBufferMemoryManager {
      * @return 已占用字节数
      */
     public long getTotalUsed() {
+        if (counterMode == CounterMode.STRIPED_LONG_ADDER) {
+            long used = stripedTotalUsed.sum();
+            return used < 0 ? 0 : used;
+        }
         return totalUsed.get();
     }
 
@@ -100,46 +166,27 @@ public class GlobalBufferMemoryManager {
         return maxTotalBytes;
     }
 
+    public CounterMode getCounterMode() {
+        return counterMode;
+    }
+
     /**
      * 设置指标桥接对象。
      *
-     * <p>若对象包含 {@code updateGlobalBufferUtilization(double)} 方法，会在配额变化时被调用。
-     *
      * @param metrics 指标对象，可为 null
      */
-    public void setMetrics(Object metrics) {
-        this.metrics = metrics;
+    public void setMetrics(LogCollectMetrics metrics) {
+        this.metrics = metrics == null ? NoopLogCollectMetrics.INSTANCE : metrics;
         updateMetrics();
     }
 
     private void updateMetrics() {
-        Object target = metrics;
-        if (target == null) {
-            return;
-        }
         double utilization = utilization();
         if (utilization < 0.0d) {
             utilization = 0.0d;
         } else if (utilization > 1.0d) {
             utilization = 1.0d;
         }
-        try {
-            MethodLoop:
-            for (java.lang.reflect.Method method : target.getClass().getMethods()) {
-                if (!"updateGlobalBufferUtilization".equals(method.getName())
-                        || method.getParameterTypes().length != 1) {
-                    continue;
-                }
-                Class<?> type = method.getParameterTypes()[0];
-                if (type != double.class && type != Double.class) {
-                    continue;
-                }
-                method.invoke(target, utilization);
-                break MethodLoop;
-            }
-        } catch (Exception ignored) {
-        } catch (Error e) {
-            throw e;
-        }
+        metrics.updateGlobalBufferUtilization(utilization);
     }
 }

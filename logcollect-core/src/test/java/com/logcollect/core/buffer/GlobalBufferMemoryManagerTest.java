@@ -51,4 +51,23 @@ class GlobalBufferMemoryManagerTest {
         }, Duration.ofSeconds(10));
         assertThat(mgr.getTotalUsed()).isGreaterThanOrEqualTo(0);
     }
+
+    @Test
+    void stripedLongAdderMode_worksWithLimitAndRelease() {
+        GlobalBufferMemoryManager mgr = new GlobalBufferMemoryManager(
+                1024, GlobalBufferMemoryManager.CounterMode.STRIPED_LONG_ADDER);
+        assertThat(mgr.getCounterMode()).isEqualTo(GlobalBufferMemoryManager.CounterMode.STRIPED_LONG_ADDER);
+        assertThat(mgr.tryAllocate(512)).isTrue();
+        assertThat(mgr.tryAllocate(600)).isFalse();
+        mgr.release(128);
+        assertThat(mgr.getTotalUsed()).isEqualTo(384);
+    }
+
+    @Test
+    void stripedLongAdderMode_utilizationReflectsStripedCounter() {
+        GlobalBufferMemoryManager mgr = new GlobalBufferMemoryManager(
+                1000, GlobalBufferMemoryManager.CounterMode.STRIPED_LONG_ADDER);
+        assertThat(mgr.tryAllocate(400)).isTrue();
+        assertThat(mgr.utilization()).isCloseTo(0.4d, offset(0.01d));
+    }
 }

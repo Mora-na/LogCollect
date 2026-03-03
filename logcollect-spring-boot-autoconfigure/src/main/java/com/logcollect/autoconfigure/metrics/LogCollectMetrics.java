@@ -29,6 +29,7 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
     private final ConcurrentHashMap<String, Counter> persistedCounters = new ConcurrentHashMap<String, Counter>();
     private final ConcurrentHashMap<String, Counter> persistFailedCounters = new ConcurrentHashMap<String, Counter>();
     private final ConcurrentHashMap<String, Counter> flushCounters = new ConcurrentHashMap<String, Counter>();
+    private final ConcurrentHashMap<String, Counter> overflowCounters = new ConcurrentHashMap<String, Counter>();
     private final ConcurrentHashMap<String, Counter> degradeCounters = new ConcurrentHashMap<String, Counter>();
     private final ConcurrentHashMap<String, Counter> handlerTimeoutCounters = new ConcurrentHashMap<String, Counter>();
     private final ConcurrentHashMap<String, Counter> circuitRecoveredCounters = new ConcurrentHashMap<String, Counter>();
@@ -94,87 +95,117 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
 
     @Override
     public void incrementCollected(String method, String level, String mode) {
+        String methodTag = normalizeMethodKey(method);
+        String levelTag = safeValue(level, "UNKNOWN");
+        String modeTag = safeValue(mode, "UNKNOWN");
         counter(collectedCounters,
-                method + "_" + level + "_" + mode,
+                methodTag + "_" + levelTag + "_" + modeTag,
                 prefix + ".collected.total",
-                "method", method,
-                "level", level,
-                "mode", mode).increment();
+                "method", methodTag,
+                "level", levelTag,
+                "mode", modeTag).increment();
         totalCollected.incrementAndGet();
     }
 
     @Override
     public void incrementDiscarded(String method, String reason) {
+        String methodTag = normalizeMethodKey(method);
+        String reasonTag = normalizeReason(reason);
         counter(discardedCounters,
-                method + "_" + reason,
+                methodTag + "_" + reasonTag,
                 prefix + ".discarded.total",
-                "method", method,
-                "reason", reason).increment();
+                "method", methodTag,
+                "reason", reasonTag).increment();
         totalDiscarded.incrementAndGet();
     }
 
     @Override
     public void incrementPersisted(String method, String mode) {
+        String methodTag = normalizeMethodKey(method);
+        String modeTag = safeValue(mode, "UNKNOWN");
         counter(persistedCounters,
-                method + "_" + mode,
+                methodTag + "_" + modeTag,
                 prefix + ".persisted.total",
-                "method", method,
-                "mode", mode).increment();
+                "method", methodTag,
+                "mode", modeTag).increment();
         totalPersisted.incrementAndGet();
     }
 
     @Override
     public void incrementPersistFailed(String method) {
+        String methodTag = normalizeMethodKey(method);
         counter(persistFailedCounters,
-                method,
+                methodTag,
                 prefix + ".persist.failed.total",
-                "method", method).increment();
+                "method", methodTag).increment();
     }
 
+    @Override
     public void incrementFlush(String method, String mode, String trigger) {
+        String methodTag = normalizeMethodKey(method);
+        String modeTag = safeValue(mode, "UNKNOWN");
+        String triggerTag = safeValue(trigger, "unknown");
         counter(flushCounters,
-                method + "_" + mode + "_" + trigger,
+                methodTag + "_" + modeTag + "_" + triggerTag,
                 prefix + ".flush.total",
-                "method", method,
-                "mode", mode,
-                "trigger", trigger).increment();
+                "method", methodTag,
+                "mode", modeTag,
+                "trigger", triggerTag).increment();
         totalFlushes.incrementAndGet();
     }
 
     @Override
-    public void incrementDegradeTriggered(String type, String method) {
-        counter(degradeCounters,
-                method + "_" + type,
-                prefix + ".degrade.triggered.total",
-                "type", type,
-                "method", method).increment();
+    public void incrementBufferOverflow(String method, String overflowPolicy) {
+        String methodTag = normalizeMethodKey(method);
+        String overflowTag = safeValue(overflowPolicy, "UNKNOWN");
+        counter(overflowCounters,
+                methodTag + "_" + overflowTag,
+                prefix + ".buffer.overflow.total",
+                "method", methodTag,
+                "overflowPolicy", overflowTag).increment();
     }
 
+    @Override
+    public void incrementDegradeTriggered(String type, String method) {
+        String typeTag = safeValue(type, "unknown");
+        String methodTag = normalizeMethodKey(method);
+        counter(degradeCounters,
+                methodTag + "_" + typeTag,
+                prefix + ".degrade.triggered.total",
+                "type", typeTag,
+                "method", methodTag).increment();
+    }
+
+    @Override
     public void incrementCircuitRecovered(String method) {
+        String methodTag = normalizeMethodKey(method);
         counter(circuitRecoveredCounters,
-                method,
+                methodTag,
                 prefix + ".circuit.recovered.total",
-                "method", method).increment();
+                "method", methodTag).increment();
     }
 
     @Override
     public void incrementSanitizeHits(String method) {
+        String methodTag = normalizeMethodKey(method);
         counter(sanitizeCounters,
-                method,
+                methodTag,
                 prefix + ".security.sanitize.hits.total",
-                "method", method).increment();
+                "method", methodTag).increment();
         totalSanitizeHits.incrementAndGet();
     }
 
     @Override
     public void incrementMaskHits(String method) {
+        String methodTag = normalizeMethodKey(method);
         counter(maskCounters,
-                method,
+                methodTag,
                 prefix + ".security.mask.hits.total",
-                "method", method).increment();
+                "method", methodTag).increment();
         totalMaskHits.incrementAndGet();
     }
 
+    @Override
     public void incrementConfigRefresh(String source) {
         counter(configRefreshCounters,
                 source,
@@ -182,29 +213,35 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
                 "source", source).increment();
     }
 
+    @Override
     public void incrementHandlerTimeout(String method) {
+        String methodTag = normalizeMethodKey(method);
         counter(handlerTimeoutCounters,
-                method,
+                methodTag,
                 prefix + ".handler.timeout.total",
-                "method", method).increment();
+                "method", methodTag).increment();
     }
 
+    @Override
     public void updateBufferUtilization(String method, double utilization) {
-        AtomicReference<Double> gaugeValue = bufferUtilizations.computeIfAbsent(method, key -> {
+        String methodTag = normalizeMethodKey(method);
+        AtomicReference<Double> gaugeValue = bufferUtilizations.computeIfAbsent(methodTag, key -> {
             AtomicReference<Double> value = new AtomicReference<Double>(0.0d);
             Gauge.builder(prefix + ".buffer.utilization", value, AtomicReference::get)
-                    .tag("method", method)
+                    .tag("method", methodTag)
                     .register(registry);
             return value;
         });
         gaugeValue.set(utilization);
     }
 
+    @Override
     public void updateGlobalBufferUtilization(double utilization) {
         globalBufferUtilization.set(utilization);
     }
 
     public void registerCircuitBreakerGauge(String method, LogCollectCircuitBreaker cb) {
+        String methodTag = normalizeMethodKey(method);
         Gauge.builder(prefix + ".circuit.state", cb, breaker -> {
                     LogCollectCircuitBreaker.State state = breaker.getState();
                     if (state == LogCollectCircuitBreaker.State.CLOSED) {
@@ -218,7 +255,7 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
                     }
                     return -1;
                 })
-                .tag("method", method)
+                .tag("method", methodTag)
                 .register(registry);
     }
 
@@ -240,11 +277,13 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
         if (!(sample instanceof Timer.Sample)) {
             return;
         }
+        String methodTag = normalizeMethodKey(method);
+        String modeTag = safeValue(mode, "UNKNOWN");
         Timer.Sample timerSample = (Timer.Sample) sample;
-        Timer timer = persistTimers.computeIfAbsent(method + "_" + mode,
+        Timer timer = persistTimers.computeIfAbsent(methodTag + "_" + modeTag,
                 key -> Timer.builder(prefix + ".persist.duration")
-                        .tag("method", method)
-                        .tag("mode", mode)
+                        .tag("method", methodTag)
+                        .tag("mode", modeTag)
                         .publishPercentiles(0.5, 0.95, 0.99)
                         .register(registry));
         timerSample.stop(timer);
@@ -260,23 +299,60 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
         if (!(sample instanceof Timer.Sample)) {
             return;
         }
+        String methodTag = normalizeMethodKey(method);
         Timer.Sample timerSample = (Timer.Sample) sample;
-        Timer timer = securityTimers.computeIfAbsent(method,
+        Timer timer = securityTimers.computeIfAbsent(methodTag,
                 key -> Timer.builder(prefix + ".security.pipeline.duration")
-                        .tag("method", method)
+                        .tag("method", methodTag)
                         .publishPercentiles(0.5, 0.95, 0.99)
                         .register(registry));
         timerSample.stop(timer);
     }
 
     public void recordHandlerDuration(String method, String phase, long durationMs) {
-        Timer timer = handlerTimers.computeIfAbsent(method + "_" + phase,
+        String methodTag = normalizeMethodKey(method);
+        String phaseTag = safeValue(phase, "unknown");
+        Timer timer = handlerTimers.computeIfAbsent(methodTag + "_" + phaseTag,
                 key -> Timer.builder(prefix + ".handler.duration")
-                        .tag("method", method)
-                        .tag("phase", phase)
+                        .tag("method", methodTag)
+                        .tag("phase", phaseTag)
                         .publishPercentiles(0.5, 0.95, 0.99)
                         .register(registry));
         timer.record(durationMs, TimeUnit.MILLISECONDS);
+    }
+
+    private String normalizeMethodKey(String methodSignature) {
+        String source = safeValue(methodSignature, "unknown");
+        int hashIndex = source.indexOf('#');
+        if (hashIndex > 0) {
+            int classStart = source.lastIndexOf('.', hashIndex);
+            if (classStart >= 0 && classStart + 1 < source.length()) {
+                return source.substring(classStart + 1);
+            }
+        }
+        return source;
+    }
+
+    private String normalizeReason(String reason) {
+        String value = safeValue(reason, "unknown");
+        if ("level_filter".equals(value)
+                || "logger_filter".equals(value)
+                || "handler_filter".equals(value)
+                || "logcollect_ignore".equals(value)) {
+            return "filtered";
+        }
+        if ("backpressure_skip_low_level".equals(value) || "backpressure_pause".equals(value)) {
+            return "backpressure";
+        }
+        return value;
+    }
+
+    private String safeValue(String value, String defaultValue) {
+        if (value == null) {
+            return defaultValue;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? defaultValue : trimmed;
     }
 
     public int getActiveCollections() {
