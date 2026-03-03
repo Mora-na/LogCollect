@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>io.github.mora-na</groupId>
+        <groupId>org.dpdns.mora</groupId>
         <artifactId>logcollect-parent</artifactId>
         <version>1.0.0</version>
     </parent>
@@ -16,19 +16,19 @@
 
     <dependencies>
         <dependency>
-            <groupId>io.github.mora-na</groupId>
+            <groupId>org.dpdns.mora</groupId>
             <artifactId>logcollect-spring-boot-autoconfigure</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.github.mora-na</groupId>
+            <groupId>org.dpdns.mora</groupId>
             <artifactId>logcollect-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.github.mora-na</groupId>
+            <groupId>org.dpdns.mora</groupId>
             <artifactId>logcollect-logback-adapter</artifactId>
         </dependency>
         <dependency>
-            <groupId>io.github.mora-na</groupId>
+            <groupId>org.dpdns.mora</groupId>
             <artifactId>logcollect-log4j2-adapter</artifactId>
             <optional>true</optional>
         </dependency>

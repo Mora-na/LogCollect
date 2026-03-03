@@ -121,10 +121,12 @@
 **Maven**
 
 ```xml
+<!-- groupId 可使用 io.github.mora-na 或 org.dpdns.mora -->
 <dependencyManagement>
     <dependencies>
         <dependency>
             <groupId>io.github.mora-na</groupId>
+            <!-- <groupId>org.dpdns.mora</groupId> -->
             <artifactId>logcollect-bom</artifactId>
             <version>1.0.0</version>
             <type>pom</type>
@@ -137,18 +139,21 @@
     <!-- 核心 Starter（必须） -->
     <dependency>
         <groupId>io.github.mora-na</groupId>
+        <!-- <groupId>org.dpdns.mora</groupId> -->
         <artifactId>logcollect-spring-boot-starter</artifactId>
     </dependency>
     
     <!-- Nacos 配置中心适配（可选） -->
     <dependency>
         <groupId>io.github.mora-na</groupId>
+        <!-- <groupId>org.dpdns.mora</groupId> -->
         <artifactId>logcollect-config-nacos</artifactId>
     </dependency>
 
     <!-- 若项目使用 Log4j2（替代默认 Logback）需额外引入 -->
     <dependency>
         <groupId>io.github.mora-na</groupId>
+        <!-- <groupId>org.dpdns.mora</groupId> -->
         <artifactId>logcollect-log4j2-adapter</artifactId>
     </dependency>
 </dependencies>
@@ -159,12 +164,16 @@
 ```groovy
 dependencies {
     implementation platform('io.github.mora-na:logcollect-bom:1.0.0-SNAPSHOT')
+    // 或 implementation platform('org.dpdns.mora:logcollect-bom:1.0.0-SNAPSHOT')
     implementation 'io.github.mora-na:logcollect-spring-boot-starter'
+    // 或 implementation 'org.dpdns.mora:logcollect-spring-boot-starter'
     
     // 可选
     implementation 'io.github.mora-na:logcollect-config-nacos'
+    // 或 implementation 'org.dpdns.mora:logcollect-config-nacos'
     // 使用 Log4j2 时额外引入
     implementation 'io.github.mora-na:logcollect-log4j2-adapter'
+    // 或 implementation 'org.dpdns.mora:logcollect-log4j2-adapter'
 }
 ```
 
@@ -1789,6 +1798,7 @@ public void criticalOperation() { ... }
 ```xml
 <dependency>
     <groupId>io.github.mora-na</groupId>
+    <!-- <groupId>org.dpdns.mora</groupId> -->
     <artifactId>logcollect-config-nacos</artifactId>
 </dependency>
 ```
@@ -1807,6 +1817,7 @@ logcollect:
 ```xml
 <dependency>
     <groupId>io.github.mora-na</groupId>
+    <!-- <groupId>org.dpdns.mora</groupId> -->
     <artifactId>logcollect-config-apollo</artifactId>
 </dependency>
 ```
@@ -2506,6 +2517,7 @@ logcollect:
 ```xml
 <dependency>
     <groupId>io.github.mora-na</groupId>
+    <!-- <groupId>org.dpdns.mora</groupId> -->
     <artifactId>logcollect-test-support</artifactId>
     <scope>test</scope>
 </dependency>
