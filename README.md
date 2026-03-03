@@ -126,7 +126,7 @@
     <dependencies>
         <dependency>
             <groupId>io.github.mora-na</groupId>
-            <!-- <groupId>org.dpdns.mora</groupId> -->
+            <!--<groupId>org.dpdns.mora</groupId>-->
             <artifactId>logcollect-bom</artifactId>
             <version>1.0.0</version>
             <type>pom</type>
@@ -139,21 +139,21 @@
     <!-- 核心 Starter（必须） -->
     <dependency>
         <groupId>io.github.mora-na</groupId>
-        <!-- <groupId>org.dpdns.mora</groupId> -->
+        <!--<groupId>org.dpdns.mora</groupId>-->
         <artifactId>logcollect-spring-boot-starter</artifactId>
     </dependency>
     
     <!-- Nacos 配置中心适配（可选） -->
     <dependency>
         <groupId>io.github.mora-na</groupId>
-        <!-- <groupId>org.dpdns.mora</groupId> -->
+        <!--<groupId>org.dpdns.mora</groupId>-->
         <artifactId>logcollect-config-nacos</artifactId>
     </dependency>
 
     <!-- 若项目使用 Log4j2（替代默认 Logback）需额外引入 -->
     <dependency>
         <groupId>io.github.mora-na</groupId>
-        <!-- <groupId>org.dpdns.mora</groupId> -->
+        <!--<groupId>org.dpdns.mora</groupId>-->
         <artifactId>logcollect-log4j2-adapter</artifactId>
     </dependency>
 </dependencies>
@@ -1650,7 +1650,9 @@ public class BusinessLogMasker extends DefaultLogMasker {
 }
 ```
 
-> **ReDoS 防护**：`DefaultLogMasker#addRule(...)` 注册自定义正则时会经过 `RegexSafetyValidator` 校验，运行期执行还带超时保护（默认 `50ms`，超时自动降级为返回净化后的原文）。  
+> **ReDoS 防护**：`DefaultLogMasker#addRule(...)` 注册自定义正则时会经过 `RegexSafetyValidator` 校验。  
+> 运行期超时保护由 `TimeBoundedCharSequence` 在正则引擎 `charAt()` 调用过程中检测（默认 `50ms`，可通过 `-Dlogcollect.mask.timeout.ms` 配置）；超时会抛出 `RegexTimeoutException` 并自动降级为返回净化后的原文。  
+> 脱敏执行在调用线程内完成，不再为每条日志提交额外线程池任务。  
 > 运行期“配置中心动态下发正则规则”能力暂不支持，计划在后续版本补充。
 
 ### 10.4 SQL 注入防护
@@ -1798,7 +1800,7 @@ public void criticalOperation() { ... }
 ```xml
 <dependency>
     <groupId>io.github.mora-na</groupId>
-    <!-- <groupId>org.dpdns.mora</groupId> -->
+    <!--<groupId>org.dpdns.mora</groupId>-->
     <artifactId>logcollect-config-nacos</artifactId>
 </dependency>
 ```
@@ -1817,7 +1819,7 @@ logcollect:
 ```xml
 <dependency>
     <groupId>io.github.mora-na</groupId>
-    <!-- <groupId>org.dpdns.mora</groupId> -->
+    <!--<groupId>org.dpdns.mora</groupId>-->
     <artifactId>logcollect-config-apollo</artifactId>
 </dependency>
 ```
@@ -2517,7 +2519,7 @@ logcollect:
 ```xml
 <dependency>
     <groupId>io.github.mora-na</groupId>
-    <!-- <groupId>org.dpdns.mora</groupId> -->
+    <!--<groupId>org.dpdns.mora</groupId>-->
     <artifactId>logcollect-test-support</artifactId>
     <scope>test</scope>
 </dependency>

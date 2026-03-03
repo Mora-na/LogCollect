@@ -107,11 +107,12 @@ class DefaultLogMaskerAdditionalTest extends CoreUnitTestBase {
     }
 
     @Test
-    void mask_interruptedBranch_returnsOriginal() {
+    void mask_interruptedThread_stillMasksContent() {
         Thread.currentThread().interrupt();
         try {
             String input = "phone=13812345678";
-            assertThat(masker.mask(input)).isEqualTo(input);
+            assertThat(masker.mask(input)).contains("138****5678");
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
         } finally {
             Thread.interrupted();
         }
@@ -141,18 +142,12 @@ class DefaultLogMaskerAdditionalTest extends CoreUnitTestBase {
 
     @Test
     void mask_timeoutBranch_returnsOriginalAndIncrementsCounter() {
-        System.setProperty(TIMEOUT_KEY, "1");
         DefaultLogMasker timeoutMasker = new DefaultLogMasker();
-        timeoutMasker.addRule(Pattern.compile("a"), matcher -> {
-            try {
-                Thread.sleep(5L);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-            return "a";
+        timeoutMasker.addRule(Pattern.compile("secret"), matcher -> {
+            throw new RegexTimeoutException("simulated-timeout");
         });
 
-        String input = repeat("a1", 100);
+        String input = "secret=123";
         String result = timeoutMasker.mask(input);
         assertThat(result).isEqualTo(input);
         assertThat(timeoutMasker.getMaskTimeoutCount()).isGreaterThan(0L);
@@ -204,11 +199,4 @@ class DefaultLogMaskerAdditionalTest extends CoreUnitTestBase {
         assertThat(replacer.apply(matcher)).isEqualTo("********");
     }
 
-    private String repeat(String value, int count) {
-        StringBuilder sb = new StringBuilder(value.length() * count);
-        for (int i = 0; i < count; i++) {
-            sb.append(value);
-        }
-        return sb.toString();
-    }
 }

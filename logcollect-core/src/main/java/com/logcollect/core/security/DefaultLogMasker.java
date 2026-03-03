@@ -4,7 +4,7 @@ import com.logcollect.api.masker.LogMasker;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 
 import java.util.List;
-import java.util.concurrent.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.regex.Matcher;
@@ -14,14 +14,10 @@ import java.util.regex.Pattern;
  * 默认脱敏器实现。
  *
  * <p>内置手机号、身份证号、银行卡号、邮箱等规则，并支持运行时追加自定义规则。
+ * 正则执行超时保护由 {@link TimeBoundedCharSequence} 在引擎内部实现。
  */
 public class DefaultLogMasker implements LogMasker {
     private static final long DEFAULT_MASK_TIMEOUT_MS = 50L;
-    static ExecutorService MASK_EXECUTOR = Executors.newCachedThreadPool(r -> {
-        Thread t = new Thread(r, "logcollect-mask-executor");
-        t.setDaemon(true);
-        return t;
-    });
 
     private final List<MaskRule> rules = new CopyOnWriteArrayList<MaskRule>();
     private final long maskTimeoutMs;
@@ -148,37 +144,23 @@ public class DefaultLogMasker implements LogMasker {
     }
 
     private String applyMaskRules(String input) {
-        if (Thread.currentThread().isInterrupted()) {
-            return input;
-        }
-        Future<String> future = MASK_EXECUTOR.submit(() -> {
+        TimeBoundedCharSequence bounded = new TimeBoundedCharSequence(input, maskTimeoutMs);
+        try {
             String result = input;
+            CharSequence current = bounded;
             for (MaskRule rule : rules) {
-                result = rule.apply(result);
+                result = rule.apply(current);
+                current = bounded.wrap(result);
             }
             return result;
-        });
-        try {
-            if (Thread.currentThread().isInterrupted()) {
-                future.cancel(true);
-                return input;
-            }
-            return future.get(maskTimeoutMs, TimeUnit.MILLISECONDS);
-        } catch (TimeoutException e) {
-            future.cancel(true);
+        } catch (RegexTimeoutException e) {
             maskTimeoutCounter.incrementAndGet();
+            LogCollectInternalLogger.warn(
+                    "Mask regex timeout after {}ms on input length={}, returning original content. Detail: {}",
+                    maskTimeoutMs, input.length(), e.getMessage()
+            );
             return input;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return input;
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause();
-            if (cause instanceof Error) {
-                throw (Error) cause;
-            }
-            LogCollectInternalLogger.warn("Mask rule execution failed", cause == null ? e : cause);
-            return input;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             LogCollectInternalLogger.warn("Mask execution failed", e);
             return input;
         } catch (Error e) {

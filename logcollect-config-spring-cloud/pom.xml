@@ -5,8 +5,8 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>org.dpdns.mora</groupId>
-        <!--<groupId>io.github.mora-na</groupId>-->
+        <!--<groupId>org.dpdns.mora</groupId>-->
+        <groupId>io.github.mora-na</groupId>
         <artifactId>logcollect-parent</artifactId>
         <version>1.0.0</version>
     </parent>
@@ -16,8 +16,8 @@
 
     <dependencies>
         <dependency>
-            <groupId>org.dpdns.mora</groupId>
-            <!--<groupId>io.github.mora-na</groupId>-->
+            <!--<groupId>org.dpdns.mora</groupId>-->
+            <groupId>io.github.mora-na</groupId>
             <artifactId>logcollect-core</artifactId>
         </dependency>
         <dependency>

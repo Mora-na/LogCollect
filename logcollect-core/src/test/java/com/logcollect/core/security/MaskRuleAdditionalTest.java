@@ -25,7 +25,7 @@ class MaskRuleAdditionalTest {
         MaskRule rule = new MaskRule(
                 Pattern.compile("secret=\\w+"),
                 matcher -> "secret=***",
-                "token=");
+                "z");
         String input = "secret=abc";
         assertThat(rule.apply(input)).isEqualTo(input);
     }

@@ -4,31 +4,36 @@ import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class MaskRule {
+final class MaskRule {
     private final Pattern pattern;
     private final Function<Matcher, String> replacer;
-    private final String preCheck;
+    private final Character quickCheckChar;
 
-    public MaskRule(Pattern pattern, Function<Matcher, String> replacer) {
+    MaskRule(Pattern pattern, Function<Matcher, String> replacer) {
         this(pattern, replacer, null);
     }
 
-    public MaskRule(Pattern pattern, Function<Matcher, String> replacer, String preCheck) {
+    MaskRule(Pattern pattern, Function<Matcher, String> replacer, String quickCheckHint) {
         this.pattern = pattern;
         this.replacer = replacer;
-        this.preCheck = preCheck;
+        this.quickCheckChar = quickCheckHint == null || quickCheckHint.isEmpty()
+                ? null
+                : Character.valueOf(quickCheckHint.charAt(0));
     }
 
-    public String apply(String content) {
-        if (content == null || content.isEmpty()) {
-            return content;
+    String apply(CharSequence content) {
+        if (content == null) {
+            return null;
         }
-        if (preCheck != null && !content.contains(preCheck)) {
-            return content;
+        if (content.length() == 0) {
+            return content.toString();
+        }
+        if (quickCheckChar != null && !containsChar(content, quickCheckChar.charValue())) {
+            return content.toString();
         }
         Matcher matcher = pattern.matcher(content);
         if (!matcher.find()) {
-            return content;
+            return content.toString();
         }
         matcher.reset();
         StringBuffer sb = new StringBuffer();
@@ -37,5 +42,14 @@ public class MaskRule {
         }
         matcher.appendTail(sb);
         return sb.toString();
+    }
+
+    private boolean containsChar(CharSequence content, char target) {
+        for (int i = 0; i < content.length(); i++) {
+            if (content.charAt(i) == target) {
+                return true;
+            }
+        }
+        return false;
     }
 }
