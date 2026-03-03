@@ -8,6 +8,7 @@ import com.logcollect.api.exception.LogCollectException;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
+import com.logcollect.api.transaction.TransactionExecutor;
 import com.logcollect.autoconfigure.circuitbreaker.CircuitBreakerRegistry;
 import com.logcollect.autoconfigure.jdbc.TransactionalLogCollectHandlerWrapper;
 import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
@@ -270,7 +271,7 @@ public class LogCollectAspect {
             context.setAttribute("__metrics", metrics);
         }
         if (txWrapper != null && config.isTransactionIsolation()) {
-            context.setAttribute("__txWrapper", txWrapper);
+            context.setAttribute("__txWrapper", (TransactionExecutor) txWrapper);
         }
         BackpressureCallback backpressureCallback = resolveBackpressureCallback(logCollect, config);
         if (backpressureCallback != null) {

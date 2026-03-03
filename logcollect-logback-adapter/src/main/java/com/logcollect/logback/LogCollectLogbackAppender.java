@@ -13,8 +13,11 @@ import com.logcollect.api.enums.TotalLimitPolicy;
 import com.logcollect.api.exception.LogCollectDegradeException;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.masker.LogMasker;
+import com.logcollect.api.metrics.LogCollectMetrics;
+import com.logcollect.api.metrics.NoopLogCollectMetrics;
 import com.logcollect.api.model.*;
 import com.logcollect.api.sanitizer.LogSanitizer;
+import com.logcollect.api.transaction.TransactionExecutor;
 import com.logcollect.core.buffer.AsyncFlushExecutor;
 import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.buffer.LogCollectBuffer;
@@ -41,14 +44,14 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
     private static final String INTERNAL_LOGGER_PREFIX_V2 = "io.github.morana.logcollect.internal";
 
     private volatile SecurityComponentRegistry securityRegistry;
-    private volatile Object metrics;
+    private volatile LogCollectMetrics metrics = NoopLogCollectMetrics.INSTANCE;
 
     public void setSecurityRegistry(SecurityComponentRegistry securityRegistry) {
         this.securityRegistry = securityRegistry;
     }
 
-    public void setMetrics(Object metrics) {
-        this.metrics = metrics;
+    public void setMetrics(LogCollectMetrics metrics) {
+        this.metrics = metrics != null ? metrics : NoopLogCollectMetrics.INSTANCE;
     }
 
     @Override
@@ -75,22 +78,24 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             String level = event.getLevel() == null ? "INFO" : event.getLevel().toString();
             LogCollectDiag.debug("Appender received event: logger=%s level=%s", loggerName, level);
 
+            LogCollectMetrics m = resolveMetrics(config);
+
             if (LogCollectIgnoreManager.isIgnored()) {
                 context.incrementDiscardedCount();
-                metricCall(context, "incrementDiscarded", methodKey, "logcollect_ignore");
+                m.incrementDiscarded(methodKey, "logcollect_ignore");
                 return;
             }
             if (!isLevelAllowed(event.getLevel(), context.getMinLevelInt())) {
                 context.incrementDiscardedCount();
-                metricCall(context, "incrementDiscarded", methodKey, "level_filter");
+                m.incrementDiscarded(methodKey, "level_filter");
                 return;
             }
             if (context.isLoggerExcluded(loggerName)) {
                 context.incrementDiscardedCount();
-                metricCall(context, "incrementDiscarded", methodKey, "logger_filter");
+                m.incrementDiscarded(methodKey, "logger_filter");
                 return;
             }
-            if (!allowByBackpressure(context, level, methodKey)) {
+            if (!allowByBackpressure(context, level, methodKey, m)) {
                 return;
             }
 
@@ -104,7 +109,7 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                 String messageSummary = QuickSanitizer.summarize(rawMessage, 256);
                 if (!handler.shouldCollect(context, level, messageSummary)) {
                     context.incrementDiscardedCount();
-                    metricCall(context, "incrementDiscarded", methodKey, "handler_filter");
+                    m.incrementDiscarded(methodKey, "handler_filter");
                     return;
                 }
             }
@@ -125,11 +130,11 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                     .mdcContext(mdc)
                     .build();
 
-            Object securityTimer = metricCallWithResult(context, "startSecurityTimer");
-            LogEntry entry = securityProcess(config, methodKey, rawEntry, context);
-            metricCall(context, "stopSecurityTimer", securityTimer, methodKey);
+            Object securityTimer = m.startSecurityTimer();
+            LogEntry entry = securityProcess(config, methodKey, rawEntry, m);
+            m.stopSecurityTimer(securityTimer, methodKey);
 
-            if (!allowByTotalLimitAndSampling(context, entry, methodKey)) {
+            if (!allowByTotalLimitAndSampling(context, entry, methodKey, m)) {
                 return;
             }
 
@@ -137,10 +142,10 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             if (config.isUseBuffer() && buf instanceof LogCollectBuffer) {
                 boolean accepted = ((LogCollectBuffer) buf).offer(context, entry);
                 if (accepted) {
-                    metricCall(context, "incrementCollected", methodKey, level, context.getCollectMode().name());
+                    m.incrementCollected(methodKey, level, context.getCollectMode().name());
                 }
             } else {
-                handleDirect(context, entry, methodKey);
+                handleDirect(context, entry, methodKey, m);
             }
         } catch (Exception e) {
             rethrowDegradeIfNecessary(context, e);
@@ -154,10 +159,17 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         }
     }
 
+    private LogCollectMetrics resolveMetrics(LogCollectConfig config) {
+        if (config != null && !config.isEnableMetrics()) {
+            return NoopLogCollectMetrics.INSTANCE;
+        }
+        return this.metrics;
+    }
+
     private LogEntry securityProcess(LogCollectConfig config,
                                      String methodKey,
                                      LogEntry rawEntry,
-                                     LogCollectContext context) {
+                                     LogCollectMetrics m) {
         LogSanitizer sanitizer = resolveSanitizer(config);
         LogMasker masker = resolveMasker(config);
 
@@ -165,22 +177,22 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         return pipeline.process(rawEntry, new SecurityPipeline.SecurityMetrics() {
             @Override
             public void onContentSanitized() {
-                metricCall(context, "incrementSanitizeHits", methodKey);
+                m.incrementSanitizeHits(methodKey);
             }
 
             @Override
             public void onThrowableSanitized() {
-                metricCall(context, "incrementSanitizeHits", methodKey);
+                m.incrementSanitizeHits(methodKey);
             }
 
             @Override
             public void onContentMasked() {
-                metricCall(context, "incrementMaskHits", methodKey);
+                m.incrementMaskHits(methodKey);
             }
 
             @Override
             public void onThrowableMasked() {
-                metricCall(context, "incrementMaskHits", methodKey);
+                m.incrementMaskHits(methodKey);
             }
         });
     }
@@ -239,7 +251,10 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                 || loggerName.startsWith(INTERNAL_LOGGER_PREFIX_V2);
     }
 
-    private boolean allowByTotalLimitAndSampling(LogCollectContext context, LogEntry entry, String methodKey) {
+    private boolean allowByTotalLimitAndSampling(LogCollectContext context,
+                                                  LogEntry entry,
+                                                  String methodKey,
+                                                  LogCollectMetrics m) {
         LogCollectConfig config = context.getConfig();
         long estimatedBytes = entry == null ? 0L : entry.estimateBytes();
         String level = entry == null ? "INFO" : entry.getLevel();
@@ -250,22 +265,22 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                     : config.getTotalLimitPolicy();
             if (policy == TotalLimitPolicy.DOWNGRADE_LEVEL) {
                 if (!isWarnOrAbove(level)) {
-                    markDiscard(context, methodKey, "total_limit_downgrade");
+                    markDiscard(context, methodKey, "total_limit_downgrade", m);
                     return false;
                 }
             } else if (policy == TotalLimitPolicy.SAMPLE) {
                 if (!shouldSample(context, config, level, true)) {
-                    markDiscard(context, methodKey, "total_limit_sampled");
+                    markDiscard(context, methodKey, "total_limit_sampled", m);
                     return false;
                 }
             } else {
-                markDiscard(context, methodKey, "total_limit_reached");
+                markDiscard(context, methodKey, "total_limit_reached", m);
                 return false;
             }
         }
 
         if (!shouldSample(context, config, level, false)) {
-            markDiscard(context, methodKey, "sampled_out");
+            markDiscard(context, methodKey, "sampled_out", m);
             return false;
         }
         return true;
@@ -335,7 +350,10 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         return isWarnOrAbove(level);
     }
 
-    private boolean allowByBackpressure(LogCollectContext context, String level, String methodKey) {
+    private boolean allowByBackpressure(LogCollectContext context,
+                                         String level,
+                                         String methodKey,
+                                         LogCollectMetrics m) {
         BackpressureCallback callback = context.getAttribute("__backpressureCallback", BackpressureCallback.class);
         if (callback == null) {
             return true;
@@ -360,11 +378,11 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                 return true;
             }
             context.incrementDiscardedCount();
-            metricCall(context, "incrementDiscarded", methodKey, "backpressure_skip_low_level");
+            m.incrementDiscarded(methodKey, "backpressure_skip_low_level");
             return false;
         }
         context.incrementDiscardedCount();
-        metricCall(context, "incrementDiscarded", methodKey, "backpressure_pause");
+        m.incrementDiscarded(methodKey, "backpressure_pause");
         return false;
     }
 
@@ -378,9 +396,12 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         return rawRate;
     }
 
-    private void markDiscard(LogCollectContext context, String methodKey, String reason) {
+    private void markDiscard(LogCollectContext context,
+                             String methodKey,
+                             String reason,
+                             LogCollectMetrics m) {
         context.incrementDiscardedCount();
-        metricCall(context, "incrementDiscarded", methodKey, reason);
+        m.incrementDiscarded(methodKey, reason);
     }
 
     private boolean isWarnOrAbove(String level) {
@@ -391,8 +412,11 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         return "WARN".equals(v) || "ERROR".equals(v) || "FATAL".equals(v);
     }
 
-    private void handleDirect(LogCollectContext context, LogEntry entry, String methodKey) {
-        Runnable writeTask = () -> doHandleDirect(context, entry, methodKey);
+    private void handleDirect(LogCollectContext context,
+                              LogEntry entry,
+                              String methodKey,
+                              LogCollectMetrics m) {
+        Runnable writeTask = () -> doHandleDirect(context, entry, methodKey, m);
         if (context.getConfig().isAsync()) {
             AsyncFlushExecutor.submitOrRun(writeTask);
         } else {
@@ -400,7 +424,10 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         }
     }
 
-    private void doHandleDirect(LogCollectContext context, LogEntry entry, String methodKey) {
+    private void doHandleDirect(LogCollectContext context,
+                                 LogEntry entry,
+                                 String methodKey,
+                                 LogCollectMetrics m) {
         LogCollectHandler handler = context.getHandler();
         if (handler == null) {
             return;
@@ -409,7 +436,7 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         if (breaker != null && !breaker.allowWrite()) {
             context.incrementDiscardedCount();
             notifyDegrade(context, "circuit_open");
-            metricCall(context, "incrementDiscarded", methodKey, "circuit_open");
+            m.incrementDiscarded(methodKey, "circuit_open");
             DegradeFallbackHandler.handleDegraded(
                     context, "circuit_open",
                     Collections.singletonList(entry.getContent()),
@@ -418,11 +445,12 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         }
         context.incrementCollectedCount();
         context.addCollectedBytes(entry.estimateBytes());
-        metricCall(context, "incrementCollected", methodKey, entry.getLevel(), context.getCollectMode().name());
+        m.incrementCollected(methodKey, entry.getLevel(), context.getCollectMode().name());
 
-        Object persistTimer = metricCallWithResult(context, "startPersistTimer");
+        Object persistTimer = m.startPersistTimer();
         try {
-            executeWithTx(context, () -> {
+            TransactionExecutor txExecutor = resolveTransactionExecutor(context);
+            txExecutor.executeInNewTransaction(() -> {
                 if (context.getCollectMode() == CollectMode.AGGREGATE) {
                     String line;
                     try {
@@ -444,10 +472,10 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                             entry.getTime(),
                             false);
                     handler.flushAggregatedLog(context, agg);
-                    metricCall(context, "incrementPersisted", methodKey, CollectMode.AGGREGATE.name());
+                    m.incrementPersisted(methodKey, CollectMode.AGGREGATE.name());
                 } else {
                     handler.appendLog(context, entry);
-                    metricCall(context, "incrementPersisted", methodKey, CollectMode.SINGLE.name());
+                    m.incrementPersisted(methodKey, CollectMode.SINGLE.name());
                 }
             });
             if (breaker != null) {
@@ -460,8 +488,8 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             context.incrementDiscardedCount();
             notifyError(context, e, "append");
             notifyDegrade(context, "handler_error");
-            metricCall(context, "incrementPersistFailed", methodKey);
-            metricCall(context, "incrementDegradeTriggered", "persist_failed", methodKey);
+            m.incrementPersistFailed(methodKey);
+            m.incrementDegradeTriggered("persist_failed", methodKey);
             DegradeFallbackHandler.handleDegraded(
                     context, "persist_failed",
                     Collections.singletonList(entry.getContent()),
@@ -473,8 +501,19 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             notifyError(context, error, "append");
             throw error;
         } finally {
-            metricCall(context, "stopPersistTimer", persistTimer, methodKey, context.getCollectMode().name());
+            m.stopPersistTimer(persistTimer, methodKey, context.getCollectMode().name());
         }
+    }
+
+    private TransactionExecutor resolveTransactionExecutor(LogCollectContext context) {
+        if (context == null || context.getConfig() == null || !context.getConfig().isTransactionIsolation()) {
+            return TransactionExecutor.DIRECT;
+        }
+        Object txObj = context.getAttribute("__txWrapper");
+        if (txObj instanceof TransactionExecutor) {
+            return (TransactionExecutor) txObj;
+        }
+        return TransactionExecutor.DIRECT;
     }
 
     private LogCollectCircuitBreaker getBreaker(LogCollectContext context) {
@@ -517,129 +556,6 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             return 0L;
         }
         return 48L + ((long) value.length() << 1);
-    }
-
-    private void metricCall(LogCollectContext context, String methodName, Object... args) {
-        if (context != null && context.getConfig() != null && !context.getConfig().isEnableMetrics()) {
-            return;
-        }
-        Object target = metrics;
-        if (target == null) {
-            return;
-        }
-        invokeReflective(target, methodName, args);
-    }
-
-    private Object metricCallWithResult(LogCollectContext context, String methodName, Object... args) {
-        if (context != null && context.getConfig() != null && !context.getConfig().isEnableMetrics()) {
-            return null;
-        }
-        Object target = metrics;
-        if (target == null) {
-            return null;
-        }
-        return invokeReflective(target, methodName, args);
-    }
-
-    private void executeWithTx(LogCollectContext context, Runnable action) {
-        if (context == null || context.getConfig() == null || !context.getConfig().isTransactionIsolation()) {
-            action.run();
-            return;
-        }
-        Object txWrapper = context.getAttribute("__txWrapper");
-        if (txWrapper == null) {
-            action.run();
-            return;
-        }
-        if (!invokeIfPresent(txWrapper, "executeInNewTransaction", action)) {
-            action.run();
-        }
-    }
-
-    private boolean invokeIfPresent(Object target, String methodName, Object... args) {
-        try {
-            MethodLoop:
-            for (java.lang.reflect.Method method : target.getClass().getMethods()) {
-                if (!method.getName().equals(methodName) || method.getParameterTypes().length != args.length) {
-                    continue;
-                }
-                Class<?>[] paramTypes = method.getParameterTypes();
-                for (int i = 0; i < paramTypes.length; i++) {
-                    if (args[i] == null) {
-                        continue;
-                    }
-                    if (!wrap(paramTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
-                        continue MethodLoop;
-                    }
-                }
-                method.invoke(target, args);
-                return true;
-            }
-        } catch (Exception ignored) {
-        } catch (Error e) {
-            throw e;
-        }
-        return false;
-    }
-
-    private Object invokeReflective(Object target, String methodName, Object... args) {
-        try {
-            MethodLoop:
-            for (java.lang.reflect.Method method : target.getClass().getMethods()) {
-                if (!method.getName().equals(methodName)) {
-                    continue;
-                }
-                Class<?>[] parameterTypes = method.getParameterTypes();
-                if (parameterTypes.length != args.length) {
-                    continue;
-                }
-                for (int i = 0; i < parameterTypes.length; i++) {
-                    if (args[i] == null) {
-                        continue;
-                    }
-                    if (!wrap(parameterTypes[i]).isAssignableFrom(wrap(args[i].getClass()))) {
-                        continue MethodLoop;
-                    }
-                }
-                method.setAccessible(true);
-                return method.invoke(target, args);
-            }
-        } catch (Exception ignored) {
-        } catch (Error e) {
-            throw e;
-        }
-        return null;
-    }
-
-    private Class<?> wrap(Class<?> type) {
-        if (!type.isPrimitive()) {
-            return type;
-        }
-        if (type == int.class) {
-            return Integer.class;
-        }
-        if (type == long.class) {
-            return Long.class;
-        }
-        if (type == boolean.class) {
-            return Boolean.class;
-        }
-        if (type == double.class) {
-            return Double.class;
-        }
-        if (type == float.class) {
-            return Float.class;
-        }
-        if (type == short.class) {
-            return Short.class;
-        }
-        if (type == byte.class) {
-            return Byte.class;
-        }
-        if (type == char.class) {
-            return Character.class;
-        }
-        return type;
     }
 
     private void rethrowDegradeIfNecessary(LogCollectContext context, Throwable t) {

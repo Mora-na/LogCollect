@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-public class LogCollectMetrics {
+public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectMetrics {
 
     private final MeterRegistry registry;
     private final String prefix;
@@ -92,6 +92,7 @@ public class LogCollectMetrics {
                 .register(registry);
     }
 
+    @Override
     public void incrementCollected(String method, String level, String mode) {
         counter(collectedCounters,
                 method + "_" + level + "_" + mode,
@@ -102,6 +103,7 @@ public class LogCollectMetrics {
         totalCollected.incrementAndGet();
     }
 
+    @Override
     public void incrementDiscarded(String method, String reason) {
         counter(discardedCounters,
                 method + "_" + reason,
@@ -111,6 +113,7 @@ public class LogCollectMetrics {
         totalDiscarded.incrementAndGet();
     }
 
+    @Override
     public void incrementPersisted(String method, String mode) {
         counter(persistedCounters,
                 method + "_" + mode,
@@ -120,6 +123,7 @@ public class LogCollectMetrics {
         totalPersisted.incrementAndGet();
     }
 
+    @Override
     public void incrementPersistFailed(String method) {
         counter(persistFailedCounters,
                 method,
@@ -137,6 +141,7 @@ public class LogCollectMetrics {
         totalFlushes.incrementAndGet();
     }
 
+    @Override
     public void incrementDegradeTriggered(String type, String method) {
         counter(degradeCounters,
                 method + "_" + type,
@@ -152,6 +157,7 @@ public class LogCollectMetrics {
                 "method", method).increment();
     }
 
+    @Override
     public void incrementSanitizeHits(String method) {
         counter(sanitizeCounters,
                 method,
@@ -160,6 +166,7 @@ public class LogCollectMetrics {
         totalSanitizeHits.incrementAndGet();
     }
 
+    @Override
     public void incrementMaskHits(String method) {
         counter(maskCounters,
                 method,
@@ -223,37 +230,43 @@ public class LogCollectMetrics {
         activeCollections.decrementAndGet();
     }
 
-    public Timer.Sample startPersistTimer() {
+    @Override
+    public Object startPersistTimer() {
         return Timer.start(registry);
     }
 
-    public void stopPersistTimer(Timer.Sample sample, String method, String mode) {
-        if (sample == null) {
+    @Override
+    public void stopPersistTimer(Object sample, String method, String mode) {
+        if (!(sample instanceof Timer.Sample)) {
             return;
         }
+        Timer.Sample timerSample = (Timer.Sample) sample;
         Timer timer = persistTimers.computeIfAbsent(method + "_" + mode,
                 key -> Timer.builder(prefix + ".persist.duration")
                         .tag("method", method)
                         .tag("mode", mode)
                         .publishPercentiles(0.5, 0.95, 0.99)
                         .register(registry));
-        sample.stop(timer);
+        timerSample.stop(timer);
     }
 
-    public Timer.Sample startSecurityTimer() {
+    @Override
+    public Object startSecurityTimer() {
         return Timer.start(registry);
     }
 
-    public void stopSecurityTimer(Timer.Sample sample, String method) {
-        if (sample == null) {
+    @Override
+    public void stopSecurityTimer(Object sample, String method) {
+        if (!(sample instanceof Timer.Sample)) {
             return;
         }
+        Timer.Sample timerSample = (Timer.Sample) sample;
         Timer timer = securityTimers.computeIfAbsent(method,
                 key -> Timer.builder(prefix + ".security.pipeline.duration")
                         .tag("method", method)
                         .publishPercentiles(0.5, 0.95, 0.99)
                         .register(registry));
-        sample.stop(timer);
+        timerSample.stop(timer);
     }
 
     public void recordHandlerDuration(String method, String phase, long durationMs) {

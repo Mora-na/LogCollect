@@ -1902,6 +1902,7 @@ logcollect.global.enabled=false
 ### 13.1 Metrics 指标
 
 框架自动集成 Micrometer，对接 Prometheus / Grafana。
+Appender 热路径中的 Metrics 调用已改为 `LogCollectMetrics` 接口直调，不再通过反射分发。
 
 **计数器**
 
@@ -2256,6 +2257,8 @@ logcollect-parent/
 │   ├── format/                                LogLineDefaults / LogLinePatternParser
 │   ├── sanitizer/                             净化器接口
 │   ├── masker/                                脱敏器接口
+│   ├── metrics/                               LogCollectMetrics 接口 + NoopLogCollectMetrics
+│   ├── transaction/                           TransactionExecutor 接口
 │   ├── config/                                配置源接口
 │   └── enums/                                 枚举
 │
@@ -2324,6 +2327,7 @@ logcollect-parent/
 | 安全 | 新增 `StringLengthGuard`；`SecurityPipeline` 统一单入口；`thread/logger/level` 与 MDC 全字段净化；堆栈注入标记 `[ex-msg]` |
 | 可靠性 | `BoundedBufferPolicy` 上限与溢出策略；`ResilientFlusher` 重试+本地兜底；`LogCollectLifecycle` 优雅停机强制刷写 |
 | 并发与性能 | 缓冲区 `ConcurrentLinkedQueue + Atomic*`；flush 后二次阈值检查；`@LogCollect` Handler 解析按 `Method` 缓存并在配置刷新后失效；AGGREGATE 按 pattern 版本切批 |
+| 性能与解耦 | Appender 的 Metrics/事务调用从 `Object + 反射` 改为 `logcollect-api` 接口直调（`LogCollectMetrics` / `TransactionExecutor`），移除 `invokeReflective` 热路径开销 |
 | 工程一致性 | 默认 `Sanitizer/Masker` 统一在 core；新增 `BackpressureCallback` / `@LogCollectIgnore`；README 与实现参数名同步（`minLevel` / `messageSummary` / `backpressure` 等） |
 
 **补丁记录（2026-03-02）**

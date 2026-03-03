@@ -5,7 +5,7 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.Appender;
 import com.logcollect.api.enums.LogFramework;
-import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
+import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.core.format.ConsolePatternDetector;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.security.SecurityComponentRegistry;

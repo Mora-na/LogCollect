@@ -7,9 +7,12 @@ import com.logcollect.api.enums.SamplingStrategy;
 import com.logcollect.api.enums.TotalLimitPolicy;
 import com.logcollect.api.exception.LogCollectDegradeException;
 import com.logcollect.api.handler.LogCollectHandler;
+import com.logcollect.api.metrics.LogCollectMetrics;
+import com.logcollect.api.metrics.NoopLogCollectMetrics;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
 import com.logcollect.api.model.LogEntry;
+import com.logcollect.api.transaction.TransactionExecutor;
 import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.context.LogCollectContextManager;
 import com.logcollect.core.context.LogCollectIgnoreManager;
@@ -63,28 +66,33 @@ class LogCollectLog4j2AppenderBranchTest {
     }
 
     @Test
-    void privateHelpers_coverInvokeAndWrapBranches() throws Exception {
+    void privateHelpers_coverTransactionExecutorBranches() throws Exception {
         LogCollectLog4j2Appender appender = new LogCollectLog4j2Appender("x", null);
         TxWrapper tx = new TxWrapper();
-        assertThat(invoke(appender, "invokeIfPresent",
-                new Class[]{Object.class, String.class, Object[].class},
-                tx, "executeInNewTransaction", new Object[]{new RunnableCounter(tx)})).isEqualTo(true);
-        assertThat(tx.called).isEqualTo(1);
-
-        assertThat(invoke(appender, "invokeIfPresent",
-                new Class[]{Object.class, String.class, Object[].class},
-                tx, "missing", new Object[]{new RunnableCounter(tx)})).isEqualTo(false);
 
         LogCollectConfig cfg = LogCollectConfig.frameworkDefaults();
         cfg.setTransactionIsolation(true);
         LogCollectContext ctx = newContext("trace-tx", cfg, mock(LogCollectHandler.class));
         ctx.setAttribute("__txWrapper", tx);
-        invoke(appender, "executeWithTx", new Class[]{LogCollectContext.class, Runnable.class}, ctx, (Runnable) () -> tx.directRun++);
-        assertThat(tx.called).isEqualTo(2);
-        assertThat(tx.directRun).isEqualTo(2);
 
-        assertThat(invoke(appender, "wrap", new Class[]{Class.class}, int.class)).isEqualTo(Integer.class);
-        assertThat(invoke(appender, "wrap", new Class[]{Class.class}, String.class)).isEqualTo(String.class);
+        TransactionExecutor resolved = (TransactionExecutor) invoke(
+                appender,
+                "resolveTransactionExecutor",
+                new Class[]{LogCollectContext.class},
+                ctx);
+        resolved.executeInNewTransaction(() -> tx.directRun++);
+        assertThat(tx.called).isEqualTo(1);
+        assertThat(tx.directRun).isEqualTo(1);
+
+        LogCollectConfig noTxConfig = LogCollectConfig.frameworkDefaults();
+        noTxConfig.setTransactionIsolation(false);
+        LogCollectContext noTxCtx = newContext("trace-no-tx", noTxConfig, mock(LogCollectHandler.class));
+        TransactionExecutor direct = (TransactionExecutor) invoke(
+                appender,
+                "resolveTransactionExecutor",
+                new Class[]{LogCollectContext.class},
+                noTxCtx);
+        assertThat(direct).isSameAs(TransactionExecutor.DIRECT);
     }
 
     @Test
@@ -97,8 +105,8 @@ class LogCollectLog4j2AppenderBranchTest {
         LogCollectContext ctx = newContext("trace-bp", cfg, handler);
 
         assertThat(invoke(appender, "allowByBackpressure",
-                new Class[]{LogCollectContext.class, String.class, String.class},
-                ctx, "INFO", ctx.getMethodSignature())).isEqualTo(true);
+                new Class[]{LogCollectContext.class, String.class, String.class, LogCollectMetrics.class},
+                ctx, "INFO", ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(true);
 
         BackpressureCallback throwingCallback = new BackpressureCallback() {
             @Override
@@ -108,8 +116,8 @@ class LogCollectLog4j2AppenderBranchTest {
         };
         ctx.setAttribute("__backpressureCallback", throwingCallback);
         assertThat(invoke(appender, "allowByBackpressure",
-                new Class[]{LogCollectContext.class, String.class, String.class},
-                ctx, "INFO", ctx.getMethodSignature())).isEqualTo(true);
+                new Class[]{LogCollectContext.class, String.class, String.class, LogCollectMetrics.class},
+                ctx, "INFO", ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(true);
 
         ctx.setAttribute("__backpressureCallback", new BackpressureCallback() {
             @Override
@@ -118,11 +126,11 @@ class LogCollectLog4j2AppenderBranchTest {
             }
         });
         assertThat(invoke(appender, "allowByBackpressure",
-                new Class[]{LogCollectContext.class, String.class, String.class},
-                ctx, "INFO", ctx.getMethodSignature())).isEqualTo(false);
+                new Class[]{LogCollectContext.class, String.class, String.class, LogCollectMetrics.class},
+                ctx, "INFO", ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(false);
         assertThat(invoke(appender, "allowByBackpressure",
-                new Class[]{LogCollectContext.class, String.class, String.class},
-                ctx, "ERROR", ctx.getMethodSignature())).isEqualTo(true);
+                new Class[]{LogCollectContext.class, String.class, String.class, LogCollectMetrics.class},
+                ctx, "ERROR", ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(true);
 
         ctx.setAttribute("__backpressureCallback", new BackpressureCallback() {
             @Override
@@ -131,8 +139,8 @@ class LogCollectLog4j2AppenderBranchTest {
             }
         });
         assertThat(invoke(appender, "allowByBackpressure",
-                new Class[]{LogCollectContext.class, String.class, String.class},
-                ctx, "WARN", ctx.getMethodSignature())).isEqualTo(false);
+                new Class[]{LogCollectContext.class, String.class, String.class, LogCollectMetrics.class},
+                ctx, "WARN", ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(false);
 
         cfg.setSamplingRate(0.5d);
         cfg.setSamplingStrategy(SamplingStrategy.COUNT);
@@ -162,13 +170,13 @@ class LogCollectLog4j2AppenderBranchTest {
                 .loggerName("L")
                 .build();
         assertThat(invoke(appender, "allowByTotalLimitAndSampling",
-                new Class[]{LogCollectContext.class, LogEntry.class, String.class},
-                ctx, entry, ctx.getMethodSignature())).isEqualTo(false);
+                new Class[]{LogCollectContext.class, LogEntry.class, String.class, LogCollectMetrics.class},
+                ctx, entry, ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(false);
 
         cfg.setTotalLimitPolicy(TotalLimitPolicy.DOWNGRADE_LEVEL);
         assertThat(invoke(appender, "allowByTotalLimitAndSampling",
-                new Class[]{LogCollectContext.class, LogEntry.class, String.class},
-                ctx, entry, ctx.getMethodSignature())).isEqualTo(false);
+                new Class[]{LogCollectContext.class, LogEntry.class, String.class, LogCollectMetrics.class},
+                ctx, entry, ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(false);
 
         LogEntry warn = LogEntry.builder()
                 .traceId(ctx.getTraceId())
@@ -179,14 +187,14 @@ class LogCollectLog4j2AppenderBranchTest {
                 .loggerName("L")
                 .build();
         assertThat(invoke(appender, "allowByTotalLimitAndSampling",
-                new Class[]{LogCollectContext.class, LogEntry.class, String.class},
-                ctx, warn, ctx.getMethodSignature())).isEqualTo(true);
+                new Class[]{LogCollectContext.class, LogEntry.class, String.class, LogCollectMetrics.class},
+                ctx, warn, ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(true);
 
         cfg.setTotalLimitPolicy(TotalLimitPolicy.SAMPLE);
         cfg.setSamplingRate(0.0d);
         assertThat(invoke(appender, "allowByTotalLimitAndSampling",
-                new Class[]{LogCollectContext.class, LogEntry.class, String.class},
-                ctx, warn, ctx.getMethodSignature())).isEqualTo(false);
+                new Class[]{LogCollectContext.class, LogEntry.class, String.class, LogCollectMetrics.class},
+                ctx, warn, ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(false);
 
         cfg.setBlockWhenDegradeFail(true);
         assertThatThrownBy(() -> invoke(appender, "rethrowDegradeIfNecessary",
@@ -401,31 +409,19 @@ class LogCollectLog4j2AppenderBranchTest {
     private static void marker() {
     }
 
-    private static final class TxWrapper {
+    private static final class TxWrapper implements TransactionExecutor {
         private int called;
         private int directRun;
 
+        @Override
         public void executeInNewTransaction(Runnable action) {
             called++;
             action.run();
         }
     }
 
-    private static final class RunnableCounter implements Runnable {
-        private final TxWrapper wrapper;
-
-        private RunnableCounter(TxWrapper wrapper) {
-            this.wrapper = wrapper;
-        }
-
-        @Override
-        public void run() {
-            wrapper.directRun++;
-        }
-    }
-
     @SuppressWarnings("unused")
-    public static final class MetricsStub {
+    public static final class MetricsStub implements LogCollectMetrics {
         int securityTimerStarted;
 
         public Object startSecurityTimer() {
@@ -450,6 +446,21 @@ class LogCollectLog4j2AppenderBranchTest {
         }
 
         public void incrementCollected(String method, String level, String mode) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void incrementPersisted(String method, String mode) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void incrementPersistFailed(String method) {
+            securityTimerStarted++;
+        }
+
+        @Override
+        public void incrementDegradeTriggered(String type, String methodKey) {
             securityTimerStarted++;
         }
 

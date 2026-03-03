@@ -1,0 +1,35 @@
+package com.logcollect.api.metrics;
+
+/**
+ * 日志收集框架的 Metrics 抽象接口。
+ *
+ * <p>定义在 logcollect-api（零外部依赖）中，adapter 模块通过接口类型引用，
+ * autoconfigure 模块提供基于 Micrometer 的实现，消除反射调用开销。
+ *
+ * <p>当 Metrics 被禁用或未注入时，使用 {@link NoopLogCollectMetrics} 空实现，
+ * 所有方法调用为空操作，JIT 可内联消除。
+ */
+public interface LogCollectMetrics {
+
+    void incrementDiscarded(String methodKey, String reason);
+
+    void incrementCollected(String methodKey, String level, String mode);
+
+    void incrementPersisted(String methodKey, String mode);
+
+    void incrementPersistFailed(String methodKey);
+
+    void incrementDegradeTriggered(String type, String methodKey);
+
+    void incrementSanitizeHits(String methodKey);
+
+    void incrementMaskHits(String methodKey);
+
+    Object startSecurityTimer();
+
+    void stopSecurityTimer(Object timerSample, String methodKey);
+
+    Object startPersistTimer();
+
+    void stopPersistTimer(Object timerSample, String methodKey, String mode);
+}

@@ -1,7 +1,7 @@
 package com.logcollect.autoconfigure;
 
 import com.logcollect.api.enums.LogFramework;
-import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
+import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.core.format.ConsolePatternDetector;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.security.SecurityComponentRegistry;

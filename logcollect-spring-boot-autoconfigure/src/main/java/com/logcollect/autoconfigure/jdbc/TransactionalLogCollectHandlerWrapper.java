@@ -1,5 +1,6 @@
 package com.logcollect.autoconfigure.jdbc;
 
+import com.logcollect.api.transaction.TransactionExecutor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -7,7 +8,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.concurrent.Callable;
 
-public class TransactionalLogCollectHandlerWrapper {
+public class TransactionalLogCollectHandlerWrapper implements TransactionExecutor {
 
     @Autowired(required = false)
     private PlatformTransactionManager transactionManager;
@@ -31,6 +32,7 @@ public class TransactionalLogCollectHandlerWrapper {
         });
     }
 
+    @Override
     public void executeInNewTransaction(Runnable action) {
         executeInNewTransaction(() -> {
             action.run();
