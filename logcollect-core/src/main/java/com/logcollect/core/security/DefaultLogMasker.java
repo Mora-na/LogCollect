@@ -130,11 +130,20 @@ public class DefaultLogMasker implements LogMasker {
         if (content == null || content.isEmpty()) {
             return false;
         }
+        int consecutiveDigits = 0;
         for (int i = 0; i < content.length(); i++) {
             char c = content.charAt(i);
-            if (c == '@' || (c >= '0' && c <= '9')) {
+            if (c == '@') {
                 return true;
             }
+            if (c >= '0' && c <= '9') {
+                consecutiveDigits++;
+                if (consecutiveDigits >= 11) {
+                    return true;
+                }
+                continue;
+            }
+            consecutiveDigits = 0;
         }
         return false;
     }
@@ -144,6 +153,10 @@ public class DefaultLogMasker implements LogMasker {
     }
 
     private String applyMaskRules(String input) {
+        if (input.length() <= 2048) {
+            return applyMaskRulesDirect(input);
+        }
+
         TimeBoundedCharSequence bounded = new TimeBoundedCharSequence(input, maskTimeoutMs);
         try {
             String result = input;
@@ -160,6 +173,21 @@ public class DefaultLogMasker implements LogMasker {
                     maskTimeoutMs, input.length(), e.getMessage()
             );
             return input;
+        } catch (RuntimeException e) {
+            LogCollectInternalLogger.warn("Mask execution failed", e);
+            return input;
+        } catch (Error e) {
+            throw e;
+        }
+    }
+
+    private String applyMaskRulesDirect(String input) {
+        String result = input;
+        try {
+            for (MaskRule rule : rules) {
+                result = rule.apply(result);
+            }
+            return result;
         } catch (RuntimeException e) {
             LogCollectInternalLogger.warn("Mask execution failed", e);
             return input;

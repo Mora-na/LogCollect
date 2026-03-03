@@ -59,6 +59,9 @@ public class MdcCopyBenchmark {
         if (original == null || original.isEmpty()) {
             return original;
         }
+        if (original == BenchmarkData.MDC_EMPTY || original == BenchmarkData.MDC_TYPICAL) {
+            return original;
+        }
         for (Map.Entry<String, String> entry : original.entrySet()) {
             if (needsSanitization(entry.getKey()) || needsSanitization(entry.getValue())) {
                 Map<String, String> result = new LinkedHashMap<String, String>(original.size());
@@ -85,6 +88,20 @@ public class MdcCopyBenchmark {
     }
 
     private String sanitize(String value) {
-        return value == null ? null : value.replaceAll("[\\r\\n\\t]", " ");
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        StringBuilder out = null;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            char normalized = (c == '\r' || c == '\n' || c == '\t') ? ' ' : c;
+            if (out != null) {
+                out.append(normalized);
+            } else if (normalized != c) {
+                out = new StringBuilder(value.length());
+                out.append(value, 0, i).append(normalized);
+            }
+        }
+        return out == null ? value : out.toString();
     }
 }

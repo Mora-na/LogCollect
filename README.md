@@ -494,6 +494,7 @@ logcollect:
 - `auto-register-appender=true`（默认）：框架自动注册，无需手工改 `logback-spring.xml` / `log4j2.xml`。
 - `appender-name`：自动注册时使用的 Appender 名称，默认 `LOG_COLLECT`。
 - 如果你关闭自动注册（`false`），需要自行在日志框架配置中挂载对应 Appender 到 ROOT。
+- 启动后框架会检查 ROOT 上的同步 I/O Appender（如未异步包装的 `ConsoleAppender` / `FileAppender`），并输出性能告警，建议使用 `AsyncAppender` 包装，避免高并发下在 `callAppenders()` 上阻塞业务线程。
 - 框架启动时会通过 `ConsolePatternDetector` SPI 探测控制台 pattern，并经 `PatternCleaner + PatternValidator` 清理校验后写入 `LogLineDefaults`。
 - `ConsolePatternDetector` 使用 `getOrder()` 排序而非继承 `org.springframework.core.Ordered`，目的是避免 SPI 接口与 Spring 强耦合；功能上无差异，`ConsolePatternInitializer` 会按 `getOrder()` 升序选择第一个可用探测器。
 
@@ -2343,7 +2344,7 @@ logcollect-parent/
 | 可靠性 | `BoundedBufferPolicy` 上限与溢出策略；`ResilientFlusher` 批级重试（含抖动退避，异步 flush 非阻塞退避）+ 本地兜底；降级 FILE 默认异步单线程写入（与 flush 线程池隔离）；`GlobalBufferMemoryManager` 支持 `EXACT_CAS/STRIPED_LONG_ADDER` 双计数模式；`LogCollectLifecycle` 优雅停机强制刷写 |
 | 并发与性能 | 缓冲区 `ConcurrentLinkedQueue + Atomic*`；flush 后二次阈值检查；`@LogCollect` Handler 解析按 `Method` 缓存并在配置刷新后失效；AGGREGATE 按 pattern 版本切批；`AsyncFlushExecutor` 使用 `CallerRunsPolicy` 并支持 `logcollect.global.flush.*` 调参 |
 | 性能与解耦 | Appender/Buffer/内存管控以及 ConfigResolver 配置刷新回调的 Metrics 调用统一改为 `logcollect-api` 接口直调（`LogCollectMetrics` / `TransactionExecutor`），移除 `invokeReflective` 热路径；`SecurityPipeline` 会话级复用；`processRaw` 消除中间 `LogEntry`；MDC 惰性拷贝；`LogEntry.estimateBytes()` 构造期缓存；`%d` 时间格式秒级缓存 |
-| 性能工程化 | 新增 `logcollect-benchmark` 模块：三层基准体系（JMH 微基准 / 集成压测 / Profiler 脚本），并新增 `benchmark-ci` Profile 与 `JmhCIGateTest`、`StressCIGateTest` 性能门禁 |
+| 性能工程化 | 新增 `logcollect-benchmark` 模块：三层基准体系（JMH 微基准 / 集成压测 / Profiler 脚本）；CI 门禁改为“同环境比值优先 + 宽松绝对兜底”，并支持 `-Djmh.mode=ci|full` |
 | 工程一致性 | 默认 `Sanitizer/Masker` 统一在 core；新增 `BackpressureCallback` / `@LogCollectIgnore`；README 与实现参数名同步（`minLevel` / `messageSummary` / `backpressure` 等） |
 
 **补丁记录（2026-03-02）**
@@ -2366,12 +2367,28 @@ logcollect-benchmark/
 └── 第三层：Profiler（async-profiler / JFR，本地按需运行）
 ```
 
+**压测方法学（新增）**
+
+- Part 1：`isolated-*`（框架开销基准）
+  - 在 `@LogCollect` 上下文中直接调用 `LogCollectLogbackAppender.doAppend()`，绕过 `Logger.callAppenders()`，用于观测框架自身热点（安全流水线、Buffer、Handler 回调）。
+- Part 2：`e2e-*`（端到端吞吐基准）
+  - 通过 `log.info()` 走完整 SLF4J/Logback 链路，评估真实业务路径吞吐与延迟。
+- Part 3：`degrade`（可靠性压测）
+  - 验证降级/熔断在异常场景下的行为稳定性。
+
+**Benchmark 日志配置原则（新增）**
+
+- `logback-benchmark.xml` 的 `ROOT` 只挂 `NOP`，避免 Console 同步 I/O 淹没采样热点。
+- 框架 Appender 由自动装配挂到 `ROOT`，业务场景日志走 `NOP + LogCollectAppender`。
+- 仅 `com.logcollect.benchmark.stress.runner` 输出少量 `PROGRESS` 日志到控制台。
+- 可选 `with-file-output` profile 会切换到 `logback-benchmark-with-file-output.xml`，启用 `ASYNC_FILE`（`neverBlock=true`）模拟生产文件输出，但不阻塞业务线程。
+
 **CI 与本地边界**
 
 | 场景 | 执行位置 | 时间预算 | 目标 |
 |------|---------|---------|------|
-| JMH 门禁（smoke） | CI | <= 3 分钟 | 防回退（关键路径预算） |
-| 集成压测冒烟 | CI | <= 2 分钟 | 吞吐不低于门槛，GC 开销可控 |
+| JMH 门禁（smoke） | CI | <= 8 分钟 | 比值门禁（主）+ 宽松绝对兜底（辅） |
+| 集成压测冒烟 | CI | <= 5 分钟 | 扩展比门禁 + 灾难性吞吐下限 + GC 开销上限 |
 | JMH 完整基准 | 本地 | ~30 分钟 | 基线采样与对比 |
 | 集成压测完整 | 本地 | ~10 分钟 | 吞吐/延迟/GC 综合分析 |
 | async-profiler/JFR | 本地 | 按需 | 热点、分配、锁竞争定位 |
@@ -2382,7 +2399,7 @@ logcollect-benchmark/
 - `logcollect-benchmark/src/main/java/com/logcollect/benchmark/stress/**`：压测场景与统一 Runner
 - `logcollect-benchmark/src/test/java/com/logcollect/benchmark/gate/**`：CI 门禁测试
 - `logcollect-benchmark/scripts/*`：本地执行脚本（JMH、Stress、Profiler、JFR、基线对比）
-- `logcollect-benchmark/src/main/resources/benchmark-baseline.json`：基线文件（JMH JSON）
+- `logcollect-benchmark/src/main/resources/benchmark-baseline.json`：结构化基线文件（`baselines` + `ratios`）
 
 **快速命令**
 
@@ -2390,14 +2407,18 @@ logcollect-benchmark/
 # 构建 benchmark 模块
 mvn -pl logcollect-benchmark -am package -DskipTests
 
-# CI 门禁（JMH + Stress）
-mvn -pl logcollect-benchmark -am -Pbenchmark-ci test
+# CI 门禁（JMH 与 Stress 分步执行）
+mvn -pl logcollect-benchmark -Pbenchmark-ci -Dtest=JmhCIGateTest -Djmh.mode=ci test
+mvn -pl logcollect-benchmark -Pbenchmark-ci -Dtest=StressCIGateTest -Dspring.profiles.active=stress test
 
 # 本地完整基准（脚本）
 ./logcollect-benchmark/scripts/run-jmh-full.sh
+./logcollect-benchmark/scripts/update-baseline.sh
 ./logcollect-benchmark/scripts/run-stress-full.sh
+JAVA_OPTS="-Dspring.profiles.active=stress,with-file-output" ./logcollect-benchmark/scripts/run-stress-full.sh
 
 # Profiler（按需）
+# run-profiler-cpu.sh 包含 pre-flight 检查（asprof、perf_event、logback 配置、系统负载）
 ./logcollect-benchmark/scripts/run-profiler-cpu.sh 30
 ./logcollect-benchmark/scripts/run-profiler-alloc.sh 30
 ./logcollect-benchmark/scripts/run-profiler-lock.sh 30
@@ -2508,6 +2529,37 @@ logcollect:
 | **磁盘被降级文件占满** | ① `POST /actuator/logcollect/cleanupDegradeFiles?force=true`<br>② 切换 `degrade.storage=DISCARD_NON_ERROR` |
 | **配置中心全部宕机** | 框架自动使用本地缓存（最后一次有效配置）<br>本地缓存也无 → 使用注解值/框架默认值 |
 | **熔断器误触发** | `POST /actuator/logcollect/circuitBreakerReset?method=xxx` |
+
+### 16.5 Logback 异步 I/O 配置建议
+
+生产环境若仍需要文件日志，建议使用 `AsyncAppender` 包装 `RollingFileAppender`，避免同步文件 I/O 在 `Logger.callAppenders()` 中阻塞业务线程：
+
+```xml
+<appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>logs/app.log</file>
+    <encoder>
+        <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+    </encoder>
+    <!-- 省略 rollingPolicy -->
+</appender>
+
+<appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+    <queueSize>4096</queueSize>
+    <discardingThreshold>0</discardingThreshold>
+    <neverBlock>true</neverBlock>
+    <appender-ref ref="FILE"/>
+</appender>
+
+<root level="INFO">
+    <appender-ref ref="ASYNC_FILE"/>
+    <!-- LogCollect appender 由框架自动注册 -->
+</root>
+```
+
+说明：
+
+- 不建议在高并发生产链路直接把 `ConsoleAppender` 或 `FileAppender` 同步挂在 ROOT。
+- 框架启动时若发现 ROOT 上存在未异步包装的同步 I/O Appender，会输出性能告警日志提示优化。
 
 ---
 
@@ -2757,11 +2809,13 @@ mvn verify \
   -pl logcollect-api,logcollect-core,logcollect-logback-adapter,logcollect-log4j2-adapter,logcollect-spring-boot-autoconfigure \
   -am
 
-# 性能门禁（JMH + Stress）
-mvn test -pl logcollect-benchmark -am -Pbenchmark-ci
+# 性能门禁（JMH 与 Stress 分步）
+mvn test -pl logcollect-benchmark -Pbenchmark-ci -Dtest=JmhCIGateTest -Djmh.mode=ci
+mvn test -pl logcollect-benchmark -Pbenchmark-ci -Dtest=StressCIGateTest -Dspring.profiles.active=stress
 
 # 本地完整性能基准
 ./logcollect-benchmark/scripts/run-jmh-full.sh
+./logcollect-benchmark/scripts/update-baseline.sh
 ./logcollect-benchmark/scripts/run-stress-full.sh
 ```
 

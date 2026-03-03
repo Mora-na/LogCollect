@@ -1,9 +1,11 @@
 package com.logcollect.autoconfigure;
 
+import ch.qos.logback.classic.AsyncAppender;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.Appender;
+import ch.qos.logback.core.OutputStreamAppender;
 import com.logcollect.api.enums.LogFramework;
 import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.core.format.ConsolePatternDetector;
@@ -68,6 +70,7 @@ public class LogCollectLogbackAppenderAutoConfiguration implements InitializingB
                 if (appenderByName instanceof LogCollectLogbackAppender) {
                     ((LogCollectLogbackAppender) appenderByName).setSecurityRegistry(securityRegistry);
                     ((LogCollectLogbackAppender) appenderByName).setMetrics(metrics);
+                    warnAboutSyncIoAppenders(root);
                     return;
                 }
                 LogCollectInternalLogger.warn(
@@ -77,6 +80,7 @@ public class LogCollectLogbackAppenderAutoConfiguration implements InitializingB
             }
 
             if (hasLogCollectAppender(root)) {
+                warnAboutSyncIoAppenders(root);
                 return;
             }
 
@@ -89,6 +93,7 @@ public class LogCollectLogbackAppenderAutoConfiguration implements InitializingB
             root.addAppender(appender);
             LogCollectInternalLogger.info("Auto-registered LogCollect Logback appender '{}' on ROOT logger.",
                     appenderName);
+            warnAboutSyncIoAppenders(root);
         } catch (Throwable t) {
             LogCollectInternalLogger.warn("Auto-register LogCollect Logback appender failed.", t);
         }
@@ -114,6 +119,53 @@ public class LogCollectLogbackAppenderAutoConfiguration implements InitializingB
             return DEFAULT_APPENDER_NAME;
         }
         return configured.trim();
+    }
+
+    private void warnAboutSyncIoAppenders(Logger root) {
+        if (root == null) {
+            return;
+        }
+        Iterator<Appender<ILoggingEvent>> iterator = root.iteratorForAppenders();
+        while (iterator.hasNext()) {
+            Appender<ILoggingEvent> appender = iterator.next();
+            if (!(appender instanceof OutputStreamAppender)) {
+                continue;
+            }
+            if (appender instanceof LogCollectLogbackAppender) {
+                continue;
+            }
+            if (isWrappedByAsyncAppender(root, appender)) {
+                continue;
+            }
+
+            String appenderName = appender.getName() == null ? "<unnamed>" : appender.getName();
+            LogCollectInternalLogger.warn(
+                    "Detected synchronous I/O appender '{}' ({}) on ROOT logger. "
+                            + "Under high concurrency this can block business threads in Logback callAppenders(). "
+                            + "Recommendation: wrap file/console appenders with Logback AsyncAppender "
+                            + "(neverBlock=true, discardingThreshold=0).",
+                    appenderName,
+                    appender.getClass().getSimpleName());
+        }
+    }
+
+    private boolean isWrappedByAsyncAppender(Logger root, Appender<ILoggingEvent> target) {
+        Iterator<Appender<ILoggingEvent>> iterator = root.iteratorForAppenders();
+        while (iterator.hasNext()) {
+            Appender<ILoggingEvent> candidate = iterator.next();
+            if (!(candidate instanceof AsyncAppender)) {
+                continue;
+            }
+            AsyncAppender asyncAppender = (AsyncAppender) candidate;
+            Iterator<Appender<ILoggingEvent>> nested = asyncAppender.iteratorForAppenders();
+            while (nested.hasNext()) {
+                Appender<ILoggingEvent> wrapped = nested.next();
+                if (wrapped == target) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     @Bean

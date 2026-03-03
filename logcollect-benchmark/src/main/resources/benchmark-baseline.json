@@ -1,1 +1,59 @@
-[]
+{
+  "_meta": {
+    "updatedAt": "2026-03-03T22:30:00Z",
+    "updatedBy": "manual",
+    "jdk": "17.0.9",
+    "os": "macOS 14.2",
+    "cpu": "Apple M2 Pro",
+    "note": "Local baseline on dev machine, NOT CI values"
+  },
+  "baselines": {
+    "pipeline_cleanMessage_emptyMdc": {
+      "scoreNs": 2800,
+      "errorNs": 150,
+      "ciCeilingMultiplier": 10.0
+    },
+    "pipeline_sensitiveMessage_typicalMdc": {
+      "scoreNs": 11000,
+      "errorNs": 800,
+      "ciCeilingMultiplier": 5.0
+    },
+    "pipeline_withThrowable": {
+      "scoreNs": 18000,
+      "errorNs": 1200,
+      "ciCeilingMultiplier": 4.5
+    },
+    "sanitize_cleanMessage": {
+      "scoreNs": 400,
+      "errorNs": 30,
+      "ciCeilingMultiplier": 25.0
+    },
+    "reflection_getMethods_everyTime": {
+      "scoreNs": 3500,
+      "errorNs": 200,
+      "ciCeilingMultiplier": 8.0
+    },
+    "interface_virtualDispatch": {
+      "scoreNs": 3,
+      "errorNs": 0.5,
+      "ciCeilingMultiplier": 100.0
+    }
+  },
+  "ratios": {
+    "sensitive/clean": {
+      "expected": 3.9,
+      "minRatio": 0.8,
+      "maxRatio": 5.0
+    },
+    "withThrowable/clean": {
+      "expected": 6.4,
+      "minRatio": 1.0,
+      "maxRatio": 8.0
+    },
+    "reflection/interface": {
+      "expected": 1166,
+      "minRatio": 10.0,
+      "maxRatio": 999999
+    }
+  }
+}

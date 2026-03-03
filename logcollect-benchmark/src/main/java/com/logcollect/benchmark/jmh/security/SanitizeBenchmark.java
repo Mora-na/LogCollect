@@ -15,20 +15,31 @@ import java.util.concurrent.TimeUnit;
 public class SanitizeBenchmark {
 
     private DefaultLogSanitizer sanitizer;
+    private String cleanTypicalMessage;
+    private String injectionTypicalMessage;
 
     @Setup
     public void setup() {
         sanitizer = new DefaultLogSanitizer();
+        StringBuilder sb = new StringBuilder(1024);
+        for (int i = 0; i < 8; i++) {
+            if (i > 0) {
+                sb.append(" | ");
+            }
+            sb.append(BenchmarkData.MSG_CLEAN);
+        }
+        cleanTypicalMessage = sb.toString();
+        injectionTypicalMessage = cleanTypicalMessage + " | " + BenchmarkData.MSG_WITH_INJECTION;
     }
 
     @Benchmark
     public String sanitize_cleanMessage() {
-        return sanitizer.sanitize(BenchmarkData.MSG_CLEAN);
+        return sanitizer.sanitize(cleanTypicalMessage);
     }
 
     @Benchmark
     public String sanitize_withInjection() {
-        return sanitizer.sanitize(BenchmarkData.MSG_WITH_INJECTION);
+        return sanitizer.sanitize(injectionTypicalMessage);
     }
 
     @Benchmark

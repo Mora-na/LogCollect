@@ -1,17 +1,14 @@
 <configuration>
     <statusListener class="ch.qos.logback.core.status.NopStatusListener"/>
 
-    <!-- Root baseline appender for benchmark: discard everything by default -->
     <appender name="NOP" class="ch.qos.logback.core.helpers.NOPAppender"/>
 
-    <!-- Minimal progress output for benchmark runner only -->
     <appender name="PROGRESS" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level - %msg%n</pattern>
         </encoder>
     </appender>
 
-    <!-- Optional file output appender definitions (enabled in with-file-output config file) -->
     <appender name="FILE" class="ch.qos.logback.core.FileAppender">
         <file>target/benchmark-output.log</file>
         <append>true</append>
@@ -27,19 +24,13 @@
         <appender-ref ref="FILE"/>
     </appender>
 
-    <!-- ROOT only has NOP; LogCollect appender is auto-registered onto ROOT by framework -->
     <root level="INFO">
         <appender-ref ref="NOP"/>
+        <appender-ref ref="ASYNC_FILE"/>
     </root>
 
-    <!-- Keep only runner progress visible -->
     <logger name="com.logcollect.benchmark.stress.runner" level="INFO" additivity="false">
         <appender-ref ref="PROGRESS"/>
-    </logger>
-
-    <!-- Scenario business logs stay silent on console; only NOP + LogCollect appender are active -->
-    <logger name="com.logcollect.benchmark.stress.scenario" level="INFO" additivity="false">
-        <appender-ref ref="NOP"/>
     </logger>
 
     <logger name="com.logcollect.internal" level="WARN" additivity="false">

@@ -167,23 +167,21 @@ jobs:
           path: ~/.m2/repository
           key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
       - name: Build framework (skip tests)
-        run: mvn -B install -DskipTests -q -pl '!logcollect-benchmark,!logcollect-samples'
-      - name: Run JMH gate tests
+        run: mvn -B install -DskipTests -q
+      - name: JMH micro-benchmark gate
         run: |
           mvn -B test \
             -pl logcollect-benchmark \
-            -am \
             -P benchmark-ci \
-            -Dsurefire.includes="**/*CIGate*" \
+            -Dtest="JmhCIGateTest" \
             -Djmh.mode=ci
-        timeout-minutes: 5
-      - name: Run stress gate tests
+        timeout-minutes: 8
+      - name: Stress test gate
         run: |
           mvn -B test \
             -pl logcollect-benchmark \
-            -am \
             -P benchmark-ci \
-            -Dsurefire.includes="**/StressCIGateTest" \
+            -Dtest="StressCIGateTest" \
             -Dspring.profiles.active=stress
         timeout-minutes: 5
       - name: Upload benchmark results
@@ -193,7 +191,6 @@ jobs:
           name: benchmark-results-jdk${{ matrix.java }}
           path: |
             logcollect-benchmark/target/surefire-reports/
-            logcollect-benchmark/target/jmh-results/
           retention-days: 30
 
   coverage:

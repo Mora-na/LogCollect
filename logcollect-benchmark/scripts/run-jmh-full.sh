@@ -10,7 +10,9 @@ mkdir -p "$RESULT_DIR"
 mvn -pl logcollect-benchmark -am package -DskipTests -q
 
 java -jar "$JAR_FILE" \
-  -f 2 -wi 3 -i 5 -t 1 \
-  -rf json -rff "$RESULT_DIR/full-baseline.json"
+  -f 2 -wi 5 -i 10 -t 1 \
+  -tu ns -bm avgt \
+  -rf json -rff "$RESULT_DIR/full-baseline.json" \
+  "SecurityPipelineBenchmark|SanitizeBenchmark|MaskBenchmark|ReflectionVsInterfaceBenchmark|MdcCopyBenchmark|TimestampFormatBenchmark"
 
 echo "JMH full benchmark done: $RESULT_DIR/full-baseline.json"

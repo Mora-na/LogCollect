@@ -1,7 +1,9 @@
 package com.logcollect.benchmark.stress.runner;
 
 import com.logcollect.benchmark.stress.metrics.BenchmarkMetricsCollector;
-import com.logcollect.benchmark.stress.scenario.*;
+import com.logcollect.benchmark.stress.scenario.DegradeScenario;
+import com.logcollect.benchmark.stress.scenario.IsolatedAppenderScenario;
+import com.logcollect.benchmark.stress.scenario.MultiThreadScenario;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -14,28 +16,16 @@ public class StressTestRunner {
 
     private static final Logger log = LoggerFactory.getLogger(StressTestRunner.class);
 
-    private final SingleThreadScenario singleThread;
     private final MultiThreadScenario multiThread;
-    private final BurstScenario burst;
-    private final LongRunningScenario longRunning;
-    private final NestedScenario nested;
-    private final MixedModeScenario mixed;
     private final DegradeScenario degrade;
+    private final IsolatedAppenderScenario isolatedAppenderScenario;
 
-    public StressTestRunner(SingleThreadScenario singleThread,
-                            MultiThreadScenario multiThread,
-                            BurstScenario burst,
-                            LongRunningScenario longRunning,
-                            NestedScenario nested,
-                            MixedModeScenario mixed,
-                            DegradeScenario degrade) {
-        this.singleThread = singleThread;
+    public StressTestRunner(MultiThreadScenario multiThread,
+                            DegradeScenario degrade,
+                            IsolatedAppenderScenario isolatedAppenderScenario) {
         this.multiThread = multiThread;
-        this.burst = burst;
-        this.longRunning = longRunning;
-        this.nested = nested;
-        this.mixed = mixed;
         this.degrade = degrade;
+        this.isolatedAppenderScenario = isolatedAppenderScenario;
     }
 
     public Map<String, BenchmarkMetricsCollector.BenchmarkResult> runAll(String mode) {
@@ -43,63 +33,104 @@ public class StressTestRunner {
                 new LinkedHashMap<String, BenchmarkMetricsCollector.BenchmarkResult>();
         boolean isFull = "full".equalsIgnoreCase(mode);
 
-        log.info("========== Stress Test Suite: {} mode =========", mode);
+        log.info("╔══════════════════════════════════════════════════╗");
+        log.info("║     @LogCollect Stress Test Suite                ║");
+        log.info("║     Mode: {}                                     ║", mode);
+        log.info("╠══════════════════════════════════════════════════╣");
 
-        results.put("single-thread-clean",
-                singleThread.run(isFull ? 100_000 : 10_000, "clean"));
-        gcPause();
+        log.info("║ Part 1: Framework Overhead (Isolated)            ║");
+        log.info("╠══════════════════════════════════════════════════╣");
 
-        results.put("multi-8-thread-clean",
-                multiThread.run(8, isFull ? 100_000 : 10_000, "clean"));
-        gcPause();
+        results.put("isolated-1t-clean",
+                isolatedAppenderScenario.runIsolated(1, isFull ? 200_000 : 20_000,
+                        "Order processed, orderId=ORD-001, amount=99.50", false));
+        pauseBetweenScenarios();
 
-        results.put("multi-8-thread-sensitive",
-                multiThread.run(8, isFull ? 50_000 : 5_000, "sensitive"));
-        gcPause();
+        results.put("isolated-8t-clean",
+                isolatedAppenderScenario.runIsolated(8, isFull ? 200_000 : 20_000,
+                        "Order processed, orderId=ORD-001, amount=99.50", false));
+        pauseBetweenScenarios();
+
+        results.put("isolated-8t-sensitive",
+                isolatedAppenderScenario.runIsolated(8, isFull ? 100_000 : 10_000,
+                        "用户手机: 13812345678, 身份证: 110105199001011234", false));
+        pauseBetweenScenarios();
 
         if (isFull) {
-            results.put("multi-32-thread-clean", multiThread.run(32, 50_000, "clean"));
-            gcPause();
+            results.put("isolated-32t-clean",
+                    isolatedAppenderScenario.runIsolated(32, 100_000,
+                            "Order processed, orderId=ORD-001, amount=99.50", false));
+            pauseBetweenScenarios();
 
-            results.put("multi-8-thread-long", multiThread.run(8, 10_000, "long"));
-            gcPause();
+            results.put("isolated-8t-with-throwable",
+                    isolatedAppenderScenario.runIsolated(8, 20_000,
+                            "ERROR processing payment", true));
+            pauseBetweenScenarios();
+        }
 
-            results.put("burst", burst.run(20, 2_000, 20));
-            gcPause();
+        log.info("╠══════════════════════════════════════════════════╣");
+        log.info("║ Part 2: End-to-End Throughput (NOP output)       ║");
+        log.info("╠══════════════════════════════════════════════════╣");
 
-            results.put("long-running", longRunning.run(20, 5_000));
-            gcPause();
+        results.put("e2e-1t-clean",
+                multiThread.run(1, isFull ? 200_000 : 20_000, "clean"));
+        pauseBetweenScenarios();
 
-            results.put("nested", nested.run(200, 20));
-            gcPause();
+        results.put("e2e-8t-clean",
+                multiThread.run(8, isFull ? 200_000 : 20_000, "clean"));
+        pauseBetweenScenarios();
 
-            results.put("mixed-mode", mixed.run(10_000, 10_000));
-            gcPause();
+        results.put("e2e-8t-sensitive",
+                multiThread.run(8, isFull ? 100_000 : 10_000, "sensitive"));
+        pauseBetweenScenarios();
 
+        if (isFull) {
+            log.info("╠══════════════════════════════════════════════════╣");
+            log.info("║ Part 3: Reliability (Degrade/CircuitBreaker)     ║");
+            log.info("╠══════════════════════════════════════════════════╣");
             results.put("degrade", degrade.run());
-            gcPause();
+            pauseBetweenScenarios();
         }
 
-        log.info("========== Results Summary ==========");
-        for (Map.Entry<String, BenchmarkMetricsCollector.BenchmarkResult> entry : results.entrySet()) {
-            BenchmarkMetricsCollector.BenchmarkResult value = entry.getValue();
-            log.info("{}: throughput={} logs/sec, latency={} ns/log, GC={}ms ({}%)",
-                    entry.getKey(),
-                    String.format("%,.0f", Double.valueOf(value.throughput)),
-                    String.format("%,.0f", Double.valueOf(value.avgLatencyNanos)),
-                    Long.valueOf(value.gcTimeMs),
-                    String.format("%.2f", Double.valueOf(value.gcOverheadPercent)));
-        }
+        printSummary(results);
 
         return results;
     }
 
-    private void gcPause() {
-        System.gc();
+    private void pauseBetweenScenarios() {
         try {
-            Thread.sleep(500);
-        } catch (InterruptedException ignored) {
+            Thread.sleep(200);
+        } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private void printSummary(Map<String, BenchmarkMetricsCollector.BenchmarkResult> results) {
+        log.info("╠══════════════════════════════════════════════════╣");
+        log.info("║                Results Summary                   ║");
+        log.info("╠══════════════════════════════════════════════════╣");
+        log.info(String.format("║ %-25s %12s %12s %8s ║",
+                "Scenario", "Throughput", "Avg Latency", "GC%"));
+        log.info("║ ─────────────────────────────────────────────── ║");
+
+        for (Map.Entry<String, BenchmarkMetricsCollector.BenchmarkResult> entry : results.entrySet()) {
+            BenchmarkMetricsCollector.BenchmarkResult result = entry.getValue();
+            log.info(String.format("║ %-25s %,10.0f/s %,10.0f ns %6.2f%% ║",
+                    truncate(entry.getKey(), 25),
+                    Double.valueOf(result.throughput),
+                    Double.valueOf(result.avgLatencyNanos),
+                    Double.valueOf(result.gcOverheadPercent)));
+        }
+        log.info("╚══════════════════════════════════════════════════╝");
+    }
+
+    private String truncate(String value, int maxLen) {
+        if (value == null) {
+            return "";
+        }
+        if (value.length() <= maxLen) {
+            return value;
+        }
+        return value.substring(0, maxLen - 2) + "..";
     }
 }

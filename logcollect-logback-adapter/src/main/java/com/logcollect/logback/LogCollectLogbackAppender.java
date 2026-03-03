@@ -210,6 +210,8 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                     m.incrementMaskHits(methodKey);
                 }
             };
+            context.setAttribute(ATTR_SECURITY_PIPELINE, pipeline);
+            context.setAttribute(ATTR_SECURITY_METRICS, secMetrics);
         }
         return pipeline.processRaw(
                 context.getTraceId(),

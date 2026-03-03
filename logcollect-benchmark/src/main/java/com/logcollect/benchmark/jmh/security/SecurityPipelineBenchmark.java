@@ -30,7 +30,14 @@ public class SecurityPipelineBenchmark {
         pipeline = new SecurityPipeline(new DefaultLogSanitizer(), new DefaultLogMasker());
         noopMetrics = SecurityPipeline.SecurityMetrics.NOOP;
 
-        entryClean = BenchmarkData.buildEntry(BenchmarkData.MSG_CLEAN, BenchmarkData.MDC_EMPTY);
+        StringBuilder cleanBuilder = new StringBuilder(1024);
+        for (int i = 0; i < 20; i++) {
+            if (i > 0) {
+                cleanBuilder.append(" | ");
+            }
+            cleanBuilder.append(BenchmarkData.MSG_CLEAN);
+        }
+        entryClean = BenchmarkData.buildEntry(cleanBuilder.toString(), BenchmarkData.MDC_EMPTY);
         entryWithSensitive = BenchmarkData.buildEntry(BenchmarkData.MSG_WITH_SENSITIVE, BenchmarkData.MDC_TYPICAL);
         entryWithThrowable = BenchmarkData.buildEntryWithThrowable(BenchmarkData.MSG_WITH_SENSITIVE);
         entryWithLargeMdc = BenchmarkData.buildEntry(BenchmarkData.MSG_CLEAN, BenchmarkData.MDC_LARGE);
@@ -46,6 +53,9 @@ public class SecurityPipelineBenchmark {
         return pipeline.process(entryWithSensitive, noopMetrics);
     }
 
+    /**
+     * Control benchmark for throwable path in ratio gate assertions.
+     */
     @Benchmark
     public LogEntry pipeline_withThrowable() {
         return pipeline.process(entryWithThrowable, noopMetrics);
@@ -56,6 +66,9 @@ public class SecurityPipelineBenchmark {
         return pipeline.process(entryWithLargeMdc, noopMetrics);
     }
 
+    /**
+     * Control group that simulates legacy behavior where pipeline is created per call.
+     */
     @Benchmark
     public LogEntry pipeline_perCall_newInstance() {
         SecurityPipeline p = new SecurityPipeline(new DefaultLogSanitizer(), new DefaultLogMasker());

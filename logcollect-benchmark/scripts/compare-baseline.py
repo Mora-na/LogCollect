@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Compare two JMH JSON result files.
+Compare baseline and current benchmark files.
 
 Usage:
   python3 compare-baseline.py baseline.json current.json [threshold_pct]
@@ -15,6 +15,18 @@ def load_results(path):
         data = json.load(file)
 
     results = {}
+    # Structured baseline format: {"baselines": {"bench": {"scoreNs": ...}}}
+    if isinstance(data, dict) and "baselines" in data:
+        for name, metric in data["baselines"].items():
+            score = float(metric.get("scoreNs", 0.0))
+            error = float(metric.get("errorNs", 0.0))
+            results[name] = {"score": score, "error": error}
+        return results
+
+    # Raw JMH json format: [{"benchmark": "...", "primaryMetric": {...}}, ...]
+    if not isinstance(data, list):
+        return results
+
     for item in data:
         name = item["benchmark"].split(".")[-1]
         metric = item.get("primaryMetric", {})

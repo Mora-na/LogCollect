@@ -4,6 +4,7 @@ import com.logcollect.api.annotation.LogCollect;
 import com.logcollect.benchmark.stress.config.BenchmarkLogCollectHandler;
 import com.logcollect.benchmark.stress.config.StressTestConfig;
 import com.logcollect.benchmark.stress.metrics.BenchmarkMetricsCollector;
+import com.logcollect.core.context.LogCollectContextUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -30,7 +31,8 @@ public class MultiThreadScenario {
         BenchmarkMetricsCollector collector = new BenchmarkMetricsCollector();
         int requestedThreads = Math.max(1, threadCount);
         int poolSize = Math.min(requestedThreads, scenarioParameters.getMaxThreadCap());
-        ExecutorService pool = Executors.newFixedThreadPool(poolSize, stressThreadFactory);
+        ExecutorService rawPool = Executors.newFixedThreadPool(poolSize, stressThreadFactory);
+        ExecutorService pool = LogCollectContextUtils.wrapExecutorService(rawPool);
 
         String message = resolveMessage(messageType);
         long totalExpected = (long) requestedThreads * logsPerThread;
