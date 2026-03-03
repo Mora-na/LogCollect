@@ -18,6 +18,7 @@ import java.util.regex.Pattern;
  */
 public class DefaultLogMasker implements LogMasker {
     private static final long DEFAULT_MASK_TIMEOUT_MS = 50L;
+    private static final int BUILTIN_RULE_COUNT = 4;
 
     private final List<MaskRule> rules = new CopyOnWriteArrayList<MaskRule>();
     private final long maskTimeoutMs;
@@ -130,6 +131,10 @@ public class DefaultLogMasker implements LogMasker {
         if (content == null || content.isEmpty()) {
             return false;
         }
+        // 自定义规则无法从固定字符特征推断，存在时不能做内置特征短路。
+        if (rules.size() > BUILTIN_RULE_COUNT) {
+            return true;
+        }
         int consecutiveDigits = 0;
         for (int i = 0; i < content.length(); i++) {
             char c = content.charAt(i);
@@ -188,6 +193,13 @@ public class DefaultLogMasker implements LogMasker {
                 result = rule.apply(result);
             }
             return result;
+        } catch (RegexTimeoutException e) {
+            maskTimeoutCounter.incrementAndGet();
+            LogCollectInternalLogger.warn(
+                    "Mask regex timeout after {}ms on input length={}, returning original content. Detail: {}",
+                    maskTimeoutMs, input.length(), e.getMessage()
+            );
+            return input;
         } catch (RuntimeException e) {
             LogCollectInternalLogger.warn("Mask execution failed", e);
             return input;

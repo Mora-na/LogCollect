@@ -77,6 +77,7 @@ public class LogCollectHealthIndicator implements HealthIndicator {
             builder.withDetail("totalFlushes", metrics.getTotalFlushes());
             builder.withDetail("sanitizeHits", metrics.getTotalSanitizeHits());
             builder.withDetail("maskHits", metrics.getTotalMaskHits());
+            builder.withDetail("fastPathHits", metrics.getTotalFastPathHits());
             builder.withDetail("lastPersistDurationP99", metrics.getLastPersistDurationP99());
             builder.withDetail("globalBufferUtilization",
                     String.format("%.2f%%", metrics.getGlobalBufferUtilization() * 100));

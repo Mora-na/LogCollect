@@ -18,14 +18,19 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 
 public class SingleModeBuffer implements LogCollectBuffer {
     private final ConcurrentLinkedQueue<LogEntry> queue = new ConcurrentLinkedQueue<LogEntry>();
-    // 条数使用 O(1) 计数器维护，避免 ConcurrentLinkedQueue.size() 的 O(n) 开销。
-    private final AtomicInteger count = new AtomicInteger(0);
-    private final AtomicLong bytes = new AtomicLong(0);
+    // 计数器采用 LongAdder 降低多线程 CAS 争用。
+    @SuppressWarnings("unused")
+    private long cPad1, cPad2, cPad3, cPad4, cPad5, cPad6, cPad7;
+    private final LongAdder count = new LongAdder();
+    @SuppressWarnings("unused")
+    private long midPad1, midPad2, midPad3, midPad4, midPad5, midPad6, midPad7;
+    private final LongAdder bytes = new LongAdder();
+    @SuppressWarnings("unused")
+    private long bPad1, bPad2, bPad3, bPad4, bPad5, bPad6, bPad7;
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean flushing = new AtomicBoolean(false);
 
@@ -109,9 +114,9 @@ public class SingleModeBuffer implements LogCollectBuffer {
             return false;
         }
 
+        count.increment();
+        bytes.add(entryBytes);
         queue.offer(entry);
-        count.incrementAndGet();
-        bytes.addAndGet(entryBytes);
         if (context != null) {
             context.incrementCollectedCount();
             context.addCollectedBytes(entryBytes);
@@ -121,7 +126,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
             triggerFlush(context, false);
         }
         updateUtilization(context);
-        LogCollectDiag.debug("Buffer add: bytes=%d count=%d", bytes.get(), count.get());
+        LogCollectDiag.debug("Buffer add: bytes=%d count=%d", currentBytes(), currentCount());
         return true;
     }
 
@@ -165,7 +170,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
         if (policy.getStrategy() != BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY) {
             return false;
         }
-        return (maxCount > 0 && count.get() >= maxCount) || (maxBytes > 0 && bytes.get() >= maxBytes);
+        return (maxCount > 0 && currentCount() >= maxCount) || (maxBytes > 0 && currentBytes() >= maxBytes);
     }
 
     private void doTriggerFlush(LogCollectContext context, boolean isFinal, boolean warnOnly) {
@@ -217,14 +222,8 @@ public class SingleModeBuffer implements LogCollectBuffer {
         }
         if (!batch.isEmpty()) {
             int drainedCount = batch.size();
-            int remaining = count.addAndGet(-drainedCount);
-            if (remaining < 0) {
-                count.set(0);
-            }
-            long remainingBytes = bytes.addAndGet(-drainedBytes);
-            if (remainingBytes < 0) {
-                bytes.set(0);
-            }
+            count.add(-drainedCount);
+            bytes.add(-drainedBytes);
             if (globalManager != null) {
                 globalManager.release(drainedBytes);
             }
@@ -286,7 +285,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
 
     private void evictOldestUntilFit(LogCollectContext context, long incomingBytes) {
         while (policy.isOverflow(incomingBytes)) {
-            int toDrop = Math.max(1, count.get() / 10);
+            int toDrop = Math.max(1, (int) (currentCount() / 10L));
             int actualDropped = 0;
             long freedBytes = 0L;
             for (int i = 0; i < toDrop; i++) {
@@ -303,14 +302,8 @@ public class SingleModeBuffer implements LogCollectBuffer {
             if (actualDropped == 0) {
                 break;
             }
-            int remainingCount = count.addAndGet(-actualDropped);
-            if (remainingCount < 0) {
-                count.set(0);
-            }
-            long remainingBytes = bytes.addAndGet(-freedBytes);
-            if (remainingBytes < 0) {
-                bytes.set(0);
-            }
+            count.add(-actualDropped);
+            bytes.add(-freedBytes);
             if (globalManager != null) {
                 globalManager.release(freedBytes);
             }
@@ -453,8 +446,8 @@ public class SingleModeBuffer implements LogCollectBuffer {
         if (maxCount <= 0 && maxBytes <= 0) {
             return;
         }
-        double countRatio = maxCount <= 0 ? 0.0d : ((double) count.get() / (double) maxCount);
-        double bytesRatio = maxBytes <= 0 ? 0.0d : ((double) bytes.get() / (double) maxBytes);
+        double countRatio = maxCount <= 0 ? 0.0d : ((double) currentCount() / (double) maxCount);
+        double bytesRatio = maxBytes <= 0 ? 0.0d : ((double) currentBytes() / (double) maxBytes);
         double utilization = Math.max(countRatio, bytesRatio);
         if (utilization < 0.0d) {
             utilization = 0.0d;
@@ -469,6 +462,16 @@ public class SingleModeBuffer implements LogCollectBuffer {
             return "global_memory_limit";
         }
         return "buffer_full";
+    }
+
+    private long currentCount() {
+        long value = count.sum();
+        return value < 0 ? 0 : value;
+    }
+
+    private long currentBytes() {
+        long value = bytes.sum();
+        return value < 0 ? 0 : value;
     }
 
     private final class AsyncBufferFlushTask implements AsyncFlushExecutor.RejectedAwareTask {

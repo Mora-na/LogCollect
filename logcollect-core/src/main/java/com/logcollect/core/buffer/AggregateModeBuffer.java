@@ -1,6 +1,7 @@
 package com.logcollect.core.buffer;
 
 import com.logcollect.api.format.LogLineDefaults;
+import com.logcollect.api.format.LogLinePatternParser;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.api.metrics.NoopLogCollectMetrics;
@@ -10,7 +11,9 @@ import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.internal.LogCollectInternalLogger;
+import com.logcollect.core.pipeline.SecurityPipeline;
 
+import java.lang.reflect.Method;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -21,7 +24,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * 聚合模式日志缓冲实现。
@@ -33,9 +36,15 @@ public class AggregateModeBuffer implements LogCollectBuffer {
     private static final String DEFAULT_SEPARATOR = "\n";
 
     private final ConcurrentLinkedQueue<LogSegment> segments = new ConcurrentLinkedQueue<LogSegment>();
-    // 条数使用 O(1) 计数器维护，避免 ConcurrentLinkedQueue.size() 的 O(n) 开销。
-    private final AtomicInteger count = new AtomicInteger(0);
-    private final AtomicLong bytes = new AtomicLong(0);
+    // 计数器采用 LongAdder 降低多线程 CAS 争用。
+    @SuppressWarnings("unused")
+    private long cPad1, cPad2, cPad3, cPad4, cPad5, cPad6, cPad7;
+    private final LongAdder count = new LongAdder();
+    @SuppressWarnings("unused")
+    private long midPad1, midPad2, midPad3, midPad4, midPad5, midPad6, midPad7;
+    private final LongAdder bytes = new LongAdder();
+    @SuppressWarnings("unused")
+    private long bPad1, bPad2, bPad3, bPad4, bPad5, bPad6, bPad7;
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean flushing = new AtomicBoolean(false);
 
@@ -43,6 +52,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
     private final long maxBytes;
     private final GlobalBufferMemoryManager globalManager;
     private final LogCollectHandler handler;
+    private final boolean canUseRawFormatFastPath;
     private final String separator;
     private final BoundedBufferPolicy policy;
     private final ResilientFlusher resilientFlusher = new ResilientFlusher();
@@ -105,6 +115,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         this.maxBytes = maxBytes;
         this.globalManager = globalManager;
         this.handler = handler;
+        this.canUseRawFormatFastPath = detectRawFormatFastPath(handler);
         String sep = handler == null ? null : handler.aggregatedLogSeparator();
         this.separator = sep == null ? DEFAULT_SEPARATOR : sep;
         this.policy = policy == null
@@ -126,13 +137,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             return false;
         }
 
-        int currentVersion = LogLineDefaults.getVersion();
-        int bufferedVersion = patternVersion.get();
-        if (currentVersion != bufferedVersion
-                && patternVersion.compareAndSet(bufferedVersion, currentVersion)
-                && count.get() > 0) {
-            triggerFlush(context, false);
-        }
+        int currentVersion = syncPatternVersion(context);
 
         String formattedLine;
         try {
@@ -143,6 +148,59 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         } catch (Error e) {
             throw e;
         }
+        return offerFormatted(context, entry.getLevel(), entry.getTimestamp(), formattedLine, currentVersion);
+    }
+
+    /**
+     * AGGREGATE 专用：直接接收安全处理后的原始字段，减少中间对象构建。
+     */
+    public boolean offerRaw(LogCollectContext context, SecurityPipeline.ProcessedLogRecord record) {
+        if (record == null) {
+            return false;
+        }
+        if (closed.get()) {
+            if (context != null) {
+                context.incrementDiscardedCount();
+                resolveMetrics(context).incrementDiscarded(context.getMethodSignature(), "buffer_closed");
+            }
+            notifyDegrade(context, "buffer_closed");
+            return false;
+        }
+
+        int currentVersion = syncPatternVersion(context);
+
+        String formattedLine;
+        try {
+            if (handler == null) {
+                formattedLine = record.getContent();
+            } else if (canUseRawFormatFastPath) {
+                formattedLine = LogLinePatternParser.formatRaw(
+                        record.getTraceId(),
+                        record.getContent(),
+                        record.getLevel(),
+                        record.getTimestamp(),
+                        record.getThreadName(),
+                        record.getLoggerName(),
+                        record.getThrowableString(),
+                        record.getMdcContext(),
+                        handler.logLinePattern());
+            } else {
+                formattedLine = handler.formatLogLine(record.toLogEntry());
+            }
+        } catch (Exception t) {
+            notifyError(context, t, "formatLogLine");
+            formattedLine = record.getContent();
+        } catch (Error e) {
+            throw e;
+        }
+        return offerFormatted(context, record.getLevel(), record.getTimestamp(), formattedLine, currentVersion);
+    }
+
+    private boolean offerFormatted(LogCollectContext context,
+                                   String level,
+                                   long timestamp,
+                                   String formattedLine,
+                                   int currentVersion) {
         if (formattedLine == null || formattedLine.isEmpty()) {
             return false;
         }
@@ -158,7 +216,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         }
 
         if (globalManager != null && !globalManager.tryAllocate(lineBytes)) {
-            if (isHighLevel(entry.getLevel())) {
+            if (isHighLevel(level)) {
                 globalManager.forceAllocate(lineBytes);
             } else {
                 if (context != null) {
@@ -191,14 +249,14 @@ public class AggregateModeBuffer implements LogCollectBuffer {
 
         LogSegment seg = new LogSegment(
                 formattedLine,
-                entry.getLevel(),
-                entry.getTimestamp(),
+                level,
+                timestamp,
                 lineBytes,
                 currentVersion);
 
+        count.increment();
+        bytes.add(seg.estimatedBytes);
         segments.offer(seg);
-        count.incrementAndGet();
-        bytes.addAndGet(seg.estimatedBytes);
         if (context != null) {
             context.incrementCollectedCount();
             context.addCollectedBytes(seg.estimatedBytes);
@@ -208,8 +266,31 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             triggerFlush(context, false);
         }
         updateUtilization(context);
-        LogCollectDiag.debug("Buffer add: bytes=%d count=%d", bytes.get(), count.get());
+        LogCollectDiag.debug("Buffer add: bytes=%d count=%d", currentBytes(), currentCount());
         return true;
+    }
+
+    private int syncPatternVersion(LogCollectContext context) {
+        int currentVersion = LogLineDefaults.getVersion();
+        int bufferedVersion = patternVersion.get();
+        if (currentVersion != bufferedVersion
+                && patternVersion.compareAndSet(bufferedVersion, currentVersion)
+                && currentCount() > 0) {
+            triggerFlush(context, false);
+        }
+        return currentVersion;
+    }
+
+    private boolean detectRawFormatFastPath(LogCollectHandler candidate) {
+        if (candidate == null) {
+            return false;
+        }
+        try {
+            Method method = candidate.getClass().getMethod("formatLogLine", LogEntry.class);
+            return method.getDeclaringClass() == LogCollectHandler.class;
+        } catch (Exception ignore) {
+            return false;
+        }
     }
 
     @Override
@@ -252,7 +333,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         if (policy.getStrategy() != BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY) {
             return false;
         }
-        return (maxCount > 0 && count.get() >= maxCount) || (maxBytes > 0 && bytes.get() >= maxBytes);
+        return (maxCount > 0 && currentCount() >= maxCount) || (maxBytes > 0 && currentBytes() >= maxBytes);
     }
 
     private void doTriggerFlush(LogCollectContext context, boolean isFinal, boolean warnOnly) {
@@ -310,14 +391,8 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         }
         if (!drained.isEmpty()) {
             int drainedCount = drained.size();
-            int remaining = count.addAndGet(-drainedCount);
-            if (remaining < 0) {
-                count.set(0);
-            }
-            long remainingBytes = bytes.addAndGet(-drainedBytes);
-            if (remainingBytes < 0) {
-                bytes.set(0);
-            }
+            count.add(-drainedCount);
+            bytes.add(-drainedBytes);
             if (globalManager != null) {
                 globalManager.release(drainedBytes);
             }
@@ -455,7 +530,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
 
     private void evictOldestUntilFit(LogCollectContext context, long incomingBytes) {
         while (policy.isOverflow(incomingBytes)) {
-            int toDrop = Math.max(1, count.get() / 10);
+            int toDrop = Math.max(1, (int) (currentCount() / 10L));
             int actualDropped = 0;
             long freedBytes = 0L;
             for (int i = 0; i < toDrop; i++) {
@@ -472,14 +547,8 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             if (actualDropped == 0) {
                 break;
             }
-            int remainingCount = count.addAndGet(-actualDropped);
-            if (remainingCount < 0) {
-                count.set(0);
-            }
-            long remainingBytes = bytes.addAndGet(-freedBytes);
-            if (remainingBytes < 0) {
-                bytes.set(0);
-            }
+            count.add(-actualDropped);
+            bytes.add(-freedBytes);
             if (globalManager != null) {
                 globalManager.release(freedBytes);
             }
@@ -600,8 +669,8 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         if (maxCount <= 0 && maxBytes <= 0) {
             return;
         }
-        double countRatio = maxCount <= 0 ? 0.0d : ((double) count.get() / (double) maxCount);
-        double bytesRatio = maxBytes <= 0 ? 0.0d : ((double) bytes.get() / (double) maxBytes);
+        double countRatio = maxCount <= 0 ? 0.0d : ((double) currentCount() / (double) maxCount);
+        double bytesRatio = maxBytes <= 0 ? 0.0d : ((double) currentBytes() / (double) maxBytes);
         double utilization = Math.max(countRatio, bytesRatio);
         if (utilization < 0.0d) {
             utilization = 0.0d;
@@ -609,6 +678,16 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             utilization = 1.0d;
         }
         resolveMetrics(context).updateBufferUtilization(context.getMethodSignature(), utilization);
+    }
+
+    private long currentCount() {
+        long value = count.sum();
+        return value < 0 ? 0 : value;
+    }
+
+    private long currentBytes() {
+        long value = bytes.sum();
+        return value < 0 ? 0 : value;
     }
 
     private String toDiscardReason(BoundedBufferPolicy.RejectReason reason) {

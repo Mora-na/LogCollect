@@ -146,6 +146,7 @@ public class LogCollectManagementEndpoint {
             result.put("totalFlushes", metrics.getTotalFlushes());
             result.put("sanitizeHits", metrics.getTotalSanitizeHits());
             result.put("maskHits", metrics.getTotalMaskHits());
+            result.put("fastPathHits", metrics.getTotalFastPathHits());
         }
 
         result.put("logFramework", detectLogFramework());

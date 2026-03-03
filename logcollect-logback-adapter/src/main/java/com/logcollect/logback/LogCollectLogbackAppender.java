@@ -18,6 +18,7 @@ import com.logcollect.api.metrics.NoopLogCollectMetrics;
 import com.logcollect.api.model.*;
 import com.logcollect.api.sanitizer.LogSanitizer;
 import com.logcollect.api.transaction.TransactionExecutor;
+import com.logcollect.core.buffer.AggregateModeBuffer;
 import com.logcollect.core.buffer.AsyncFlushExecutor;
 import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.buffer.LogCollectBuffer;
@@ -101,10 +102,7 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                 return;
             }
 
-            String rawMessage = event.getFormattedMessage();
-            if (rawMessage == null) {
-                rawMessage = "";
-            }
+            String rawMessage = resolveRawMessage(event);
 
             LogCollectHandler handler = context.getHandler();
             if (handler != null) {
@@ -122,7 +120,7 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                     extractThrowableString(event), config.getGuardMaxThrowableLength());
 
             Object securityTimer = m.startSecurityTimer();
-            LogEntry entry = securityProcess(
+            SecurityPipeline.ProcessedLogRecord safeRecord = securityProcess(
                     context,
                     config,
                     methodKey,
@@ -136,18 +134,23 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                     m);
             m.stopSecurityTimer(securityTimer, methodKey);
 
-            if (!allowByTotalLimitAndSampling(context, entry, methodKey, m)) {
+            if (!allowByTotalLimitAndSampling(context, safeRecord.getLevel(), safeRecord.estimateBytes(), methodKey, m)) {
                 return;
             }
 
             Object buf = context.getBuffer();
             if (config.isUseBuffer() && buf instanceof LogCollectBuffer) {
-                boolean accepted = ((LogCollectBuffer) buf).offer(context, entry);
+                boolean accepted;
+                if (context.getCollectMode() == CollectMode.AGGREGATE && buf instanceof AggregateModeBuffer) {
+                    accepted = ((AggregateModeBuffer) buf).offerRaw(context, safeRecord);
+                } else {
+                    accepted = ((LogCollectBuffer) buf).offer(context, safeRecord.toLogEntry());
+                }
                 if (accepted) {
-                    m.incrementCollected(methodKey, level, context.getCollectMode().name());
+                    m.incrementCollected(methodKey, safeRecord.getLevel(), context.getCollectMode().name());
                 }
             } else {
-                handleDirect(context, entry, methodKey, m);
+                handleDirect(context, safeRecord.toLogEntry(), methodKey, m);
             }
         } catch (Exception e) {
             rethrowDegradeIfNecessary(context, e);
@@ -168,17 +171,17 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         return this.metrics;
     }
 
-    private LogEntry securityProcess(LogCollectContext context,
-                                     LogCollectConfig config,
-                                     String methodKey,
-                                     String content,
-                                     String level,
-                                     long timestamp,
-                                     String threadName,
-                                     String loggerName,
-                                     String throwable,
-                                     Map<String, String> mdc,
-                                     LogCollectMetrics m) {
+    private SecurityPipeline.ProcessedLogRecord securityProcess(LogCollectContext context,
+                                                                LogCollectConfig config,
+                                                                String methodKey,
+                                                                String content,
+                                                                String level,
+                                                                long timestamp,
+                                                                String threadName,
+                                                                String loggerName,
+                                                                String throwable,
+                                                                Map<String, String> mdc,
+                                                                LogCollectMetrics m) {
         SecurityPipeline pipeline = context.getAttribute(ATTR_SECURITY_PIPELINE, SecurityPipeline.class);
         SecurityPipeline.SecurityMetrics secMetrics =
                 context.getAttribute(ATTR_SECURITY_METRICS, SecurityPipeline.SecurityMetrics.class);
@@ -209,11 +212,16 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                 public void onThrowableMasked() {
                     m.incrementMaskHits(methodKey);
                 }
+
+                @Override
+                public void onFastPathHit() {
+                    m.incrementFastPathHits(methodKey);
+                }
             };
             context.setAttribute(ATTR_SECURITY_PIPELINE, pipeline);
             context.setAttribute(ATTR_SECURITY_METRICS, secMetrics);
         }
-        return pipeline.processRaw(
+        return pipeline.processRawRecord(
                 context.getTraceId(),
                 content,
                 level,
@@ -223,6 +231,22 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                 throwable,
                 mdc,
                 secMetrics);
+    }
+
+    private String resolveRawMessage(ILoggingEvent event) {
+        if (event == null) {
+            return "";
+        }
+        String template = event.getMessage();
+        Object[] args = event.getArgumentArray();
+        if ((args == null || args.length == 0) && template != null) {
+            return template;
+        }
+        String formatted = event.getFormattedMessage();
+        if (formatted != null) {
+            return formatted;
+        }
+        return template == null ? "" : template;
     }
 
     private String extractThrowableString(ILoggingEvent event) {
@@ -280,24 +304,24 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
     }
 
     private boolean allowByTotalLimitAndSampling(LogCollectContext context,
-                                                  LogEntry entry,
+                                                  String level,
+                                                  long estimatedBytes,
                                                   String methodKey,
                                                   LogCollectMetrics m) {
         LogCollectConfig config = context.getConfig();
-        long estimatedBytes = entry == null ? 0L : entry.estimateBytes();
-        String level = entry == null ? "INFO" : entry.getLevel();
+        String safeLevel = level == null ? "INFO" : level;
 
         if (isOverTotalLimit(context, config, estimatedBytes)) {
             TotalLimitPolicy policy = config.getTotalLimitPolicy() == null
                     ? TotalLimitPolicy.STOP_COLLECTING
                     : config.getTotalLimitPolicy();
             if (policy == TotalLimitPolicy.DOWNGRADE_LEVEL) {
-                if (!isWarnOrAbove(level)) {
+                if (!isWarnOrAbove(safeLevel)) {
                     markDiscard(context, methodKey, "total_limit_downgrade", m);
                     return false;
                 }
             } else if (policy == TotalLimitPolicy.SAMPLE) {
-                if (!shouldSample(context, config, level, true)) {
+                if (!shouldSample(context, config, safeLevel, true)) {
                     markDiscard(context, methodKey, "total_limit_sampled", m);
                     return false;
                 }
@@ -307,7 +331,7 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             }
         }
 
-        if (!shouldSample(context, config, level, false)) {
+        if (!shouldSample(context, config, safeLevel, false)) {
             markDiscard(context, methodKey, "sampled_out", m);
             return false;
         }

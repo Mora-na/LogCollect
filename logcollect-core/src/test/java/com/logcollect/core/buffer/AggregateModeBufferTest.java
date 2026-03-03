@@ -6,6 +6,7 @@ import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.model.AggregatedLog;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
+import com.logcollect.core.pipeline.SecurityPipeline;
 import com.logcollect.core.test.ConcurrentTestHelper;
 import com.logcollect.core.test.CoreUnitTestBase;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -190,6 +193,67 @@ class AggregateModeBufferTest extends CoreUnitTestBase {
         ArgumentCaptor<AggregatedLog> captor = ArgumentCaptor.forClass(AggregatedLog.class);
         verify(mockHandler, atLeast(2)).flushAggregatedLog(eq(context), captor.capture());
         assertThat(captor.getAllValues().get(0).getContent()).contains("old-pattern");
+    }
+
+    @Test
+    void offerRaw_defaultFormatPath_formatsViaPatternParser() {
+        class DefaultPatternHandler implements LogCollectHandler {
+            private AggregatedLog last;
+
+            @Override
+            public String logLinePattern() {
+                return "%p [%t] %C - %m";
+            }
+
+            @Override
+            public void flushAggregatedLog(LogCollectContext context, AggregatedLog aggregatedLog) {
+                this.last = aggregatedLog;
+            }
+        }
+        DefaultPatternHandler handler = new DefaultPatternHandler();
+        LogCollectConfig config = LogCollectConfig.frameworkDefaults();
+        config.setAsync(false);
+        LogCollectContext rawContext = createTestContext(config, handler, CollectMode.AGGREGATE, null, null);
+
+        AggregateModeBuffer buffer = new AggregateModeBuffer(100, parseBytes("1MB"), null, handler);
+        SecurityPipeline pipeline = new SecurityPipeline(null, null);
+        Map<String, String> mdc = new HashMap<String, String>();
+        mdc.put("traceId", rawContext.getTraceId());
+        SecurityPipeline.ProcessedLogRecord record = pipeline.processRawRecord(
+                rawContext.getTraceId(),
+                "raw-message",
+                "INFO",
+                System.currentTimeMillis(),
+                "worker-1",
+                "com.demo.Service",
+                null,
+                mdc,
+                SecurityPipeline.SecurityMetrics.NOOP);
+
+        assertThat(buffer.offerRaw(rawContext, record)).isTrue();
+        buffer.triggerFlush(rawContext, true);
+
+        assertThat(handler.last).isNotNull();
+        assertThat(handler.last.getContent()).contains("INFO [worker-1] com.demo.Service - raw-message");
+    }
+
+    @Test
+    void offerRaw_customFormatLine_fallsBackToLogEntryPath() {
+        AggregateModeBuffer buffer = createBuffer(100, "1MB");
+        SecurityPipeline pipeline = new SecurityPipeline(null, null);
+        SecurityPipeline.ProcessedLogRecord record = pipeline.processRawRecord(
+                context.getTraceId(),
+                "raw-custom",
+                "WARN",
+                System.currentTimeMillis(),
+                "main",
+                "com.test.Custom",
+                null,
+                null,
+                SecurityPipeline.SecurityMetrics.NOOP);
+
+        assertThat(buffer.offerRaw(context, record)).isTrue();
+        verify(mockHandler, atLeastOnce()).formatLogLine(any());
     }
 
     private AggregateModeBuffer createBuffer(int maxSize, String maxBytes) {

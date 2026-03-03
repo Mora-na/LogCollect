@@ -279,6 +279,9 @@ public class LogCollectAspect {
         }
         com.logcollect.api.metrics.LogCollectMetrics bridgeMetrics = resolveMetricsBridge(config);
         context.setAttribute("__metrics", bridgeMetrics);
+        if (metrics != null && config.isEnableMetrics()) {
+            metrics.prepareMethodMeters(context.getMethodSignature());
+        }
         if (txWrapper != null && config.isTransactionIsolation()) {
             context.setAttribute("__txWrapper", (TransactionExecutor) txWrapper);
         }
@@ -317,6 +320,11 @@ public class LogCollectAspect {
             @Override
             public void onThrowableMasked() {
                 bridgeMetrics.incrementMaskHits(methodKey);
+            }
+
+            @Override
+            public void onFastPathHit() {
+                bridgeMetrics.incrementFastPathHits(methodKey);
             }
         });
     }

@@ -170,13 +170,13 @@ class LogCollectLog4j2AppenderBranchTest {
                 .loggerName("L")
                 .build();
         assertThat(invoke(appender, "allowByTotalLimitAndSampling",
-                new Class[]{LogCollectContext.class, LogEntry.class, String.class, LogCollectMetrics.class},
-                ctx, entry, ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(false);
+                new Class[]{LogCollectContext.class, String.class, long.class, String.class, LogCollectMetrics.class},
+                ctx, entry.getLevel(), entry.estimateBytes(), ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(false);
 
         cfg.setTotalLimitPolicy(TotalLimitPolicy.DOWNGRADE_LEVEL);
         assertThat(invoke(appender, "allowByTotalLimitAndSampling",
-                new Class[]{LogCollectContext.class, LogEntry.class, String.class, LogCollectMetrics.class},
-                ctx, entry, ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(false);
+                new Class[]{LogCollectContext.class, String.class, long.class, String.class, LogCollectMetrics.class},
+                ctx, entry.getLevel(), entry.estimateBytes(), ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(false);
 
         LogEntry warn = LogEntry.builder()
                 .traceId(ctx.getTraceId())
@@ -187,14 +187,14 @@ class LogCollectLog4j2AppenderBranchTest {
                 .loggerName("L")
                 .build();
         assertThat(invoke(appender, "allowByTotalLimitAndSampling",
-                new Class[]{LogCollectContext.class, LogEntry.class, String.class, LogCollectMetrics.class},
-                ctx, warn, ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(true);
+                new Class[]{LogCollectContext.class, String.class, long.class, String.class, LogCollectMetrics.class},
+                ctx, warn.getLevel(), warn.estimateBytes(), ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(true);
 
         cfg.setTotalLimitPolicy(TotalLimitPolicy.SAMPLE);
         cfg.setSamplingRate(0.0d);
         assertThat(invoke(appender, "allowByTotalLimitAndSampling",
-                new Class[]{LogCollectContext.class, LogEntry.class, String.class, LogCollectMetrics.class},
-                ctx, warn, ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(false);
+                new Class[]{LogCollectContext.class, String.class, long.class, String.class, LogCollectMetrics.class},
+                ctx, warn.getLevel(), warn.estimateBytes(), ctx.getMethodSignature(), NoopLogCollectMetrics.INSTANCE)).isEqualTo(false);
 
         cfg.setBlockWhenDegradeFail(true);
         assertThatThrownBy(() -> invoke(appender, "rethrowDegradeIfNecessary",

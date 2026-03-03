@@ -80,4 +80,28 @@ class LogLinePatternParserTest {
         String second = LogLinePatternParser.format(entry, pattern);
         assertThat(second).isEqualTo(first);
     }
+
+    @Test
+    void formatRaw_standardPattern_formatsWithoutLogEntry() {
+        Map<String, String> mdc = new HashMap<String, String>();
+        mdc.put("requestId", "req-raw-1");
+
+        String result = LogLinePatternParser.formatRaw(
+                "trace-raw",
+                "raw-msg",
+                "WARN",
+                1706745600000L,
+                "worker-raw",
+                "com.example.RawService",
+                null,
+                mdc,
+                "%p [%t] %c{1} %X{requestId} - %m");
+
+        assertThat(result)
+                .contains("WARN")
+                .contains("[worker-raw]")
+                .contains("RawService")
+                .contains("req-raw-1")
+                .contains("raw-msg");
+    }
 }

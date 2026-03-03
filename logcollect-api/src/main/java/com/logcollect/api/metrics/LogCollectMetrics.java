@@ -31,6 +31,9 @@ public interface LogCollectMetrics {
 
     void incrementMaskHits(String methodKey);
 
+    default void incrementFastPathHits(String methodKey) {
+    }
+
     void incrementHandlerTimeout(String methodKey);
 
     default void incrementConfigRefresh(String source) {

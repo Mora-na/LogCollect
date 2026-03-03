@@ -54,6 +54,10 @@ public final class NoopLogCollectMetrics implements LogCollectMetrics {
     }
 
     @Override
+    public void incrementFastPathHits(String methodKey) {
+    }
+
+    @Override
     public void incrementHandlerTimeout(String methodKey) {
     }
 

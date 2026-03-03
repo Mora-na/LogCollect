@@ -24,17 +24,7 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
     private final String prefix;
     private final DegradeFileManager degradeFileManager;
 
-    private final ConcurrentHashMap<String, Counter> collectedCounters = new ConcurrentHashMap<String, Counter>();
-    private final ConcurrentHashMap<String, Counter> discardedCounters = new ConcurrentHashMap<String, Counter>();
-    private final ConcurrentHashMap<String, Counter> persistedCounters = new ConcurrentHashMap<String, Counter>();
-    private final ConcurrentHashMap<String, Counter> persistFailedCounters = new ConcurrentHashMap<String, Counter>();
-    private final ConcurrentHashMap<String, Counter> flushCounters = new ConcurrentHashMap<String, Counter>();
-    private final ConcurrentHashMap<String, Counter> overflowCounters = new ConcurrentHashMap<String, Counter>();
-    private final ConcurrentHashMap<String, Counter> degradeCounters = new ConcurrentHashMap<String, Counter>();
-    private final ConcurrentHashMap<String, Counter> handlerTimeoutCounters = new ConcurrentHashMap<String, Counter>();
-    private final ConcurrentHashMap<String, Counter> circuitRecoveredCounters = new ConcurrentHashMap<String, Counter>();
-    private final ConcurrentHashMap<String, Counter> sanitizeCounters = new ConcurrentHashMap<String, Counter>();
-    private final ConcurrentHashMap<String, Counter> maskCounters = new ConcurrentHashMap<String, Counter>();
+    private final ConcurrentHashMap<String, MethodMeters> methodMeters = new ConcurrentHashMap<String, MethodMeters>();
     private final ConcurrentHashMap<String, Counter> configRefreshCounters = new ConcurrentHashMap<String, Counter>();
 
     private final ConcurrentHashMap<String, Timer> persistTimers = new ConcurrentHashMap<String, Timer>();
@@ -52,6 +42,7 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
     private final AtomicLong totalFlushes = new AtomicLong(0);
     private final AtomicLong totalSanitizeHits = new AtomicLong(0);
     private final AtomicLong totalMaskHits = new AtomicLong(0);
+    private final AtomicLong totalFastPathHits = new AtomicLong(0);
 
     public LogCollectMetrics(MeterRegistry registry, LogCollectProperties properties, DegradeFileManager degradeFileManager) {
         this.registry = registry;
@@ -64,6 +55,13 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
 
     public boolean isEnabled(LogCollectConfig config) {
         return config != null && config.isEnableMetrics();
+    }
+
+    /**
+     * 预注册方法级热点计数器，避免首次日志请求落到热路径创建 Meter。
+     */
+    public void prepareMethodMeters(String method) {
+        methodMeters(method);
     }
 
     private void registerGlobalGauges() {
@@ -95,131 +93,90 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
 
     @Override
     public void incrementCollected(String method, String level, String mode) {
-        String methodTag = normalizeMethodKey(method);
+        MethodMeters meters = methodMeters(method);
         String levelTag = safeValue(level, "UNKNOWN");
         String modeTag = safeValue(mode, "UNKNOWN");
-        counter(collectedCounters,
-                methodTag + "_" + levelTag + "_" + modeTag,
-                prefix + ".collected.total",
-                "method", methodTag,
-                "level", levelTag,
-                "mode", modeTag).increment();
+        meters.collected(levelTag, modeTag).increment();
         totalCollected.incrementAndGet();
     }
 
     @Override
     public void incrementDiscarded(String method, String reason) {
-        String methodTag = normalizeMethodKey(method);
+        MethodMeters meters = methodMeters(method);
         String reasonTag = normalizeReason(reason);
-        counter(discardedCounters,
-                methodTag + "_" + reasonTag,
-                prefix + ".discarded.total",
-                "method", methodTag,
-                "reason", reasonTag).increment();
+        meters.discarded(reasonTag).increment();
         totalDiscarded.incrementAndGet();
     }
 
     @Override
     public void incrementPersisted(String method, String mode) {
-        String methodTag = normalizeMethodKey(method);
+        MethodMeters meters = methodMeters(method);
         String modeTag = safeValue(mode, "UNKNOWN");
-        counter(persistedCounters,
-                methodTag + "_" + modeTag,
-                prefix + ".persisted.total",
-                "method", methodTag,
-                "mode", modeTag).increment();
+        meters.persisted(modeTag).increment();
         totalPersisted.incrementAndGet();
     }
 
     @Override
     public void incrementPersistFailed(String method) {
-        String methodTag = normalizeMethodKey(method);
-        counter(persistFailedCounters,
-                methodTag,
-                prefix + ".persist.failed.total",
-                "method", methodTag).increment();
+        methodMeters(method).persistFailedCounter.increment();
     }
 
     @Override
     public void incrementFlush(String method, String mode, String trigger) {
-        String methodTag = normalizeMethodKey(method);
+        MethodMeters meters = methodMeters(method);
         String modeTag = safeValue(mode, "UNKNOWN");
         String triggerTag = safeValue(trigger, "unknown");
-        counter(flushCounters,
-                methodTag + "_" + modeTag + "_" + triggerTag,
-                prefix + ".flush.total",
-                "method", methodTag,
-                "mode", modeTag,
-                "trigger", triggerTag).increment();
+        meters.flush(modeTag, triggerTag).increment();
         totalFlushes.incrementAndGet();
     }
 
     @Override
     public void incrementBufferOverflow(String method, String overflowPolicy) {
-        String methodTag = normalizeMethodKey(method);
+        MethodMeters meters = methodMeters(method);
         String overflowTag = safeValue(overflowPolicy, "UNKNOWN");
-        counter(overflowCounters,
-                methodTag + "_" + overflowTag,
-                prefix + ".buffer.overflow.total",
-                "method", methodTag,
-                "overflowPolicy", overflowTag).increment();
+        meters.overflow(overflowTag).increment();
     }
 
     @Override
     public void incrementDegradeTriggered(String type, String method) {
         String typeTag = safeValue(type, "unknown");
-        String methodTag = normalizeMethodKey(method);
-        counter(degradeCounters,
-                methodTag + "_" + typeTag,
-                prefix + ".degrade.triggered.total",
-                "type", typeTag,
-                "method", methodTag).increment();
+        methodMeters(method).degrade(typeTag).increment();
     }
 
     @Override
     public void incrementCircuitRecovered(String method) {
-        String methodTag = normalizeMethodKey(method);
-        counter(circuitRecoveredCounters,
-                methodTag,
-                prefix + ".circuit.recovered.total",
-                "method", methodTag).increment();
+        methodMeters(method).circuitRecoveredCounter.increment();
     }
 
     @Override
     public void incrementSanitizeHits(String method) {
-        String methodTag = normalizeMethodKey(method);
-        counter(sanitizeCounters,
-                methodTag,
-                prefix + ".security.sanitize.hits.total",
-                "method", methodTag).increment();
+        methodMeters(method).sanitizeCounter.increment();
         totalSanitizeHits.incrementAndGet();
     }
 
     @Override
     public void incrementMaskHits(String method) {
-        String methodTag = normalizeMethodKey(method);
-        counter(maskCounters,
-                methodTag,
-                prefix + ".security.mask.hits.total",
-                "method", methodTag).increment();
+        methodMeters(method).maskCounter.increment();
         totalMaskHits.incrementAndGet();
     }
 
     @Override
+    public void incrementFastPathHits(String method) {
+        methodMeters(method).fastPathCounter.increment();
+        totalFastPathHits.incrementAndGet();
+    }
+
+    @Override
     public void incrementConfigRefresh(String source) {
-        counter(configRefreshCounters,
-                source,
-                prefix + ".config.refresh.total",
-                "source", source).increment();
+        String sourceTag = safeValue(source, "unknown");
+        configRefreshCounters.computeIfAbsent(sourceTag, key -> Counter.builder(prefix + ".config.refresh.total")
+                .tag("source", sourceTag)
+                .register(registry)).increment();
     }
 
     @Override
     public void incrementHandlerTimeout(String method) {
-        String methodTag = normalizeMethodKey(method);
-        counter(handlerTimeoutCounters,
-                methodTag,
-                prefix + ".handler.timeout.total",
-                "method", methodTag).increment();
+        methodMeters(method).handlerTimeoutCounter.increment();
     }
 
     @Override
@@ -398,6 +355,10 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
         return totalMaskHits.get();
     }
 
+    public long getTotalFastPathHits() {
+        return totalFastPathHits.get();
+    }
+
     public String getLastPersistDurationP99() {
         double max = -1.0d;
         for (Timer timer : persistTimers.values()) {
@@ -415,10 +376,98 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
         return String.format("%.1fms", max);
     }
 
-    private Counter counter(ConcurrentHashMap<String, Counter> cache,
-                            String key,
-                            String metricName,
-                            String... tags) {
-        return cache.computeIfAbsent(key, k -> Counter.builder(metricName).tags(tags).register(registry));
+    private MethodMeters methodMeters(String method) {
+        String methodTag = normalizeMethodKey(method);
+        return methodMeters.computeIfAbsent(methodTag, key -> new MethodMeters(key));
+    }
+
+    private final class MethodMeters {
+        private final String methodTag;
+        private final Counter sanitizeCounter;
+        private final Counter maskCounter;
+        private final Counter fastPathCounter;
+        private final Counter persistFailedCounter;
+        private final Counter handlerTimeoutCounter;
+        private final Counter circuitRecoveredCounter;
+        private final ConcurrentHashMap<String, Counter> collectedCounters =
+                new ConcurrentHashMap<String, Counter>();
+        private final ConcurrentHashMap<String, Counter> discardedCounters =
+                new ConcurrentHashMap<String, Counter>();
+        private final ConcurrentHashMap<String, Counter> persistedCounters =
+                new ConcurrentHashMap<String, Counter>();
+        private final ConcurrentHashMap<String, Counter> flushCounters =
+                new ConcurrentHashMap<String, Counter>();
+        private final ConcurrentHashMap<String, Counter> overflowCounters =
+                new ConcurrentHashMap<String, Counter>();
+        private final ConcurrentHashMap<String, Counter> degradeCounters =
+                new ConcurrentHashMap<String, Counter>();
+
+        private MethodMeters(String methodTag) {
+            this.methodTag = methodTag;
+            this.sanitizeCounter = Counter.builder(prefix + ".security.sanitize.hits.total")
+                    .tag("method", methodTag)
+                    .register(registry);
+            this.maskCounter = Counter.builder(prefix + ".security.mask.hits.total")
+                    .tag("method", methodTag)
+                    .register(registry);
+            this.fastPathCounter = Counter.builder(prefix + ".security.fastpath.hits.total")
+                    .tag("method", methodTag)
+                    .register(registry);
+            this.persistFailedCounter = Counter.builder(prefix + ".persist.failed.total")
+                    .tag("method", methodTag)
+                    .register(registry);
+            this.handlerTimeoutCounter = Counter.builder(prefix + ".handler.timeout.total")
+                    .tag("method", methodTag)
+                    .register(registry);
+            this.circuitRecoveredCounter = Counter.builder(prefix + ".circuit.recovered.total")
+                    .tag("method", methodTag)
+                    .register(registry);
+        }
+
+        private Counter collected(String levelTag, String modeTag) {
+            String key = levelTag + "_" + modeTag;
+            return collectedCounters.computeIfAbsent(key, k -> Counter.builder(prefix + ".collected.total")
+                    .tag("method", methodTag)
+                    .tag("level", levelTag)
+                    .tag("mode", modeTag)
+                    .register(registry));
+        }
+
+        private Counter discarded(String reasonTag) {
+            return discardedCounters.computeIfAbsent(reasonTag, k -> Counter.builder(prefix + ".discarded.total")
+                    .tag("method", methodTag)
+                    .tag("reason", reasonTag)
+                    .register(registry));
+        }
+
+        private Counter persisted(String modeTag) {
+            return persistedCounters.computeIfAbsent(modeTag, k -> Counter.builder(prefix + ".persisted.total")
+                    .tag("method", methodTag)
+                    .tag("mode", modeTag)
+                    .register(registry));
+        }
+
+        private Counter flush(String modeTag, String triggerTag) {
+            String key = modeTag + "_" + triggerTag;
+            return flushCounters.computeIfAbsent(key, k -> Counter.builder(prefix + ".flush.total")
+                    .tag("method", methodTag)
+                    .tag("mode", modeTag)
+                    .tag("trigger", triggerTag)
+                    .register(registry));
+        }
+
+        private Counter overflow(String overflowTag) {
+            return overflowCounters.computeIfAbsent(overflowTag, k -> Counter.builder(prefix + ".buffer.overflow.total")
+                    .tag("method", methodTag)
+                    .tag("overflowPolicy", overflowTag)
+                    .register(registry));
+        }
+
+        private Counter degrade(String typeTag) {
+            return degradeCounters.computeIfAbsent(typeTag, k -> Counter.builder(prefix + ".degrade.triggered.total")
+                    .tag("type", typeTag)
+                    .tag("method", methodTag)
+                    .register(registry));
+        }
     }
 }

@@ -22,85 +22,78 @@ final class SinglePassSecurityProcessor {
 
     ProcessResult process(String input, boolean strict) {
         if (input == null || input.isEmpty()) {
-            return new ProcessResult(input, false, false);
+            return new ProcessResult(input, false, false, false);
         }
-        if (canFastPath(input, strict)) {
-            return new ProcessResult(input, false, false);
+
+        int flags;
+        boolean detectorAvailable = true;
+        try {
+            flags = strict ? FastPathDetector.scanMessage(input) : FastPathDetector.scanThrowable(input);
+        } catch (RuntimeException ignored) {
+            detectorAvailable = false;
+            flags = FastPathDetector.FLAG_NEEDS_SANITIZE | FastPathDetector.FLAG_NEEDS_MASK;
         }
+
+        boolean shouldSanitize = shouldSanitize(flags, detectorAvailable);
+        boolean shouldMask = shouldMask(flags, detectorAvailable);
+        if (!shouldSanitize && !shouldMask) {
+            return new ProcessResult(input, false, false, true);
+        }
+
         String current = input;
         boolean sanitizedModified = false;
         boolean maskedModified = false;
 
-        if (sanitizer != null) {
+        if (shouldSanitize) {
             String sanitized = strict ? sanitizer.sanitize(current) : sanitizer.sanitizeThrowable(current);
             sanitizedModified = !Objects.equals(current, sanitized);
             current = sanitized;
         }
-        if (masker != null) {
+        if (shouldMask) {
             String masked = masker.mask(current);
             maskedModified = !Objects.equals(current, masked);
             current = masked;
         }
-        return new ProcessResult(current, sanitizedModified, maskedModified);
+        return new ProcessResult(current, sanitizedModified, maskedModified, false);
     }
 
-    private boolean canFastPath(String input, boolean strict) {
-        return canSkipSanitize(input, strict) && canSkipMask(input);
-    }
-
-    private boolean canSkipSanitize(String input, boolean strict) {
+    private boolean shouldSanitize(int flags, boolean detectorAvailable) {
         if (sanitizer == null) {
-            return true;
+            return false;
         }
         if (!(sanitizer instanceof DefaultLogSanitizer)) {
-            return false;
-        }
-        return isClean(input, strict);
-    }
-
-    private boolean canSkipMask(String input) {
-        if (masker == null) {
             return true;
         }
-        if (masker instanceof DefaultLogMasker) {
-            return !((DefaultLogMasker) masker).hasPotentialMatch(input);
+        if (!detectorAvailable) {
+            return true;
         }
-        return false;
+        return (flags & FastPathDetector.FLAG_NEEDS_SANITIZE) != 0;
     }
 
-    private boolean isClean(String input, boolean strict) {
-        for (int i = 0; i < input.length(); i++) {
-            char c = input.charAt(i);
-            if (c == '<' || c == 27) {
-                return false;
-            }
-            if (strict) {
-                if (Character.isISOControl(c)) {
-                    return false;
-                }
-            } else if (isDangerousThrowableControl(c)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private boolean isDangerousThrowableControl(char c) {
-        if (c == '\n' || c == '\r' || c == '\t') {
+    private boolean shouldMask(int flags, boolean detectorAvailable) {
+        if (masker == null) {
             return false;
         }
-        return Character.isISOControl(c);
+        if (!(masker instanceof DefaultLogMasker)) {
+            return true;
+        }
+        if (!detectorAvailable) {
+            return true;
+        }
+        return (flags & FastPathDetector.FLAG_NEEDS_MASK) != 0;
     }
 
     static final class ProcessResult {
         private final String value;
         private final boolean sanitizedModified;
         private final boolean maskedModified;
+        private final boolean fastPathHit;
 
-        ProcessResult(String value, boolean sanitizedModified, boolean maskedModified) {
+        ProcessResult(String value, boolean sanitizedModified, boolean maskedModified, boolean fastPathHit) {
             this.value = value;
             this.sanitizedModified = sanitizedModified;
             this.maskedModified = maskedModified;
+            this.fastPathHit = fastPathHit;
         }
 
         String getValue() {
@@ -113,6 +106,10 @@ final class SinglePassSecurityProcessor {
 
         boolean isMaskedModified() {
             return maskedModified;
+        }
+
+        boolean isFastPathHit() {
+            return fastPathHit;
         }
     }
 }

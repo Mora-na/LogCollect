@@ -33,6 +33,13 @@
         <appender-ref ref="PROGRESS"/>
     </logger>
 
+    <logger name="com.logcollect.benchmark.stress.scenario" level="INFO" additivity="true">
+    </logger>
+
+    <logger name="com.logcollect.benchmark.baseline" level="INFO" additivity="false">
+        <appender-ref ref="NOP"/>
+    </logger>
+
     <logger name="com.logcollect.internal" level="WARN" additivity="false">
         <appender-ref ref="NOP"/>
     </logger>

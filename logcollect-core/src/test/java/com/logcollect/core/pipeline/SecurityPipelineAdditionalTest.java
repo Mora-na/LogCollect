@@ -160,6 +160,23 @@ class SecurityPipelineAdditionalTest extends CoreUnitTestBase {
         metrics.onThrowableSanitized();
         metrics.onContentMasked();
         metrics.onThrowableMasked();
+        metrics.onFastPathHit();
+    }
+
+    @Test
+    void process_cleanInput_triggersFastPathCallback() {
+        SecurityPipeline pipeline = new SecurityPipeline(
+                new DefaultLogSanitizer(), new DefaultLogMasker(), null);
+        AtomicInteger fastPathHits = new AtomicInteger(0);
+        SecurityPipeline.SecurityMetrics metrics = new SecurityPipeline.SecurityMetrics() {
+            @Override
+            public void onFastPathHit() {
+                fastPathHits.incrementAndGet();
+            }
+        };
+        LogEntry raw = createTestEntry("plain message without sensitive data", "INFO");
+        pipeline.process(raw, metrics);
+        assertThat(fastPathHits.get()).isGreaterThan(0);
     }
 
     private String repeat(String value, int count) {

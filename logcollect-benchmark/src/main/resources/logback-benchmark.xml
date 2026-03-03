@@ -37,8 +37,12 @@
         <appender-ref ref="PROGRESS"/>
     </logger>
 
-    <!-- Scenario business logs stay silent on console; only NOP + LogCollect appender are active -->
-    <logger name="com.logcollect.benchmark.stress.scenario" level="INFO" additivity="false">
+    <!-- Scenario logs must propagate to ROOT so LogCollect appender can receive them -->
+    <logger name="com.logcollect.benchmark.stress.scenario" level="INFO" additivity="true">
+    </logger>
+
+    <!-- Baseline scenario explicitly bypasses LogCollect and only goes to NOP -->
+    <logger name="com.logcollect.benchmark.baseline" level="INFO" additivity="false">
         <appender-ref ref="NOP"/>
     </logger>
 

@@ -81,7 +81,7 @@ class SecurityPipelineTest extends CoreUnitTestBase {
     }
 
     @Test
-    void process_threadNameWithControlChars_sanitized() {
+    void process_threadNameWithControlChars_trustedSourcePassthrough() {
         LogEntry raw = LogEntry.builder()
                 .traceId("t1")
                 .content("msg")
@@ -91,11 +91,11 @@ class SecurityPipelineTest extends CoreUnitTestBase {
                 .loggerName("com.test.A")
                 .build();
         LogEntry safe = pipeline.process(raw);
-        assertThat(safe.getThreadName()).doesNotContain("\u0000");
+        assertThat(safe.getThreadName()).contains("\u0000");
     }
 
     @Test
-    void process_loggerNameWithHtml_sanitized() {
+    void process_loggerNameWithHtml_trustedSourcePassthrough() {
         LogEntry raw = LogEntry.builder()
                 .traceId("t1")
                 .content("msg")
@@ -105,7 +105,7 @@ class SecurityPipelineTest extends CoreUnitTestBase {
                 .loggerName("com.test.<script>A</script>")
                 .build();
         LogEntry safe = pipeline.process(raw);
-        assertThat(safe.getLoggerName()).doesNotContain("<script>", "</script>");
+        assertThat(safe.getLoggerName()).contains("<script>", "</script>");
     }
 
     @Test
@@ -140,6 +140,23 @@ class SecurityPipelineTest extends CoreUnitTestBase {
                 .build();
         LogEntry safe = pipeline.process(raw);
         assertThat(safe.getMdcContext().get("userId")).contains("138****5678");
+    }
+
+    @Test
+    void process_frameworkMdcKey_valueTrustedAndNotSanitized() {
+        Map<String, String> mdc = new HashMap<String, String>();
+        mdc.put("_logCollect_traceId", "trace\nraw");
+        LogEntry raw = LogEntry.builder()
+                .traceId("t1")
+                .content("msg")
+                .level("INFO")
+                .timestamp(System.currentTimeMillis())
+                .threadName("main")
+                .loggerName("com.test.A")
+                .mdcContext(mdc)
+                .build();
+        LogEntry safe = pipeline.process(raw);
+        assertThat(safe.getMdcContext().get("_logCollect_traceId")).isEqualTo("trace\nraw");
     }
 
     @Test

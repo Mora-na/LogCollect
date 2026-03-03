@@ -46,6 +46,23 @@ public final class LogLinePatternParser {
         return render(entry, tokens);
     }
 
+    public static String formatRaw(String traceId,
+                                   String content,
+                                   String level,
+                                   long timestamp,
+                                   String threadName,
+                                   String loggerName,
+                                   String throwableString,
+                                   Map<String, String> mdcContext,
+                                   String pattern) {
+        String safePattern = (pattern == null || pattern.isEmpty())
+                ? LogLineDefaults.getEffectivePattern()
+                : pattern;
+
+        List<PatternToken> tokens = CACHE.computeIfAbsent(safePattern, LogLinePatternParser::compile);
+        return renderRaw(content, level, timestamp, threadName, loggerName, throwableString, mdcContext, tokens);
+    }
+
     public static void invalidateCache() {
         CACHE.clear();
         DTF_CACHE.clear();
@@ -85,6 +102,21 @@ public final class LogLinePatternParser {
         return sb.toString();
     }
 
+    private static String renderRaw(String content,
+                                    String level,
+                                    long timestamp,
+                                    String threadName,
+                                    String loggerName,
+                                    String throwableString,
+                                    Map<String, String> mdcContext,
+                                    List<PatternToken> tokens) {
+        StringBuilder sb = new StringBuilder(256);
+        for (PatternToken token : tokens) {
+            token.appendRawTo(sb, content, level, timestamp, threadName, loggerName, throwableString, mdcContext);
+        }
+        return sb.toString();
+    }
+
     private static int parseIntOrZero(String value) {
         if (value == null || value.isEmpty()) {
             return 0;
@@ -98,6 +130,15 @@ public final class LogLinePatternParser {
 
     interface PatternToken {
         void appendTo(StringBuilder sb, LogEntry entry);
+
+        void appendRawTo(StringBuilder sb,
+                         String content,
+                         String level,
+                         long timestamp,
+                         String threadName,
+                         String loggerName,
+                         String throwableString,
+                         Map<String, String> mdcContext);
     }
 
     private static final class LiteralToken implements PatternToken {
@@ -109,6 +150,18 @@ public final class LogLinePatternParser {
 
         @Override
         public void appendTo(StringBuilder sb, LogEntry entry) {
+            sb.append(text);
+        }
+
+        @Override
+        public void appendRawTo(StringBuilder sb,
+                                String content,
+                                String level,
+                                long timestamp,
+                                String threadName,
+                                String loggerName,
+                                String throwableString,
+                                Map<String, String> mdcContext) {
             sb.append(text);
         }
     }
@@ -135,6 +188,22 @@ public final class LogLinePatternParser {
         @Override
         public void appendTo(StringBuilder sb, LogEntry entry) {
             String value = resolveValue(entry);
+            if (value == null) {
+                value = "";
+            }
+            applyWidth(sb, value);
+        }
+
+        @Override
+        public void appendRawTo(StringBuilder sb,
+                                String content,
+                                String level,
+                                long timestamp,
+                                String threadName,
+                                String loggerName,
+                                String throwableString,
+                                Map<String, String> mdcContext) {
+            String value = resolveRawValue(content, level, timestamp, threadName, loggerName, throwableString, mdcContext);
             if (value == null) {
                 value = "";
             }
@@ -173,6 +242,44 @@ public final class LogLinePatternParser {
             }
         }
 
+        private String resolveRawValue(String content,
+                                       String level,
+                                       long timestamp,
+                                       String threadName,
+                                       String loggerName,
+                                       String throwableString,
+                                       Map<String, String> mdcContext) {
+            switch (conversion) {
+                case "d":
+                    return formatTimestamp(timestamp);
+                case "p":
+                case "level":
+                    return level;
+                case "t":
+                case "thread":
+                    return threadName;
+                case "c":
+                case "logger":
+                    return abbreviateLoggerName(loggerName, parseIntOrZero(argument));
+                case "C":
+                case "loggerFull":
+                    return loggerName;
+                case "m":
+                case "msg":
+                    return content;
+                case "ex":
+                case "throwable":
+                case "wEx":
+                    return resolveRawThrowable(throwableString);
+                case "n":
+                    return System.lineSeparator();
+                case "X":
+                    return resolveRawMdc(mdcContext);
+                default:
+                    return "%" + conversion;
+            }
+        }
+
         private String resolveMdc(LogEntry entry) {
             Map<String, String> mdc = entry.getMdcContext();
             if (mdc == null || mdc.isEmpty()) {
@@ -186,18 +293,22 @@ public final class LogLinePatternParser {
         }
 
         private String formatTime(LogEntry entry) {
+            return formatTimestamp(entry.getTimestamp());
+        }
+
+        private String formatTimestamp(long timestamp) {
             String datePattern = (argument != null && !argument.isEmpty())
                     ? argument
                     : "yyyy-MM-dd HH:mm:ss.SSS";
             try {
                 if ("yyyy-MM-dd HH:mm:ss.SSS".equals(datePattern)) {
-                    return CachedTimestampFormatter.format(entry.getTimestamp());
+                    return CachedTimestampFormatter.format(timestamp);
                 }
                 DateTimeFormatter formatter = DTF_CACHE.computeIfAbsent(datePattern, DateTimeFormatter::ofPattern);
-                LocalDateTime dateTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(entry.getTimestamp()), SYSTEM_ZONE);
+                LocalDateTime dateTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), SYSTEM_ZONE);
                 return dateTime.format(formatter);
             } catch (Exception e) {
-                return LocalDateTime.ofInstant(Instant.ofEpochMilli(entry.getTimestamp()), SYSTEM_ZONE).toString();
+                return LocalDateTime.ofInstant(Instant.ofEpochMilli(timestamp), SYSTEM_ZONE).toString();
             }
         }
 
@@ -206,6 +317,24 @@ public final class LogLinePatternParser {
                 return "";
             }
             return "\n" + entry.getThrowableString();
+        }
+
+        private String resolveRawThrowable(String throwableString) {
+            if (throwableString == null || throwableString.isEmpty()) {
+                return "";
+            }
+            return "\n" + throwableString;
+        }
+
+        private String resolveRawMdc(Map<String, String> mdc) {
+            if (mdc == null || mdc.isEmpty()) {
+                return "";
+            }
+            if (argument == null || argument.isEmpty()) {
+                return mdc.toString();
+            }
+            String value = mdc.get(argument);
+            return value == null ? "" : value;
         }
 
         private void applyWidth(StringBuilder sb, String value) {

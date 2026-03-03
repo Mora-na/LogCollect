@@ -6,9 +6,7 @@ import com.logcollect.api.sanitizer.LogSanitizer;
 import com.logcollect.core.security.DefaultLogMasker;
 import com.logcollect.core.security.StringLengthGuard;
 
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.regex.Pattern;
 
 /**
@@ -16,10 +14,13 @@ import java.util.regex.Pattern;
  */
 public class SecurityPipeline {
     private static final Pattern SAFE_MDC_KEY_PATTERN = Pattern.compile("[a-zA-Z0-9._\\-]+");
+    private static final Set<String> FRAMEWORK_MDC_KEYS = Collections.unmodifiableSet(
+            new HashSet<String>(Arrays.asList("_logCollect_traceId", "traceId")));
 
     private final LogSanitizer sanitizer;
     private final LogMasker masker;
     private final StringLengthGuard lengthGuard;
+    private final SinglePassSecurityProcessor processor;
 
     public SecurityPipeline(LogSanitizer sanitizer, LogMasker masker) {
         this(sanitizer, masker, null);
@@ -29,6 +30,7 @@ public class SecurityPipeline {
         this.sanitizer = sanitizer;
         this.masker = masker;
         this.lengthGuard = lengthGuard;
+        this.processor = new SinglePassSecurityProcessor(sanitizer, masker);
     }
 
     public LogEntry process(LogEntry rawEntry) {
@@ -63,9 +65,32 @@ public class SecurityPipeline {
                                String throwableString,
                                Map<String, String> mdcContext,
                                SecurityMetrics metrics) {
+        return processRawRecord(
+                traceId,
+                content,
+                level,
+                timestamp,
+                threadName,
+                loggerName,
+                throwableString,
+                mdcContext,
+                metrics).toLogEntry();
+    }
+
+    /**
+     * 从原始字段直接生成安全字段结果，用于 AGGREGATE 场景避免构建完整 LogEntry。
+     */
+    public ProcessedLogRecord processRawRecord(String traceId,
+                                               String content,
+                                               String level,
+                                               long timestamp,
+                                               String threadName,
+                                               String loggerName,
+                                               String throwableString,
+                                               Map<String, String> mdcContext,
+                                               SecurityMetrics metrics) {
         SecurityMetrics metricsRef = metrics == null ? SecurityMetrics.NOOP : metrics;
 
-        SinglePassSecurityProcessor processor = new SinglePassSecurityProcessor(sanitizer, masker);
         SinglePassSecurityProcessor.ProcessResult contentResult =
                 processor.process(content, true);
         SinglePassSecurityProcessor.ProcessResult throwableResult =
@@ -83,6 +108,12 @@ public class SecurityPipeline {
         if (throwableResult.isMaskedModified()) {
             metricsRef.onThrowableMasked();
         }
+        if (contentResult.isFastPathHit()) {
+            metricsRef.onFastPathHit();
+        }
+        if (throwableResult.isFastPathHit()) {
+            metricsRef.onFastPathHit();
+        }
 
         String guardedContent = contentResult.getValue();
         String guardedThrowable = throwableResult.getValue();
@@ -91,23 +122,15 @@ public class SecurityPipeline {
             guardedThrowable = lengthGuard.guardThrowable(guardedThrowable);
         }
 
-        return LogEntry.builder()
-                .traceId(traceId)
-                .content(guardedContent)
-                .level(sanitizeField(level))
-                .timestamp(timestamp)
-                .threadName(sanitizeField(threadName))
-                .loggerName(sanitizeField(loggerName))
-                .throwableString(guardedThrowable)
-                .mdcContext(sanitizeMdc(mdcContext))
-                .build();
-    }
-
-    private String sanitizeField(String value) {
-        if (sanitizer == null) {
-            return value;
-        }
-        return sanitizer.sanitize(value);
+        return new ProcessedLogRecord(
+                traceId,
+                guardedContent,
+                level,
+                timestamp,
+                threadName,
+                loggerName,
+                guardedThrowable,
+                sanitizeMdc(mdcContext));
     }
 
     private Map<String, String> sanitizeMdc(Map<String, String> mdcContext) {
@@ -122,7 +145,12 @@ public class SecurityPipeline {
         }
         Map<String, String> sanitized = new LinkedHashMap<String, String>(mdcContext.size());
         for (Map.Entry<String, String> entry : mdcContext.entrySet()) {
-            String key = sanitizeMdcKey(entry.getKey());
+            String rawKey = entry.getKey();
+            if (isTrustedFrameworkMdcKey(rawKey)) {
+                sanitized.put(rawKey, entry.getValue());
+                continue;
+            }
+            String key = sanitizeMdcKey(rawKey);
             if (key == null || key.isEmpty()) {
                 continue;
             }
@@ -139,6 +167,9 @@ public class SecurityPipeline {
         for (Map.Entry<String, String> entry : mdcContext.entrySet()) {
             String key = entry.getKey();
             String value = entry.getValue();
+            if (isTrustedFrameworkMdcKey(key)) {
+                continue;
+            }
             if (needsMdcKeyNormalization(key) || needsSanitization(value) || needsMasking(value)) {
                 return false;
             }
@@ -223,6 +254,10 @@ public class SecurityPipeline {
         return normalized.replaceAll("[^a-zA-Z0-9._\\-]", "_");
     }
 
+    private boolean isTrustedFrameworkMdcKey(String key) {
+        return key != null && FRAMEWORK_MDC_KEYS.contains(key);
+    }
+
     public interface SecurityMetrics {
         default void onContentSanitized() {
         }
@@ -236,7 +271,113 @@ public class SecurityPipeline {
         default void onThrowableMasked() {
         }
 
+        default void onFastPathHit() {
+        }
+
         SecurityMetrics NOOP = new SecurityMetrics() {
         };
+    }
+
+    public static final class ProcessedLogRecord {
+        private final String traceId;
+        private final String content;
+        private final String level;
+        private final long timestamp;
+        private final String threadName;
+        private final String loggerName;
+        private final String throwableString;
+        private final Map<String, String> mdcContext;
+
+        private ProcessedLogRecord(String traceId,
+                                   String content,
+                                   String level,
+                                   long timestamp,
+                                   String threadName,
+                                   String loggerName,
+                                   String throwableString,
+                                   Map<String, String> mdcContext) {
+            this.traceId = traceId;
+            this.content = content;
+            this.level = level;
+            this.timestamp = timestamp;
+            this.threadName = threadName;
+            this.loggerName = loggerName;
+            this.throwableString = throwableString;
+            this.mdcContext = mdcContext;
+        }
+
+        public String getTraceId() {
+            return traceId;
+        }
+
+        public String getContent() {
+            return content;
+        }
+
+        public String getLevel() {
+            return level;
+        }
+
+        public long getTimestamp() {
+            return timestamp;
+        }
+
+        public String getThreadName() {
+            return threadName;
+        }
+
+        public String getLoggerName() {
+            return loggerName;
+        }
+
+        public String getThrowableString() {
+            return throwableString;
+        }
+
+        public Map<String, String> getMdcContext() {
+            return mdcContext;
+        }
+
+        public long estimateBytes() {
+            long size = 112L;
+            size += estimateString(traceId);
+            size += estimateString(content);
+            size += estimateString(level);
+            size += estimateString(threadName);
+            size += estimateString(loggerName);
+            size += estimateString(throwableString);
+            if (mdcContext != null && !mdcContext.isEmpty()) {
+                size += 64L;
+                for (Map.Entry<String, String> entry : mdcContext.entrySet()) {
+                    size += 32L;
+                    size += estimateString(entry.getKey());
+                    size += estimateString(entry.getValue());
+                }
+            }
+            return size;
+        }
+
+        public LogEntry toLogEntry() {
+            return LogEntry.builder()
+                    .traceId(traceId)
+                    .content(content)
+                    // trusted source: framework level enum/string
+                    .level(level)
+                    .timestamp(timestamp)
+                    // trusted source: Thread#getName()
+                    .threadName(threadName)
+                    // trusted source: Logger#getName()
+                    .loggerName(loggerName)
+                    .throwableString(throwableString)
+                    .mdcContext(mdcContext)
+                    .build();
+        }
+
+        private long estimateString(String value) {
+            if (value == null) {
+                return 0L;
+            }
+            return 48L + ((long) value.length() << 1);
+        }
     }
 }
