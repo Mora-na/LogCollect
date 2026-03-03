@@ -19,6 +19,7 @@ class DegradeKeyManagerTest {
     void setUp() {
         originalValue = System.getProperty(PROP_KEY);
         TestDegradeKeyProvider.reset();
+        TestDegradeKeyProviderSecondary.reset();
     }
 
     @AfterEach
@@ -29,6 +30,7 @@ class DegradeKeyManagerTest {
             System.setProperty(PROP_KEY, originalValue);
         }
         TestDegradeKeyProvider.reset();
+        TestDegradeKeyProviderSecondary.reset();
     }
 
     @Test
@@ -89,5 +91,24 @@ class DegradeKeyManagerTest {
         System.clearProperty(PROP_KEY);
         SecretKey key = new DegradeKeyManager().resolveKey();
         assertThat(key).isNull();
+    }
+
+    @Test
+    void resolveKey_withMultipleProviders_prefersLowerOrder() {
+        byte[] highPriorityBytes = new byte[32];
+        byte[] lowPriorityBytes = new byte[32];
+        for (int i = 0; i < 32; i++) {
+            highPriorityBytes[i] = (byte) (i + 1);
+            lowPriorityBytes[i] = (byte) (i + 33);
+        }
+
+        TestDegradeKeyProvider.key = new SecretKeySpec(lowPriorityBytes, "AES");
+        TestDegradeKeyProvider.order = 100;
+        TestDegradeKeyProviderSecondary.key = new SecretKeySpec(highPriorityBytes, "AES");
+        TestDegradeKeyProviderSecondary.order = 1;
+
+        SecretKey key = new DegradeKeyManager().resolveKey();
+        assertThat(key).isNotNull();
+        assertThat(key.getEncoded()).isEqualTo(highPriorityBytes);
     }
 }

@@ -1,1 +1,2 @@
 com.logcollect.core.degrade.TestDegradeKeyProvider
+com.logcollect.core.degrade.TestDegradeKeyProviderSecondary

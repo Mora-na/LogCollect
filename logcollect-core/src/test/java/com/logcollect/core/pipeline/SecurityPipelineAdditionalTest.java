@@ -1,5 +1,6 @@
 package com.logcollect.core.pipeline;
 
+import com.logcollect.api.masker.LogMasker;
 import com.logcollect.api.model.LogEntry;
 import com.logcollect.core.security.DefaultLogMasker;
 import com.logcollect.core.security.DefaultLogSanitizer;
@@ -98,6 +99,57 @@ class SecurityPipelineAdditionalTest extends CoreUnitTestBase {
         assertThat(safe.getMdcContext()).isNotEmpty();
         assertThat(safe.getMdcContext().keySet().iterator().next()).doesNotContain(" ");
         assertThat(safe.getMdcContext()).allSatisfy((k, v) -> assertThat(k.length()).isLessThanOrEqualTo(128));
+    }
+
+    @Test
+    void process_twoArgConstructor_masksMdcValue() {
+        SecurityPipeline pipeline = new SecurityPipeline(new DefaultLogSanitizer(), new DefaultLogMasker());
+        Map<String, String> mdc = new LinkedHashMap<String, String>();
+        mdc.put("safeKey", "phone=13812345678");
+
+        LogEntry raw = LogEntry.builder()
+                .traceId("t")
+                .content("msg")
+                .level("INFO")
+                .timestamp(System.currentTimeMillis())
+                .threadName("main")
+                .loggerName("c")
+                .mdcContext(mdc)
+                .build();
+
+        LogEntry safe = pipeline.process(raw);
+        assertThat(safe.getMdcContext()).containsKey("safeKey");
+        assertThat(safe.getMdcContext().get("safeKey")).contains("138****5678");
+    }
+
+    @Test
+    void process_customMasker_preventsMdcReferenceReuse() {
+        AtomicInteger maskCalls = new AtomicInteger(0);
+        LogMasker customMasker = new LogMasker() {
+            @Override
+            public String mask(String content) {
+                maskCalls.incrementAndGet();
+                return content;
+            }
+        };
+        SecurityPipeline pipeline = new SecurityPipeline(null, customMasker);
+        Map<String, String> mdc = new LinkedHashMap<String, String>();
+        mdc.put("safeKey", "safeValue");
+
+        LogEntry raw = LogEntry.builder()
+                .traceId("t")
+                .content("msg")
+                .level("INFO")
+                .timestamp(System.currentTimeMillis())
+                .threadName("main")
+                .loggerName("c")
+                .mdcContext(mdc)
+                .build();
+
+        LogEntry safe = pipeline.process(raw);
+        assertThat(maskCalls.get()).isGreaterThan(0);
+        assertThat(safe.getMdcContext()).isNotSameAs(mdc);
+        assertThat(safe.getMdcContext().get("safeKey")).isEqualTo("safeValue");
     }
 
     @Test
