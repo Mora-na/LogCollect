@@ -6,6 +6,7 @@ import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.model.AggregatedLog;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
+import com.logcollect.api.model.LogEntry;
 import com.logcollect.core.pipeline.SecurityPipeline;
 import com.logcollect.core.test.ConcurrentTestHelper;
 import com.logcollect.core.test.CoreUnitTestBase;
@@ -239,10 +240,29 @@ class AggregateModeBufferTest extends CoreUnitTestBase {
 
     @Test
     void offerRaw_customFormatLine_fallsBackToLogEntryPath() {
-        AggregateModeBuffer buffer = createBuffer(100, "1MB");
+        class CustomFormatHandler implements LogCollectHandler {
+            private int formatCalls;
+            private AggregatedLog last;
+
+            @Override
+            public String formatLogLine(LogEntry entry) {
+                formatCalls++;
+                return "custom::" + entry.getContent();
+            }
+
+            @Override
+            public void flushAggregatedLog(LogCollectContext context, AggregatedLog aggregatedLog) {
+                this.last = aggregatedLog;
+            }
+        }
+        CustomFormatHandler handler = new CustomFormatHandler();
+        LogCollectConfig config = LogCollectConfig.frameworkDefaults();
+        config.setAsync(false);
+        LogCollectContext rawContext = createTestContext(config, handler, CollectMode.AGGREGATE, null, null);
+        AggregateModeBuffer buffer = new AggregateModeBuffer(100, parseBytes("1MB"), null, handler);
         SecurityPipeline pipeline = new SecurityPipeline(null, null);
         SecurityPipeline.ProcessedLogRecord record = pipeline.processRawRecord(
-                context.getTraceId(),
+                rawContext.getTraceId(),
                 "raw-custom",
                 "WARN",
                 System.currentTimeMillis(),
@@ -252,8 +272,11 @@ class AggregateModeBufferTest extends CoreUnitTestBase {
                 null,
                 SecurityPipeline.SecurityMetrics.NOOP);
 
-        assertThat(buffer.offerRaw(context, record)).isTrue();
-        verify(mockHandler, atLeastOnce()).formatLogLine(any());
+        assertThat(buffer.offerRaw(rawContext, record)).isTrue();
+        buffer.triggerFlush(rawContext, true);
+        assertThat(handler.formatCalls).isEqualTo(1);
+        assertThat(handler.last).isNotNull();
+        assertThat(handler.last.getContent()).contains("custom::raw-custom");
     }
 
     private AggregateModeBuffer createBuffer(int maxSize, String maxBytes) {
