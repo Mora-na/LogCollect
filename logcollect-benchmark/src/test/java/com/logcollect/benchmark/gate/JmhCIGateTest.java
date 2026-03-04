@@ -12,10 +12,7 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 import org.openjdk.jmh.runner.options.TimeValue;
 
 import java.io.InputStream;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
+import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -30,6 +27,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  *    baseline < 10ns -> allow up to 15.0x slowdown;
  *    baseline 10~100ns -> allow up to 6.0x slowdown;
  *    baseline > 100ns -> allow up to 4.5x slowdown.
+ * 4) Use robust aggregation on raw measurement samples:
+ *    5 samples in CI mode, remove up to 2 outliers (>25% from median), then average.
  */
 public class JmhCIGateTest {
 
@@ -48,6 +47,9 @@ public class JmhCIGateTest {
     private static final int MEASUREMENT_ITERATIONS;
     private static final int MEASUREMENT_TIME_SEC;
     private static final int FORKS;
+    private static final int ROBUST_MIN_SAMPLES = 3;
+    private static final int ROBUST_MAX_OUTLIER_REMOVALS = 2;
+    private static final double ROBUST_OUTLIER_DEVIATION_THRESHOLD = 0.25d;
 
     static {
         if ("full".equalsIgnoreCase(JMH_MODE)) {
@@ -68,6 +70,10 @@ public class JmhCIGateTest {
                 JMH_MODE, Integer.valueOf(WARMUP_ITERATIONS), Integer.valueOf(WARMUP_TIME_SEC),
                 Integer.valueOf(MEASUREMENT_ITERATIONS), Integer.valueOf(MEASUREMENT_TIME_SEC),
                 Integer.valueOf(FORKS));
+        System.out.printf("[GATE] Robust aggregation: outlier-threshold=%.2f, max-removals=%d, min-kept=%d%n",
+                Double.valueOf(ROBUST_OUTLIER_DEVIATION_THRESHOLD),
+                Integer.valueOf(ROBUST_MAX_OUTLIER_REMOVALS),
+                Integer.valueOf(ROBUST_MIN_SAMPLES));
         System.out.printf(
                 "[GATE] Degradation gate tiers: baseline<%.0fns -> <=%.2fx, %.0f~%.0fns -> <=%.2fx, >%.0fns -> <=%.2fx (baseline metrics=%d)%n",
                 Double.valueOf(FAST_BASELINE_NS),
@@ -201,13 +207,21 @@ public class JmhCIGateTest {
             String simpleName = fullName.substring(fullName.lastIndexOf('.') + 1);
             double score = result.getPrimaryResult().getScore();
             double error = result.getPrimaryResult().getScoreError();
-            scores.put(simpleName, Double.valueOf(score));
+            List<Double> samples = extractSamples(result);
+            RobustAggregation robust = robustAverage(samples);
+            scores.put(simpleName, Double.valueOf(robust.value));
 
-            System.out.printf("[GATE] %-45s = %,10.1f +- %,.1f ns%n",
-                    simpleName, Double.valueOf(score), Double.valueOf(error));
+            System.out.printf("[GATE] %-45s raw=%,10.1f +- %,.1f ns, robust=%,10.1f ns (kept=%d/%d, removed=%s)%n",
+                    simpleName,
+                    Double.valueOf(score),
+                    Double.valueOf(error),
+                    Double.valueOf(robust.value),
+                    Integer.valueOf(robust.keptCount),
+                    Integer.valueOf(robust.totalCount),
+                    robust.removedValues);
 
-            if (score > 0.0d) {
-                double ratio = error / score;
+            if (robust.value > 0.0d) {
+                double ratio = error / robust.value;
                 if (ratio > 0.50d) {
                     System.out.printf("[GATE][WARN] High variance for %s: error/score=%.2f%n",
                             simpleName, Double.valueOf(ratio));
@@ -216,6 +230,94 @@ public class JmhCIGateTest {
         }
 
         return scores;
+    }
+
+    private List<Double> extractSamples(RunResult runResult) {
+        List<Double> samples = new ArrayList<Double>();
+        Iterator<Map.Entry<Double, Long>> rawData = runResult.getPrimaryResult().getStatistics().getRawData();
+        while (rawData.hasNext()) {
+            Map.Entry<Double, Long> entry = rawData.next();
+            Double value = entry.getKey();
+            Long count = entry.getValue();
+            if (value == null || count == null || count.longValue() <= 0L) {
+                continue;
+            }
+            long limit = Math.min(count.longValue(), 10_000L);
+            for (long i = 0; i < limit; i++) {
+                samples.add(value);
+            }
+        }
+
+        if (samples.isEmpty()) {
+            samples.add(Double.valueOf(runResult.getPrimaryResult().getScore()));
+        }
+        return samples;
+    }
+
+    private RobustAggregation robustAverage(List<Double> values) {
+        if (values == null || values.isEmpty()) {
+            return new RobustAggregation(0.0d, 0, 0, new ArrayList<Double>());
+        }
+
+        int total = values.size();
+        double median = median(values);
+        double denominator = Math.abs(median) < 1e-9d ? 1.0d : Math.abs(median);
+
+        List<Deviation> deviations = new ArrayList<Deviation>();
+        for (int i = 0; i < values.size(); i++) {
+            double value = values.get(i).doubleValue();
+            double relativeDeviation = Math.abs(value - median) / denominator;
+            if (relativeDeviation > ROBUST_OUTLIER_DEVIATION_THRESHOLD) {
+                deviations.add(new Deviation(i, value, relativeDeviation));
+            }
+        }
+        Collections.sort(deviations);
+
+        int maxRemovalsByCount = Math.max(0, total - ROBUST_MIN_SAMPLES);
+        int maxRemovals = Math.min(ROBUST_MAX_OUTLIER_REMOVALS, maxRemovalsByCount);
+
+        Map<Integer, Boolean> removed = new HashMap<Integer, Boolean>();
+        List<Double> removedValues = new ArrayList<Double>();
+        for (int i = 0; i < deviations.size() && removedValues.size() < maxRemovals; i++) {
+            Deviation deviation = deviations.get(i);
+            removed.put(Integer.valueOf(deviation.index), Boolean.TRUE);
+            removedValues.add(Double.valueOf(deviation.value));
+        }
+
+        List<Double> kept = new ArrayList<Double>();
+        for (int i = 0; i < values.size(); i++) {
+            if (!removed.containsKey(Integer.valueOf(i))) {
+                kept.add(values.get(i));
+            }
+        }
+        if (kept.size() < ROBUST_MIN_SAMPLES) {
+            kept = new ArrayList<Double>(values);
+            removedValues = new ArrayList<Double>();
+        }
+
+        return new RobustAggregation(average(kept), total, kept.size(), removedValues);
+    }
+
+    private static double median(List<Double> values) {
+        List<Double> sorted = new ArrayList<Double>(values);
+        Collections.sort(sorted);
+        int size = sorted.size();
+        int mid = size / 2;
+        if ((size & 1) == 0) {
+            return (sorted.get(mid - 1).doubleValue() + sorted.get(mid).doubleValue()) / 2.0d;
+        }
+        return sorted.get(mid).doubleValue();
+    }
+
+    private static double average(List<Double> values) {
+        if (values.isEmpty()) {
+            return 0.0d;
+        }
+        double sum = 0.0d;
+        for (Double value : values) {
+            sum += value.doubleValue();
+        }
+        return sum / values.size();
     }
 
     private double requireScore(Map<String, Double> scores, String name) {
@@ -350,6 +452,37 @@ public class JmhCIGateTest {
             return "jdk" + major;
         } catch (NumberFormatException ex) {
             return "unknown";
+        }
+    }
+
+    private static final class RobustAggregation {
+        private final double value;
+        private final int totalCount;
+        private final int keptCount;
+        private final List<Double> removedValues;
+
+        private RobustAggregation(double value, int totalCount, int keptCount, List<Double> removedValues) {
+            this.value = value;
+            this.totalCount = totalCount;
+            this.keptCount = keptCount;
+            this.removedValues = removedValues;
+        }
+    }
+
+    private static final class Deviation implements Comparable<Deviation> {
+        private final int index;
+        private final double value;
+        private final double relativeDeviation;
+
+        private Deviation(int index, double value, double relativeDeviation) {
+            this.index = index;
+            this.value = value;
+            this.relativeDeviation = relativeDeviation;
+        }
+
+        @Override
+        public int compareTo(Deviation other) {
+            return Double.compare(other.relativeDeviation, this.relativeDeviation);
         }
     }
 }

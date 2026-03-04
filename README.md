@@ -1696,8 +1696,8 @@ logcollect-benchmark/
 
 | 场景 | 执行位置 | 时间预算 | 目标 |
 |------|---------|---------|------|
-| JMH smoke 门禁 | CI | ≤ 8 min | 比值门禁 + 宽松绝对兜底 |
-| 集成压测冒烟 | CI | ≤ 5 min | 扩展比 + 吞吐下限 + GC 上限 |
+| JMH smoke 门禁 | CI | ≤ 8 min | 基线退化门禁（JMH 5 次测量样本稳健均值） |
+| 集成压测冒烟 | CI | ≤ 5 min | 基线退化门禁（5 次稳健均值：最多剔除 2 个离群样本） |
 | JMH 完整基准 | 本地 | ~30 min | 基线采样与对比 |
 | 集成压测完整 | 本地 | ~10 min | 吞吐/延迟/GC 综合 |
 | Profiler | 本地 | 按需 | 热点、分配、锁竞争 |
@@ -1930,6 +1930,8 @@ per-jdk 编译在关键业务路径（e2e-8t）上的收益如下：
 # CI 门禁
 mvn -pl logcollect-benchmark -Pbenchmark-ci -Dtest=JmhCIGateTest -Djmh.mode=ci test
 mvn -pl logcollect-benchmark -Pbenchmark-ci -Dtest=StressCIGateTest -Dspring.profiles.active=stress test
+# 本地快速排查可降低重复次数（默认 5）
+mvn -pl logcollect-benchmark -Pbenchmark-ci -Dtest=StressCIGateTest -Dspring.profiles.active=stress -Dbenchmark.stress.gate.runs=1 test
 
 # 本地完整基准
 ./logcollect-benchmark/scripts/run-jmh-full.sh

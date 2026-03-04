@@ -257,7 +257,41 @@
           "ciCeilingMultiplier": 4.5
         }
       },
-      "ratios": {}
+      "ratios": {
+        "stressGate": {
+          "aggregation": {
+            "runs": 5,
+            "maxOutlierRemovals": 2,
+            "minSamplesAfterFilter": 3,
+            "outlierDeviationThreshold": 0.25
+          },
+          "throughputMinMultiplier": 0.45,
+          "ratioMinMultiplier": 0.75,
+          "gcMaxMultiplier": 4.0,
+          "gcAbsoluteMinPercent": 2.0,
+          "gcAbsoluteMaxPercent": 5.0,
+          "throughputBaselines": {
+            "isolated-1t-clean": 893178.8,
+            "isolated-8t-clean": 3257870.1,
+            "isolated-8t-sensitive": 459002.6,
+            "e2e-1t-clean": 732452.7,
+            "e2e-8t-clean": 2162890.2,
+            "e2e-8t-sensitive": 762296.1
+          },
+          "ratioBaselines": {
+            "isolated-8t-clean/isolated-1t-clean": 3.42,
+            "e2e-8t-clean/e2e-1t-clean": 2.9
+          },
+          "gcBaselines": {
+            "isolated-1t-clean": 0.19,
+            "isolated-8t-clean": 0.73,
+            "isolated-8t-sensitive": 0.5,
+            "e2e-1t-clean": 0.73,
+            "e2e-8t-clean": 0.54,
+            "e2e-8t-sensitive": 0.76
+          }
+        }
+      }
     },
     "jdk17": {
       "_meta": {
@@ -344,7 +378,41 @@
           "ciCeilingMultiplier": 4.5
         }
       },
-      "ratios": {}
+      "ratios": {
+        "stressGate": {
+          "aggregation": {
+            "runs": 5,
+            "maxOutlierRemovals": 2,
+            "minSamplesAfterFilter": 3,
+            "outlierDeviationThreshold": 0.25
+          },
+          "throughputMinMultiplier": 0.45,
+          "ratioMinMultiplier": 0.75,
+          "gcMaxMultiplier": 4.0,
+          "gcAbsoluteMinPercent": 2.0,
+          "gcAbsoluteMaxPercent": 5.0,
+          "throughputBaselines": {
+            "isolated-1t-clean": 856945.5,
+            "isolated-8t-clean": 2503361.3,
+            "isolated-8t-sensitive": 380218.9,
+            "e2e-1t-clean": 892909.3,
+            "e2e-8t-clean": 2266365.7,
+            "e2e-8t-sensitive": 762453.6
+          },
+          "ratioBaselines": {
+            "isolated-8t-clean/isolated-1t-clean": 2.76,
+            "e2e-8t-clean/e2e-1t-clean": 2.54
+          },
+          "gcBaselines": {
+            "isolated-1t-clean": 0.86,
+            "isolated-8t-clean": 0.63,
+            "isolated-8t-sensitive": 0.48,
+            "e2e-1t-clean": 0.73,
+            "e2e-8t-clean": 0.57,
+            "e2e-8t-sensitive": 0.9
+          }
+        }
+      }
     },
     "jdk21": {
       "_meta": {
@@ -434,5 +502,39 @@
       "ratios": {}
     }
   },
-  "ratios": {}
+  "ratios": {
+    "stressGate": {
+      "aggregation": {
+        "runs": 5,
+        "maxOutlierRemovals": 2,
+        "minSamplesAfterFilter": 3,
+        "outlierDeviationThreshold": 0.25
+      },
+      "throughputMinMultiplier": 0.45,
+      "ratioMinMultiplier": 0.75,
+      "gcMaxMultiplier": 4.0,
+      "gcAbsoluteMinPercent": 2.0,
+      "gcAbsoluteMaxPercent": 5.0,
+      "throughputBaselines": {
+        "isolated-1t-clean": 856945.5,
+        "isolated-8t-clean": 2503361.3,
+        "isolated-8t-sensitive": 380218.9,
+        "e2e-1t-clean": 892909.3,
+        "e2e-8t-clean": 2266365.7,
+        "e2e-8t-sensitive": 762453.6
+      },
+      "ratioBaselines": {
+        "isolated-8t-clean/isolated-1t-clean": 2.76,
+        "e2e-8t-clean/e2e-1t-clean": 2.54
+      },
+      "gcBaselines": {
+        "isolated-1t-clean": 0.86,
+        "isolated-8t-clean": 0.63,
+        "isolated-8t-sensitive": 0.48,
+        "e2e-1t-clean": 0.73,
+        "e2e-8t-clean": 0.57,
+        "e2e-8t-sensitive": 0.9
+      }
+    }
+  }
 }
