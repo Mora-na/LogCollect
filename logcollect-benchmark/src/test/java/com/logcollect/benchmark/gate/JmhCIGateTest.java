@@ -78,10 +78,12 @@ public class JmhCIGateTest {
                 "Above advisory threshold. Check masker rules and regex hot path.");
 
         double throwableToCleanRatio = withThrowable / clean;
-        assertRatio("withThrowable/clean", throwableToCleanRatio, 1.0d, 12.0d,
-                "Throwable sanitize/mask path regressed.");
         warnIfAbove("withThrowable/clean", throwableToCleanRatio, 8.0d,
                 "Above advisory threshold. Inspect sanitizeThrowable hot path.");
+
+        double throwableToSensitiveRatio = withThrowable / sensitive;
+        assertRatio("withThrowable/sensitive", throwableToSensitiveRatio, 1.0d, 6.0d,
+                "Throwable path regressed relative to sensitive message control group.");
 
         double perCallToCleanRatio = perCallNew / clean;
         assertRatio("perCallNew/clean", perCallToCleanRatio, 1.0d, 6.0d,

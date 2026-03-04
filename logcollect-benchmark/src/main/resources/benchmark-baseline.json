@@ -50,6 +50,11 @@
       "minRatio": 1.0,
       "maxRatio": 12.0
     },
+    "withThrowable/sensitive": {
+      "expected": 2.8,
+      "minRatio": 1.0,
+      "maxRatio": 6.0
+    },
     "reflection/interface": {
       "expected": 1166,
       "minRatio": 10.0,
