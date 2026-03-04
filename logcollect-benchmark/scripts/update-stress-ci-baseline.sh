@@ -33,6 +33,31 @@ SPRING_PROFILES="${SPRING_PROFILES:-stress}"
 MAX_THREAD_CAP="${MAX_THREAD_CAP:-128}"
 TASK_TIMEOUT_SECONDS="${TASK_TIMEOUT_SECONDS:-60}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
+GITHUB_RUN_ID_VAL="${GITHUB_RUN_ID:-}"
+GITHUB_RUN_NUMBER_VAL="${GITHUB_RUN_NUMBER:-}"
+GITHUB_RUN_ATTEMPT_VAL="${GITHUB_RUN_ATTEMPT:-}"
+GITHUB_SHA_VAL="${GITHUB_SHA:-}"
+GITHUB_REF_NAME_VAL="${GITHUB_REF_NAME:-}"
+GITHUB_WORKFLOW_VAL="${GITHUB_WORKFLOW:-}"
+GITHUB_REPOSITORY_VAL="${GITHUB_REPOSITORY:-}"
+
+detect_runner_memory_mb() {
+  if [[ -r /proc/meminfo ]]; then
+    awk '/MemTotal:/ {printf "%.0f", $2/1024; exit}' /proc/meminfo
+    return 0
+  fi
+  if command -v sysctl >/dev/null 2>&1; then
+    local mem_bytes
+    mem_bytes="$(sysctl -n hw.memsize 2>/dev/null || true)"
+    if [[ -n "$mem_bytes" ]]; then
+      echo $((mem_bytes/1024/1024))
+      return 0
+    fi
+  fi
+  echo ""
+}
+
+RUNNER_MEMORY_MB="${RUNNER_MEMORY_MB:-$(detect_runner_memory_mb)}"
 
 mkdir -p "$RESULT_DIR"
 
@@ -64,6 +89,7 @@ spring_profiles=$SPRING_PROFILES
 jvm_opts=$JVM_OPTS
 max_thread_cap=$MAX_THREAD_CAP
 task_timeout_seconds=$TASK_TIMEOUT_SECONDS
+runner_memory_mb=$RUNNER_MEMORY_MB
 gate_runs=$GATE_RUNS
 gate_min_samples_after_filter=$GATE_MIN_SAMPLES_AFTER_FILTER
 gate_trim_each_side=$GATE_TRIM_EACH_SIDE
@@ -72,6 +98,13 @@ ratio_min_multiplier=$RATIO_MIN_MULTIPLIER
 gc_max_multiplier=$GC_MAX_MULTIPLIER
 gc_absolute_min_percent=$GC_ABSOLUTE_MIN_PERCENT
 gc_absolute_max_percent=$GC_ABSOLUTE_MAX_PERCENT
+github_run_id=$GITHUB_RUN_ID_VAL
+github_run_number=$GITHUB_RUN_NUMBER_VAL
+github_run_attempt=$GITHUB_RUN_ATTEMPT_VAL
+github_sha=$GITHUB_SHA_VAL
+github_ref_name=$GITHUB_REF_NAME_VAL
+github_workflow=$GITHUB_WORKFLOW_VAL
+github_repository=$GITHUB_REPOSITORY_VAL
 EOF
 
 cd "$ROOT_DIR"
@@ -120,6 +153,11 @@ python3 "$PY_UPDATE" \
   --jdk-key "$JDK_KEY" \
   --jdk-version "$JDK_VERSION" \
   --java-home "${JAVA_HOME:-unknown}" \
+  --jvm-opts "$JVM_OPTS" \
+  --spring-profiles "$SPRING_PROFILES" \
+  --max-thread-cap "$MAX_THREAD_CAP" \
+  --task-timeout-seconds "$TASK_TIMEOUT_SECONDS" \
+  --runner-memory-mb "$RUNNER_MEMORY_MB" \
   --sample-runs "$RUNS" \
   --min-samples-per-metric "$SAMPLE_MIN_PER_METRIC" \
   --trim-count-each-side "$SAMPLE_TRIM_EACH_SIDE" \
@@ -131,6 +169,13 @@ python3 "$PY_UPDATE" \
   --gc-max-multiplier "$GC_MAX_MULTIPLIER" \
   --gc-absolute-min-percent "$GC_ABSOLUTE_MIN_PERCENT" \
   --gc-absolute-max-percent "$GC_ABSOLUTE_MAX_PERCENT" \
+  --github-run-id "$GITHUB_RUN_ID_VAL" \
+  --github-run-number "$GITHUB_RUN_NUMBER_VAL" \
+  --github-run-attempt "$GITHUB_RUN_ATTEMPT_VAL" \
+  --github-sha "$GITHUB_SHA_VAL" \
+  --github-ref-name "$GITHUB_REF_NAME_VAL" \
+  --github-workflow "$GITHUB_WORKFLOW_VAL" \
+  --github-repository "$GITHUB_REPOSITORY_VAL" \
   --note "CI stress baseline from ${RUNS} smoke runs (${BASELINE_PROFILE})"
 
 echo "=== Done. Review and commit ==="

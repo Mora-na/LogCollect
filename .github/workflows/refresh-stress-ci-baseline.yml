@@ -62,6 +62,7 @@ jobs:
           ./logcollect-benchmark/scripts/update-stress-ci-baseline.sh
 
       - name: Upload stress baseline samples
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: stress-ci-baseline-samples

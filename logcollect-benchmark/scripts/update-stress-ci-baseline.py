@@ -24,8 +24,20 @@ def parse_args():
     parser.add_argument("--jdk-key", default=None, help="Target key, e.g. jdk17")
     parser.add_argument("--jdk-version", default=None)
     parser.add_argument("--java-home", default=None)
+    parser.add_argument("--jvm-opts", default=None)
+    parser.add_argument("--spring-profiles", default=None)
+    parser.add_argument("--max-thread-cap", default=None)
+    parser.add_argument("--task-timeout-seconds", default=None)
+    parser.add_argument("--runner-memory-mb", default=None)
     parser.add_argument("--updated-by", default=None)
     parser.add_argument("--note", default="Auto-updated by update-stress-ci-baseline.py")
+    parser.add_argument("--github-run-id", default=None)
+    parser.add_argument("--github-run-number", default=None)
+    parser.add_argument("--github-run-attempt", default=None)
+    parser.add_argument("--github-sha", default=None)
+    parser.add_argument("--github-ref-name", default=None)
+    parser.add_argument("--github-workflow", default=None)
+    parser.add_argument("--github-repository", default=None)
 
     parser.add_argument("--sample-runs", type=int, default=10)
     parser.add_argument("--min-samples-per-metric", type=int, default=5)
@@ -252,6 +264,23 @@ def ensure_sample_count(name, values, min_samples):
         )
 
 
+def clean_optional(value):
+    if value is None:
+        return None
+    raw = str(value).strip()
+    return raw if raw else None
+
+
+def to_int_if_possible(value):
+    cleaned = clean_optional(value)
+    if cleaned is None:
+        return None
+    try:
+        return int(cleaned)
+    except Exception:
+        return cleaned
+
+
 def main():
     args = parse_args()
     samples = load_sample_results(args.samples_jsonl)
@@ -335,6 +364,24 @@ def main():
         "sampleTrimCountEachSide": args.trim_count_each_side,
         "note": args.note,
     }
+
+    optional_meta = {
+        "jvmOpts": clean_optional(args.jvm_opts),
+        "springProfiles": clean_optional(args.spring_profiles),
+        "maxThreadCap": to_int_if_possible(args.max_thread_cap),
+        "taskTimeoutSeconds": to_int_if_possible(args.task_timeout_seconds),
+        "runnerMemoryMb": to_int_if_possible(args.runner_memory_mb),
+        "githubRunId": to_int_if_possible(args.github_run_id),
+        "githubRunNumber": to_int_if_possible(args.github_run_number),
+        "githubRunAttempt": to_int_if_possible(args.github_run_attempt),
+        "githubSha": clean_optional(args.github_sha),
+        "githubRefName": clean_optional(args.github_ref_name),
+        "githubWorkflow": clean_optional(args.github_workflow),
+        "githubRepository": clean_optional(args.github_repository),
+    }
+    for key, value in optional_meta.items():
+        if value is not None:
+            meta[key] = value
 
     stress_gate = {
         "aggregation": {
