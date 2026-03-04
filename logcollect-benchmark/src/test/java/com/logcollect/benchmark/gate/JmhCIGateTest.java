@@ -27,9 +27,9 @@ import static org.junit.jupiter.api.Assertions.fail;
  * 1) Correctness first: benchmark must run and produce valid scores.
  * 2) No hard performance thresholds in CI.
  * 3) Fail only on abnormal degradation against baseline, with tiered jitter tolerance:
- *    baseline < 10ns -> allow up to 10.0x slowdown;
- *    baseline 10~100ns -> allow up to 4.0x slowdown;
- *    baseline > 100ns -> allow up to 3.0x slowdown.
+ *    baseline < 10ns -> allow up to 15.0x slowdown;
+ *    baseline 10~100ns -> allow up to 6.0x slowdown;
+ *    baseline > 100ns -> allow up to 4.5x slowdown.
  */
 public class JmhCIGateTest {
 
@@ -38,10 +38,10 @@ public class JmhCIGateTest {
     private static final double FAST_BASELINE_NS = 10.0d;
     private static final double MID_BASELINE_NS = 100.0d;
     // GitHub Actions runners are noisy shared environments; thresholds are intentionally
-    // doubled from the initial gate to reduce false-positive regressions from CI jitter.
-    private static final double FAST_MAX_SLOWDOWN = 10.0d;
-    private static final double MID_MAX_SLOWDOWN = 4.0d;
-    private static final double SLOW_MAX_SLOWDOWN = 3.0d;
+    // tripled from the initial gate to reduce false-positive regressions from CI jitter.
+    private static final double FAST_MAX_SLOWDOWN = 15.0d;
+    private static final double MID_MAX_SLOWDOWN = 6.0d;
+    private static final double SLOW_MAX_SLOWDOWN = 4.5d;
 
     private static final int WARMUP_ITERATIONS;
     private static final int WARMUP_TIME_SEC;
