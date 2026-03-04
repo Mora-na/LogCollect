@@ -26,6 +26,7 @@ RESULT_DIR="$BENCH_DIR/target/stress-results/multi-jdk"
 STRESS_MODE="${STRESS_MODE:-full}"                  # full | smoke
 RUNS_PER_JDK="${RUNS_PER_JDK:-1}"                   # repeat count per JDK
 JDK_SPECS="${JDK_SPECS:-1.8 11 17 21}"              # execution order
+BUILD_STRATEGY="${BUILD_STRATEGY:-once}"            # once | per-jdk
 SPRING_PROFILES="${SPRING_PROFILES:-stress,with-file-output}"
 MAX_THREAD_CAP="${MAX_THREAD_CAP:-128}"
 TASK_TIMEOUT_SECONDS="${TASK_TIMEOUT_SECONDS:-120}"
@@ -39,6 +40,11 @@ elif [[ "$STRESS_MODE" == "smoke" ]]; then
   MODE_ARG=()
 else
   echo "Unsupported STRESS_MODE: $STRESS_MODE (allowed: full|smoke)" >&2
+  exit 1
+fi
+
+if [[ "$BUILD_STRATEGY" != "once" && "$BUILD_STRATEGY" != "per-jdk" ]]; then
+  echo "Unsupported BUILD_STRATEGY: $BUILD_STRATEGY (allowed: once|per-jdk)" >&2
   exit 1
 fi
 
@@ -56,6 +62,7 @@ machine=$(uname -a)
 stress_mode=$STRESS_MODE
 runs_per_jdk=$RUNS_PER_JDK
 jdk_specs=$JDK_SPECS
+build_strategy=$BUILD_STRATEGY
 spring_profiles=$SPRING_PROFILES
 max_thread_cap=$MAX_THREAD_CAP
 task_timeout_seconds=$TASK_TIMEOUT_SECONDS
@@ -86,12 +93,20 @@ jdk_key_from_java() {
   echo "jdk${spec}"
 }
 
+build_with_java_home() {
+  local java_home="$1"
+  JAVA_HOME="$java_home" PATH="$java_home/bin:$PATH" mvn -pl logcollect-benchmark -am package -DskipTests -q
+}
+
 build_once() {
+  if [[ "$BUILD_STRATEGY" != "once" ]]; then
+    return
+  fi
   local first_spec first_home
   first_spec="$(echo "$JDK_SPECS" | awk '{print $1}')"
   first_home="$(require_java_home "$first_spec")"
   echo "=== Building benchmark module once (JAVA_HOME=$first_home) ==="
-  JAVA_HOME="$first_home" PATH="$first_home/bin:$PATH" mvn -pl logcollect-benchmark -am package -DskipTests -q
+  build_with_java_home "$first_home"
 }
 
 run_benchmark_for_jdk() {
@@ -101,6 +116,11 @@ run_benchmark_for_jdk() {
   java_bin="$java_home/bin/java"
   jdk_key="$(jdk_key_from_java "$java_bin")"
   jdk_version="$("$java_bin" -version 2>&1 | awk -F\" '/version/ {print $2; exit}')"
+
+  if [[ "$BUILD_STRATEGY" == "per-jdk" ]]; then
+    echo "=== Building benchmark module for ${jdk_key} (${jdk_version}) ==="
+    build_with_java_home "$java_home"
+  fi
 
   echo "=== Running throughput benchmark for ${jdk_key} (${jdk_version}) ==="
   for run in $(seq 1 "$RUNS_PER_JDK"); do
@@ -117,7 +137,7 @@ run_benchmark_for_jdk() {
       -Dbenchmark.stress.task-timeout-seconds="$TASK_TIMEOUT_SECONDS" \
       -cp "$JAR_FILE" \
       com.logcollect.benchmark.stress.StressTestApp \
-      "${MODE_ARG[@]}" \
+      ${MODE_ARG[@]+"${MODE_ARG[@]}"} \
       2>&1 | tee "$log_file"
     local status=${PIPESTATUS[0]}
     set -e

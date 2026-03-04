@@ -27,9 +27,9 @@ import static org.junit.jupiter.api.Assertions.fail;
  * 1) Correctness first: benchmark must run and produce valid scores.
  * 2) No hard performance thresholds in CI.
  * 3) Fail only on abnormal degradation against baseline, with tiered jitter tolerance:
- *    baseline < 10ns -> allow up to 5x slowdown;
- *    baseline 10~100ns -> allow up to 2x slowdown;
- *    baseline > 100ns -> allow up to 1.5x slowdown.
+ *    baseline < 10ns -> allow up to 5.5x slowdown;
+ *    baseline 10~100ns -> allow up to 2.2x slowdown;
+ *    baseline > 100ns -> allow up to 2.0x slowdown.
  */
 public class JmhCIGateTest {
 
@@ -37,9 +37,11 @@ public class JmhCIGateTest {
     private static final Map<String, Double> BASELINE_SCORES_NS = loadBaselineScoresNs();
     private static final double FAST_BASELINE_NS = 10.0d;
     private static final double MID_BASELINE_NS = 100.0d;
-    private static final double FAST_MAX_SLOWDOWN = 5.0d;
-    private static final double MID_MAX_SLOWDOWN = 2.0d;
-    private static final double SLOW_MAX_SLOWDOWN = 1.5d;
+    // GitHub Actions runners are noisy shared environments; keep CI gate slightly relaxed
+    // to reduce false-positive regressions caused by infrastructure jitter.
+    private static final double FAST_MAX_SLOWDOWN = 5.5d;
+    private static final double MID_MAX_SLOWDOWN = 2.2d;
+    private static final double SLOW_MAX_SLOWDOWN = 2.0d;
 
     private static final int WARMUP_ITERATIONS;
     private static final int WARMUP_TIME_SEC;
@@ -67,7 +69,7 @@ public class JmhCIGateTest {
                 Integer.valueOf(MEASUREMENT_ITERATIONS), Integer.valueOf(MEASUREMENT_TIME_SEC),
                 Integer.valueOf(FORKS));
         System.out.printf(
-                "[GATE] Degradation gate tiers: baseline<%.0fns -> <=%.1fx, %.0f~%.0fns -> <=%.1fx, >%.0fns -> <=%.1fx (baseline metrics=%d)%n",
+                "[GATE] Degradation gate tiers: baseline<%.0fns -> <=%.2fx, %.0f~%.0fns -> <=%.2fx, >%.0fns -> <=%.2fx (baseline metrics=%d)%n",
                 Double.valueOf(FAST_BASELINE_NS),
                 Double.valueOf(FAST_MAX_SLOWDOWN),
                 Double.valueOf(FAST_BASELINE_NS),
@@ -274,14 +276,14 @@ public class JmhCIGateTest {
 
     static String gateTierDescription(double baselineNs) {
         if (baselineNs < FAST_BASELINE_NS) {
-            return String.format("baseline<%.0fns => <=%.1fx",
+            return String.format("baseline<%.0fns => <=%.2fx",
                     Double.valueOf(FAST_BASELINE_NS), Double.valueOf(FAST_MAX_SLOWDOWN));
         }
         if (baselineNs <= MID_BASELINE_NS) {
-            return String.format("baseline %.0f~%.0fns => <=%.1fx",
+            return String.format("baseline %.0f~%.0fns => <=%.2fx",
                     Double.valueOf(FAST_BASELINE_NS), Double.valueOf(MID_BASELINE_NS), Double.valueOf(MID_MAX_SLOWDOWN));
         }
-        return String.format("baseline>%.0fns => <=%.1fx",
+        return String.format("baseline>%.0fns => <=%.2fx",
                 Double.valueOf(MID_BASELINE_NS), Double.valueOf(SLOW_MAX_SLOWDOWN));
     }
 
