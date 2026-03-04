@@ -329,6 +329,15 @@ public class ReconcileService {
    逐条结构化存储                   handler.flushAggregatedLog(ctx, agg)
 ```
 
+#### 1.2.1 运行时序（线程与缓冲协作）
+
+GitHub README 中 `sequenceDiagram` 可能无法稳定渲染，时序源码已独立放到文件中：
+
+- Mermaid 源文件：`docs/diagrams/LogCollectSequenceDiagram.mmd`
+- SVG 文件：`docs/diagrams/LogCollectSequenceDiagram.svg`
+
+![LogCollect 时序图](docs/diagrams/LogCollectSequenceDiagram.svg)
+
 ### 1.3 日志框架自动接入
 
 框架启动时自动将采集 Appender 注册到 ROOT Logger，实现零配置接入：

@@ -1,0 +1,55 @@
+sequenceDiagram
+    autonumber
+    participant Biz as 业务线程（@LogCollect 方法）
+    participant App as LogCollectAppender（ROOT 监听）
+    participant Buf as Buffer（Single/Aggregate）
+    participant Flush as logcollect-flush-* 线程池
+    participant Retry as logcollect-retry-scheduler
+    participant Handler as LogCollectHandler（你的入库实现）
+    participant Degrade as 降级存储（degrade-writer/内存）
+
+    Note over Biz,App: log.info(...) 进入 ROOT Appender
+    Biz->>App: append(event)
+    App->>App: traceId匹配/级别过滤/采样/安全处理
+
+    alt 使用Buffer
+        App->>Buf: offer(...)
+        alt 达阈值 && async=true && 非final
+            Buf->>Flush: submit AsyncBufferFlushTask
+            Note over Biz,Flush: 线程池满时 CallerRunsPolicy，提交线程会直接执行
+            Flush->>Buf: drain()
+            Flush->>Handler: flush（SINGLE: appendLog；AGGREGATE: flushAggregatedLog）
+            alt 首次写入失败
+                Flush->>Retry: schedule 重试（退避）
+                Retry->>Handler: retry flush
+                alt 重试耗尽
+                    Retry->>Degrade: 降级（FILE/MEMORY）
+                end
+            end
+        else
+            Note right of Buf: 继续缓存，等待下次阈值或方法结束
+        end
+    else
+        alt async=true
+            App->>Flush: submit writeTask
+            Flush->>Handler: 直接写入
+        else
+            App->>Handler: 业务线程直接写入
+        end
+    end
+
+    Biz->>Buf: 方法结束 closeAndFlush(final)
+    Buf->>Handler: final flush（同步）
+    alt final flush 失败
+        Buf->>Degrade: 降级（默认 FILE 异步）
+    end
+
+    %% 线程分工速览
+    %% - 业务线程: 业务逻辑 + appender过滤 + 入缓冲 + final flush（同步）
+    %% - logcollect-flush-* : 阈值触发的异步flush、正常入库主力线程
+    %% - logcollect-retry-scheduler: flush失败后的退避重试调度/执行
+    %% - logcollect-degrade-writer: 降级到文件时的异步写线程
+    Biz->>Biz: 业务逻辑 + appender过滤 + 入缓冲 + final flush（同步）
+    Flush->>Flush: 阈值触发的异步flush、正常入库主力线程
+    Retry->>Retry: flush失败后的退避重试调度/执行
+    Degrade->>Degrade: 降级到文件时的异步写线程
