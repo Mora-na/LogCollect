@@ -1,0 +1,83 @@
+name: Refresh Stress CI Baseline
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Smoke runs per JDK (recommended: 10)"
+        required: true
+        default: "10"
+      profile:
+        description: "ciStressBaselines profile key"
+        required: true
+        default: "github-ubuntu-latest"
+      commit:
+        description: "Commit and push updated baseline file"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 11
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Refresh stress baseline (JDK 11)
+        run: |
+          BASELINE_PROFILE="${{ inputs.profile }}" \
+          RUNS="${{ inputs.runs }}" \
+          ./logcollect-benchmark/scripts/update-stress-ci-baseline.sh
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Refresh stress baseline (JDK 17)
+        run: |
+          BASELINE_PROFILE="${{ inputs.profile }}" \
+          RUNS="${{ inputs.runs }}" \
+          ./logcollect-benchmark/scripts/update-stress-ci-baseline.sh
+
+      - name: Upload stress baseline samples
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-ci-baseline-samples
+          path: logcollect-benchmark/target/stress-results/ci-baseline/
+          retention-days: 30
+
+      - name: Commit baseline update
+        if: ${{ inputs.commit }}
+        run: |
+          if git diff --quiet -- logcollect-benchmark/src/main/resources/benchmark-baseline.json; then
+            echo "No baseline changes detected."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add logcollect-benchmark/src/main/resources/benchmark-baseline.json
+          git commit -m "perf: refresh stress CI baseline (${{ inputs.profile }})"
+          git push origin HEAD:${GITHUB_REF_NAME}

@@ -23,6 +23,10 @@ public class StressCIGateTest {
     private static final String BASELINE_RESOURCE = "benchmark-baseline.json";
     private static final String STRESS_GATE_CONFIG_KEY = "stressGate";
     private static final String GATE_RUNS_OVERRIDE_PROPERTY = "benchmark.stress.gate.runs";
+    private static final String BASELINE_PROFILE_PROPERTY = "benchmark.stress.gate.baseline.profile";
+    private static final String STRICT_CI_BASELINE_PROPERTY = "benchmark.stress.gate.strictCiBaseline";
+    private static final String DEFAULT_CI_BASELINE_PROFILE = "github-ubuntu-latest";
+    private static final String CI_STRESS_BASELINES_KEY = "ciStressBaselines";
 
     @Autowired
     private StressTestRunner runner;
@@ -39,9 +43,23 @@ public class StressCIGateTest {
             AggregationResult aggregated = robustAverage(samples, config);
             double floor = baseline * config.throughputMinMultiplier;
 
+            System.out.printf(
+                    "[GATE] throughput[%s] aggregate=%,.0f, baseline=%,.0f, floor=%,.0f, kept=%d/%d, p50=%,.0f, p90=%,.0f, range=[%,.0f, %,.0f], removed=%s%n",
+                    scenario,
+                    Double.valueOf(aggregated.value),
+                    Double.valueOf(baseline),
+                    Double.valueOf(floor),
+                    Integer.valueOf(aggregated.keptCount),
+                    Integer.valueOf(aggregated.totalCount),
+                    Double.valueOf(aggregated.p50),
+                    Double.valueOf(aggregated.p90),
+                    Double.valueOf(aggregated.min),
+                    Double.valueOf(aggregated.max),
+                    aggregated.removedValues);
+
             assertTrue(aggregated.value >= floor,
                     String.format(
-                            "GATE FAIL: throughput[%s] aggregate=%,.0f < floor=%,.0f (baseline=%,.0f, minMultiplier=%.2f, kept=%d/%d, range=[%,.0f, %,.0f], removed=%s)",
+                            "GATE FAIL: throughput[%s] aggregate=%,.0f < floor=%,.0f (baseline=%,.0f, minMultiplier=%.2f, kept=%d/%d, p50=%,.0f, p90=%,.0f, range=[%,.0f, %,.0f], removed=%s)",
                             scenario,
                             Double.valueOf(aggregated.value),
                             Double.valueOf(floor),
@@ -49,6 +67,8 @@ public class StressCIGateTest {
                             Double.valueOf(config.throughputMinMultiplier),
                             Integer.valueOf(aggregated.keptCount),
                             Integer.valueOf(aggregated.totalCount),
+                            Double.valueOf(aggregated.p50),
+                            Double.valueOf(aggregated.p90),
                             Double.valueOf(aggregated.min),
                             Double.valueOf(aggregated.max),
                             aggregated.removedValues));
@@ -62,9 +82,23 @@ public class StressCIGateTest {
             AggregationResult aggregated = robustAverage(samples, config);
             double floor = baseline * config.ratioMinMultiplier;
 
+            System.out.printf(
+                    "[GATE] ratio[%s] aggregate=%.2f, baseline=%.2f, floor=%.2f, kept=%d/%d, p50=%.2f, p90=%.2f, range=[%.2f, %.2f], removed=%s%n",
+                    ratioKey,
+                    Double.valueOf(aggregated.value),
+                    Double.valueOf(baseline),
+                    Double.valueOf(floor),
+                    Integer.valueOf(aggregated.keptCount),
+                    Integer.valueOf(aggregated.totalCount),
+                    Double.valueOf(aggregated.p50),
+                    Double.valueOf(aggregated.p90),
+                    Double.valueOf(aggregated.min),
+                    Double.valueOf(aggregated.max),
+                    aggregated.removedValues);
+
             assertTrue(aggregated.value >= floor,
                     String.format(
-                            "GATE FAIL: ratio[%s] aggregate=%.2f < floor=%.2f (baseline=%.2f, minMultiplier=%.2f, kept=%d/%d, range=[%.2f, %.2f], removed=%s)",
+                            "GATE FAIL: ratio[%s] aggregate=%.2f < floor=%.2f (baseline=%.2f, minMultiplier=%.2f, kept=%d/%d, p50=%.2f, p90=%.2f, range=[%.2f, %.2f], removed=%s)",
                             ratioKey,
                             Double.valueOf(aggregated.value),
                             Double.valueOf(floor),
@@ -72,6 +106,8 @@ public class StressCIGateTest {
                             Double.valueOf(config.ratioMinMultiplier),
                             Integer.valueOf(aggregated.keptCount),
                             Integer.valueOf(aggregated.totalCount),
+                            Double.valueOf(aggregated.p50),
+                            Double.valueOf(aggregated.p90),
                             Double.valueOf(aggregated.min),
                             Double.valueOf(aggregated.max),
                             aggregated.removedValues));
@@ -87,9 +123,23 @@ public class StressCIGateTest {
             double floorByAbsolute = config.gcAbsoluteMinPercent;
             double ceiling = Math.min(config.gcAbsoluteMaxPercent, Math.max(floorByAbsolute, ceilingByBaseline));
 
+            System.out.printf(
+                    "[GATE] gc[%s] aggregate=%.2f%%, baseline=%.2f%%, ceiling=%.2f%%, kept=%d/%d, p50=%.2f%%, p90=%.2f%%, range=[%.2f%%, %.2f%%], removed=%s%n",
+                    scenario,
+                    Double.valueOf(aggregated.value),
+                    Double.valueOf(baseline),
+                    Double.valueOf(ceiling),
+                    Integer.valueOf(aggregated.keptCount),
+                    Integer.valueOf(aggregated.totalCount),
+                    Double.valueOf(aggregated.p50),
+                    Double.valueOf(aggregated.p90),
+                    Double.valueOf(aggregated.min),
+                    Double.valueOf(aggregated.max),
+                    aggregated.removedValues);
+
             assertTrue(aggregated.value <= ceiling,
                     String.format(
-                            "GATE FAIL: gc[%s] aggregate=%.2f%% > ceiling=%.2f%% (baseline=%.2f%%, maxMultiplier=%.2f, kept=%d/%d, range=[%.2f%%, %.2f%%], removed=%s)",
+                            "GATE FAIL: gc[%s] aggregate=%.2f%% > ceiling=%.2f%% (baseline=%.2f%%, maxMultiplier=%.2f, kept=%d/%d, p50=%.2f%%, p90=%.2f%%, range=[%.2f%%, %.2f%%], removed=%s)",
                             scenario,
                             Double.valueOf(aggregated.value),
                             Double.valueOf(ceiling),
@@ -97,6 +147,8 @@ public class StressCIGateTest {
                             Double.valueOf(config.gcMaxMultiplier),
                             Integer.valueOf(aggregated.keptCount),
                             Integer.valueOf(aggregated.totalCount),
+                            Double.valueOf(aggregated.p50),
+                            Double.valueOf(aggregated.p90),
                             Double.valueOf(aggregated.min),
                             Double.valueOf(aggregated.max),
                             aggregated.removedValues));
@@ -105,10 +157,10 @@ public class StressCIGateTest {
 
     private List<Map<String, BenchmarkResult>> runSmokeMany(StressGateConfig config) {
         List<Map<String, BenchmarkResult>> allRuns = new ArrayList<Map<String, BenchmarkResult>>(config.runs);
-        System.out.printf("[GATE] Stress gate runs=%d, aggregation=robust-mean (outlier-threshold=%.2f, max-removals=%d)%n",
+        System.out.printf("[GATE] Stress gate runs=%d, aggregation=trimmed-mean (trimEachSide=%d, min-kept=%d)%n",
                 Integer.valueOf(config.runs),
-                Double.valueOf(config.outlierDeviationThreshold),
-                Integer.valueOf(config.maxOutlierRemovals));
+                Integer.valueOf(config.trimCountEachSide),
+                Integer.valueOf(config.minSamplesAfterFilter));
         for (int i = 0; i < config.runs; i++) {
             allRuns.add(runner.runAll("smoke"));
         }
@@ -168,39 +220,21 @@ public class StressCIGateTest {
                     Integer.valueOf(total), Integer.valueOf(config.minSamplesAfterFilter)));
         }
 
-        double median = median(values);
-        double denominator = Math.abs(median) < 1e-9d ? 1.0d : Math.abs(median);
-
-        List<Deviation> deviations = new ArrayList<Deviation>();
-        for (int i = 0; i < values.size(); i++) {
-            double v = values.get(i).doubleValue();
-            double relativeDeviation = Math.abs(v - median) / denominator;
-            if (relativeDeviation > config.outlierDeviationThreshold) {
-                deviations.add(new Deviation(i, v, relativeDeviation));
-            }
-        }
-        Collections.sort(deviations);
-
-        int maxRemovalsByCount = Math.max(0, total - config.minSamplesAfterFilter);
-        int maxRemovals = Math.min(config.maxOutlierRemovals, maxRemovalsByCount);
-
-        Map<Integer, Boolean> removed = new HashMap<Integer, Boolean>();
+        List<Double> sorted = new ArrayList<Double>(values);
+        Collections.sort(sorted);
+        int maxTrimEachSide = Math.max(0, (total - config.minSamplesAfterFilter) / 2);
+        int trimEachSide = Math.min(config.trimCountEachSide, maxTrimEachSide);
         List<Double> removedValues = new ArrayList<Double>();
-        for (int i = 0; i < deviations.size() && removedValues.size() < maxRemovals; i++) {
-            Deviation deviation = deviations.get(i);
-            removed.put(Integer.valueOf(deviation.index), Boolean.TRUE);
-            removedValues.add(Double.valueOf(deviation.value));
+        for (int i = 0; i < trimEachSide; i++) {
+            removedValues.add(sorted.get(i));
         }
-
-        List<Double> kept = new ArrayList<Double>();
-        for (int i = 0; i < values.size(); i++) {
-            if (!removed.containsKey(Integer.valueOf(i))) {
-                kept.add(values.get(i));
-            }
+        for (int i = total - trimEachSide; i < total; i++) {
+            removedValues.add(sorted.get(i));
         }
+        List<Double> kept = new ArrayList<Double>(sorted.subList(trimEachSide, total - trimEachSide));
 
         if (kept.size() < config.minSamplesAfterFilter) {
-            kept = new ArrayList<Double>(values);
+            kept = new ArrayList<Double>(sorted);
             removedValues = new ArrayList<Double>();
         }
 
@@ -208,6 +242,8 @@ public class StressCIGateTest {
                 average(kept),
                 min(values),
                 max(values),
+                percentile(sorted, 50.0d),
+                percentile(sorted, 90.0d),
                 values.size(),
                 kept.size(),
                 removedValues
@@ -246,15 +282,24 @@ public class StressCIGateTest {
         return m;
     }
 
-    private static double median(List<Double> values) {
-        List<Double> sorted = new ArrayList<Double>(values);
-        Collections.sort(sorted);
-        int size = sorted.size();
-        int mid = size / 2;
-        if ((size & 1) == 0) {
-            return (sorted.get(mid - 1).doubleValue() + sorted.get(mid).doubleValue()) / 2.0d;
+    private static double percentile(List<Double> sortedAscending, double percentile) {
+        if (sortedAscending == null || sortedAscending.isEmpty()) {
+            return 0.0d;
         }
-        return sorted.get(mid).doubleValue();
+        if (sortedAscending.size() == 1) {
+            return sortedAscending.get(0).doubleValue();
+        }
+        double clampedPercentile = Math.max(0.0d, Math.min(100.0d, percentile));
+        double position = (clampedPercentile / 100.0d) * (sortedAscending.size() - 1);
+        int lower = (int) Math.floor(position);
+        int upper = (int) Math.ceil(position);
+        if (lower == upper) {
+            return sortedAscending.get(lower).doubleValue();
+        }
+        double lowerValue = sortedAscending.get(lower).doubleValue();
+        double upperValue = sortedAscending.get(upper).doubleValue();
+        double fraction = position - lower;
+        return lowerValue + (upperValue - lowerValue) * fraction;
     }
 
     private StressGateConfig loadStressGateConfig() {
@@ -266,6 +311,29 @@ public class StressCIGateTest {
             ObjectMapper mapper = new ObjectMapper();
             JsonNode root = mapper.readTree(in);
             String runtimeJdkKey = resolveRuntimeJdkKey();
+            String baselineProfile = resolveBaselineProfile();
+            boolean strictCiBaseline = resolveStrictCiBaseline();
+
+            if (baselineProfile != null && !baselineProfile.isEmpty()) {
+                JsonNode ciNode = root.path(CI_STRESS_BASELINES_KEY)
+                        .path(baselineProfile)
+                        .path(runtimeJdkKey)
+                        .path(STRESS_GATE_CONFIG_KEY);
+                if (ciNode.isObject()) {
+                    System.out.printf("[GATE] Loaded CI stressGate baseline profile=%s, jdk=%s%n",
+                            baselineProfile, runtimeJdkKey);
+                    return StressGateConfig.from(ciNode);
+                }
+
+                String message = String.format("[GATE] CI stressGate baseline missing for profile=%s, jdk=%s.",
+                        baselineProfile, runtimeJdkKey);
+                if (strictCiBaseline) {
+                    fail(message + " Run logcollect-benchmark/scripts/update-stress-ci-baseline.sh on the target CI runner and commit benchmark-baseline.json.");
+                } else {
+                    System.out.printf("[GATE][WARN] %s fallback to legacy baseline.%n", message);
+                }
+            }
+
             JsonNode runtimeNode = root.path("jdkBaselines").path(runtimeJdkKey).path("ratios").path(STRESS_GATE_CONFIG_KEY);
             JsonNode fallbackNode = root.path("ratios").path(STRESS_GATE_CONFIG_KEY);
             JsonNode selected = runtimeNode.isObject() ? runtimeNode : fallbackNode;
@@ -286,6 +354,30 @@ public class StressCIGateTest {
             fail(String.format("[GATE] Failed to load stressGate baseline config: %s", ex.getMessage()));
             return null;
         }
+    }
+
+    private static String resolveBaselineProfile() {
+        String configured = System.getProperty(BASELINE_PROFILE_PROPERTY);
+        if (configured != null && !configured.trim().isEmpty()) {
+            return configured.trim();
+        }
+        if (isCiEnvironment()) {
+            return DEFAULT_CI_BASELINE_PROFILE;
+        }
+        return "";
+    }
+
+    private static boolean resolveStrictCiBaseline() {
+        String configured = System.getProperty(STRICT_CI_BASELINE_PROPERTY);
+        if (configured != null && !configured.trim().isEmpty()) {
+            return Boolean.parseBoolean(configured.trim());
+        }
+        return isCiEnvironment();
+    }
+
+    private static boolean isCiEnvironment() {
+        String ci = System.getenv("CI");
+        return ci != null && "true".equalsIgnoreCase(ci.trim());
     }
 
     private static String resolveRuntimeJdkKey() {
@@ -312,6 +404,8 @@ public class StressCIGateTest {
         private final double value;
         private final double min;
         private final double max;
+        private final double p50;
+        private final double p90;
         private final int totalCount;
         private final int keptCount;
         private final List<Double> removedValues;
@@ -319,40 +413,26 @@ public class StressCIGateTest {
         AggregationResult(double value,
                           double min,
                           double max,
+                          double p50,
+                          double p90,
                           int totalCount,
                           int keptCount,
                           List<Double> removedValues) {
             this.value = value;
             this.min = min;
             this.max = max;
+            this.p50 = p50;
+            this.p90 = p90;
             this.totalCount = totalCount;
             this.keptCount = keptCount;
             this.removedValues = removedValues;
         }
     }
 
-    private static final class Deviation implements Comparable<Deviation> {
-        private final int index;
-        private final double value;
-        private final double relativeDeviation;
-
-        Deviation(int index, double value, double relativeDeviation) {
-            this.index = index;
-            this.value = value;
-            this.relativeDeviation = relativeDeviation;
-        }
-
-        @Override
-        public int compareTo(Deviation other) {
-            return Double.compare(other.relativeDeviation, this.relativeDeviation);
-        }
-    }
-
     private static final class StressGateConfig {
         private final int runs;
-        private final int maxOutlierRemovals;
+        private final int trimCountEachSide;
         private final int minSamplesAfterFilter;
-        private final double outlierDeviationThreshold;
         private final double throughputMinMultiplier;
         private final double ratioMinMultiplier;
         private final double gcMaxMultiplier;
@@ -363,9 +443,8 @@ public class StressCIGateTest {
         private final Map<String, Double> gcBaselines;
 
         private StressGateConfig(int runs,
-                                 int maxOutlierRemovals,
+                                 int trimCountEachSide,
                                  int minSamplesAfterFilter,
-                                 double outlierDeviationThreshold,
                                  double throughputMinMultiplier,
                                  double ratioMinMultiplier,
                                  double gcMaxMultiplier,
@@ -375,9 +454,8 @@ public class StressCIGateTest {
                                  Map<String, Double> ratioBaselines,
                                  Map<String, Double> gcBaselines) {
             this.runs = runs;
-            this.maxOutlierRemovals = maxOutlierRemovals;
+            this.trimCountEachSide = trimCountEachSide;
             this.minSamplesAfterFilter = minSamplesAfterFilter;
-            this.outlierDeviationThreshold = outlierDeviationThreshold;
             this.throughputMinMultiplier = throughputMinMultiplier;
             this.ratioMinMultiplier = ratioMinMultiplier;
             this.gcMaxMultiplier = gcMaxMultiplier;
@@ -392,11 +470,14 @@ public class StressCIGateTest {
             JsonNode aggregation = config.path("aggregation");
 
             int runs = intValue(aggregation, "runs", 5);
-            int maxOutlierRemovals = intValue(aggregation, "maxOutlierRemovals", 2);
+            int trimCountEachSide = intValue(aggregation, "trimCountEachSide", -1);
+            if (trimCountEachSide < 0) {
+                int legacyOutlierRemovals = intValue(aggregation, "maxOutlierRemovals", 2);
+                trimCountEachSide = legacyOutlierRemovals > 0 ? 1 : 0;
+            }
             int minSamplesAfterFilter = intValue(aggregation, "minSamplesAfterFilter", 3);
-            double outlierDeviationThreshold = doubleValue(aggregation, "outlierDeviationThreshold", 0.25d);
 
-            double throughputMinMultiplier = doubleValue(config, "throughputMinMultiplier", 0.45d);
+            double throughputMinMultiplier = doubleValue(config, "throughputMinMultiplier", 0.80d);
             double ratioMinMultiplier = doubleValue(config, "ratioMinMultiplier", 0.75d);
             double gcMaxMultiplier = doubleValue(config, "gcMaxMultiplier", 4.0d);
             double gcAbsoluteMinPercent = doubleValue(config, "gcAbsoluteMinPercent", 2.0d);
@@ -429,9 +510,8 @@ public class StressCIGateTest {
 
             return new StressGateConfig(
                     Math.max(1, runs),
-                    Math.max(0, maxOutlierRemovals),
+                    Math.max(0, trimCountEachSide),
                     Math.max(1, minSamplesAfterFilter),
-                    Math.max(0.0d, outlierDeviationThreshold),
                     throughputMinMultiplier,
                     ratioMinMultiplier,
                     gcMaxMultiplier,

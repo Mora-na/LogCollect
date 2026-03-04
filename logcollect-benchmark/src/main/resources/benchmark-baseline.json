@@ -263,7 +263,8 @@
             "runs": 5,
             "maxOutlierRemovals": 2,
             "minSamplesAfterFilter": 3,
-            "outlierDeviationThreshold": 0.25
+            "outlierDeviationThreshold": 0.25,
+            "trimCountEachSide": 1
           },
           "throughputMinMultiplier": 0.45,
           "ratioMinMultiplier": 0.75,
@@ -384,7 +385,8 @@
             "runs": 5,
             "maxOutlierRemovals": 2,
             "minSamplesAfterFilter": 3,
-            "outlierDeviationThreshold": 0.25
+            "outlierDeviationThreshold": 0.25,
+            "trimCountEachSide": 1
           },
           "throughputMinMultiplier": 0.45,
           "ratioMinMultiplier": 0.75,
@@ -508,7 +510,8 @@
         "runs": 5,
         "maxOutlierRemovals": 2,
         "minSamplesAfterFilter": 3,
-        "outlierDeviationThreshold": 0.25
+        "outlierDeviationThreshold": 0.25,
+        "trimCountEachSide": 1
       },
       "throughputMinMultiplier": 0.45,
       "ratioMinMultiplier": 0.75,
@@ -534,6 +537,98 @@
         "e2e-1t-clean": 0.73,
         "e2e-8t-clean": 0.57,
         "e2e-8t-sensitive": 0.9
+      }
+    }
+  },
+  "ciStressBaselines": {
+    "github-ubuntu-latest": {
+      "jdk11": {
+        "_meta": {
+          "updatedAt": "2026-03-04T10:46:06Z",
+          "updatedBy": "panpan",
+          "profile": "github-ubuntu-latest",
+          "jdkKey": "jdk11",
+          "os": "Linux",
+          "cpu": "x86_64",
+          "bootstrapScaleFromLocal": 0.33,
+          "note": "Bootstrap CI baseline (scaled from local baseline). Refresh via .github/workflows/refresh-stress-ci-baseline.yml with RUNS=10."
+        },
+        "stressGate": {
+          "aggregation": {
+            "runs": 5,
+            "trimCountEachSide": 1,
+            "minSamplesAfterFilter": 3
+          },
+          "throughputMinMultiplier": 0.8,
+          "ratioMinMultiplier": 0.75,
+          "gcMaxMultiplier": 4.0,
+          "gcAbsoluteMinPercent": 2.0,
+          "gcAbsoluteMaxPercent": 5.0,
+          "throughputBaselines": {
+            "isolated-1t-clean": 294749.0,
+            "isolated-8t-clean": 1075097.1,
+            "isolated-8t-sensitive": 151470.9,
+            "e2e-1t-clean": 241709.4,
+            "e2e-8t-clean": 713753.8,
+            "e2e-8t-sensitive": 251557.7
+          },
+          "ratioBaselines": {
+            "isolated-8t-clean/isolated-1t-clean": 3.42,
+            "e2e-8t-clean/e2e-1t-clean": 2.9
+          },
+          "gcBaselines": {
+            "isolated-1t-clean": 0.19,
+            "isolated-8t-clean": 0.73,
+            "isolated-8t-sensitive": 0.5,
+            "e2e-1t-clean": 0.73,
+            "e2e-8t-clean": 0.54,
+            "e2e-8t-sensitive": 0.76
+          }
+        }
+      },
+      "jdk17": {
+        "_meta": {
+          "updatedAt": "2026-03-04T10:46:06Z",
+          "updatedBy": "panpan",
+          "profile": "github-ubuntu-latest",
+          "jdkKey": "jdk17",
+          "os": "Linux",
+          "cpu": "x86_64",
+          "bootstrapScaleFromLocal": 0.33,
+          "note": "Bootstrap CI baseline (scaled from local baseline). Refresh via .github/workflows/refresh-stress-ci-baseline.yml with RUNS=10."
+        },
+        "stressGate": {
+          "aggregation": {
+            "runs": 5,
+            "trimCountEachSide": 1,
+            "minSamplesAfterFilter": 3
+          },
+          "throughputMinMultiplier": 0.8,
+          "ratioMinMultiplier": 0.75,
+          "gcMaxMultiplier": 4.0,
+          "gcAbsoluteMinPercent": 2.0,
+          "gcAbsoluteMaxPercent": 5.0,
+          "throughputBaselines": {
+            "isolated-1t-clean": 282792.0,
+            "isolated-8t-clean": 826109.2,
+            "isolated-8t-sensitive": 125472.2,
+            "e2e-1t-clean": 294660.1,
+            "e2e-8t-clean": 747900.7,
+            "e2e-8t-sensitive": 251609.7
+          },
+          "ratioBaselines": {
+            "isolated-8t-clean/isolated-1t-clean": 2.76,
+            "e2e-8t-clean/e2e-1t-clean": 2.54
+          },
+          "gcBaselines": {
+            "isolated-1t-clean": 0.86,
+            "isolated-8t-clean": 0.63,
+            "isolated-8t-sensitive": 0.48,
+            "e2e-1t-clean": 0.73,
+            "e2e-8t-clean": 0.57,
+            "e2e-8t-sensitive": 0.9
+          }
+        }
       }
     }
   }

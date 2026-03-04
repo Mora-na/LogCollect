@@ -1907,7 +1907,7 @@ per-jdk 编译在关键业务路径（e2e-8t）上的收益如下：
 | Handler 持久化是真实瓶颈 | 基准使用 NOP Handler，生产中 DB INSERT/UPDATE 会成为天花板，需单独压测 |
 | 敏感消息比例 | 如业务日志中敏感数据占比高（>30%），需关注正则链路影响，可通过 `samplingRate` 或 `ADAPTIVE` 采样缓解 |
 | per-jdk 编译建议 | JDK17 编译 + JDK17 运行可获得最佳性能，避免低版本编译高版本运行损失 |
-| 首次灰度验证 | 基准数据来自 Apple Silicon，x86 生产环境建议在灰度阶段校验 |
+| 首次灰度验证 | CI 门禁基线应来自 `github-ubuntu-latest`，本地 Apple Silicon 仅用于趋势分析 |
 
 #### 12.3.5 总结
 
@@ -1929,13 +1929,19 @@ per-jdk 编译在关键业务路径（e2e-8t）上的收益如下：
 ```bash
 # CI 门禁
 mvn -pl logcollect-benchmark -Pbenchmark-ci -Dtest=JmhCIGateTest -Djmh.mode=ci test
-mvn -pl logcollect-benchmark -Pbenchmark-ci -Dtest=StressCIGateTest -Dspring.profiles.active=stress test
+mvn -pl logcollect-benchmark -Pbenchmark-ci -Dtest=StressCIGateTest -Dspring.profiles.active=stress \
+  -Dbenchmark.stress.gate.baseline.profile=github-ubuntu-latest \
+  -Dbenchmark.stress.gate.strictCiBaseline=true test
 # 本地快速排查可降低重复次数（默认 5）
 mvn -pl logcollect-benchmark -Pbenchmark-ci -Dtest=StressCIGateTest -Dspring.profiles.active=stress -Dbenchmark.stress.gate.runs=1 test
 
 # 本地完整基准
 ./logcollect-benchmark/scripts/run-jmh-full.sh
 ./logcollect-benchmark/scripts/run-stress-full.sh
+
+# 在 GitHub Runner 上刷新 stress CI 基线（推荐 10 次）
+BASELINE_PROFILE=github-ubuntu-latest RUNS=10 ./logcollect-benchmark/scripts/update-stress-ci-baseline.sh
+# 或直接触发 workflow_dispatch：.github/workflows/refresh-stress-ci-baseline.yml
 
 # 多 JDK 基线更新：低版本打包（once）5 次均值
 RUNS_PER_JDK=5 BUILD_STRATEGY=once ./logcollect-benchmark/scripts/run-stress-multi-jdk.sh
@@ -2260,7 +2266,9 @@ mvn clean verify -Dspring-boot.version=3.2.5  # 指定 Boot 版本
 
 # 性能门禁
 mvn test -pl logcollect-benchmark -Pbenchmark-ci -Dtest=JmhCIGateTest -Djmh.mode=ci
-mvn test -pl logcollect-benchmark -Pbenchmark-ci -Dtest=StressCIGateTest -Dspring.profiles.active=stress
+mvn test -pl logcollect-benchmark -Pbenchmark-ci -Dtest=StressCIGateTest -Dspring.profiles.active=stress \
+  -Dbenchmark.stress.gate.baseline.profile=github-ubuntu-latest \
+  -Dbenchmark.stress.gate.strictCiBaseline=true
 ```
 
 ### 测试矩阵
