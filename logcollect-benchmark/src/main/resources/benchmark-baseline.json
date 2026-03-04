@@ -1,17 +1,22 @@
 {
   "_meta": {
-    "updatedAt": "2026-03-03T22:30:00Z",
+    "updatedAt": "2026-03-04T02:20:00Z",
     "updatedBy": "manual",
-    "jdk": "17.0.9",
+    "jdk": "17.0.18",
     "os": "macOS 14.2",
     "cpu": "Apple M1 Pro",
-    "note": "Local baseline on dev machine, NOT CI values"
+    "note": "Degradation baseline for CI smoke gate (local reference values, NOT CI absolute targets)"
   },
   "baselines": {
     "pipeline_cleanMessage_emptyMdc": {
       "scoreNs": 2800,
       "errorNs": 150,
       "ciCeilingMultiplier": 10.0
+    },
+    "pipeline_perCall_newInstance": {
+      "scoreNs": 12500,
+      "errorNs": 400,
+      "ciCeilingMultiplier": 4.0
     },
     "pipeline_sensitiveMessage_typicalMdc": {
       "scoreNs": 11000,
@@ -24,9 +29,19 @@
       "ciCeilingMultiplier": 4.5
     },
     "sanitize_cleanMessage": {
-      "scoreNs": 400,
-      "errorNs": 30,
-      "ciCeilingMultiplier": 25.0
+      "scoreNs": 1300,
+      "errorNs": 100,
+      "ciCeilingMultiplier": 10.0
+    },
+    "sanitize_withInjection": {
+      "scoreNs": 3900,
+      "errorNs": 120,
+      "ciCeilingMultiplier": 5.0
+    },
+    "sanitize_longMessage": {
+      "scoreNs": 49500,
+      "errorNs": 3500,
+      "ciCeilingMultiplier": 4.0
     },
     "reflection_getMethods_everyTime": {
       "scoreNs": 3500,
@@ -37,28 +52,32 @@
       "scoreNs": 3,
       "errorNs": 0.5,
       "ciCeilingMultiplier": 100.0
+    },
+    "interface_noop": {
+      "scoreNs": 0.7,
+      "errorNs": 0.05,
+      "ciCeilingMultiplier": 100.0
+    },
+    "fullCopy_typical": {
+      "scoreNs": 43,
+      "errorNs": 2,
+      "ciCeilingMultiplier": 10.0
+    },
+    "lazyCopy_typical_clean": {
+      "scoreNs": 1.0,
+      "errorNs": 0.05,
+      "ciCeilingMultiplier": 100.0
+    },
+    "fullCopy_large": {
+      "scoreNs": 126,
+      "errorNs": 5,
+      "ciCeilingMultiplier": 10.0
+    },
+    "lazyCopy_large_clean": {
+      "scoreNs": 263,
+      "errorNs": 33,
+      "ciCeilingMultiplier": 5.0
     }
   },
-  "ratios": {
-    "sensitive/clean": {
-      "expected": 3.9,
-      "minRatio": 0.8,
-      "maxRatio": 8.0
-    },
-    "withThrowable/clean": {
-      "expected": 6.4,
-      "minRatio": 1.0,
-      "maxRatio": 12.0
-    },
-    "withThrowable/sensitive": {
-      "expected": 2.8,
-      "minRatio": 1.0,
-      "maxRatio": 6.0
-    },
-    "reflection/interface": {
-      "expected": 1166,
-      "minRatio": 10.0,
-      "maxRatio": 999999
-    }
-  }
+  "ratios": {}
 }

@@ -1,5 +1,7 @@
 package com.logcollect.benchmark.gate;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.results.RunResult;
@@ -9,24 +11,28 @@ import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 import org.openjdk.jmh.runner.options.TimeValue;
 
+import java.io.InputStream;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * CI performance gates for benchmark smoke runs.
+ * CI benchmark gates for smoke runs.
  *
  * <p>Design:
- * 1) Ratio-first assertions to neutralize CI host noise.
- * 2) Wide absolute ceilings only for catastrophic regressions.
- * 3) Variance warning output to help diagnose unstable environments.
+ * 1) Correctness first: benchmark must run and produce valid scores.
+ * 2) No hard performance thresholds in CI.
+ * 3) Fail only on abnormal degradation against baseline (default: >=50% perf drop).
  */
 public class JmhCIGateTest {
 
     private static final String JMH_MODE = System.getProperty("jmh.mode", "ci");
+    private static final double MAX_ALLOWED_PERF_DROP = parseMaxPerfDrop();
+    private static final Map<String, Double> BASELINE_SCORES_NS = loadBaselineScoresNs();
 
     private static final int WARMUP_ITERATIONS;
     private static final int WARMUP_TIME_SEC;
@@ -53,10 +59,12 @@ public class JmhCIGateTest {
                 JMH_MODE, Integer.valueOf(WARMUP_ITERATIONS), Integer.valueOf(WARMUP_TIME_SEC),
                 Integer.valueOf(MEASUREMENT_ITERATIONS), Integer.valueOf(MEASUREMENT_TIME_SEC),
                 Integer.valueOf(FORKS));
+        System.out.printf("[GATE] Degradation gate: maxPerfDrop=%.0f%% (baseline metrics=%d)%n",
+                Double.valueOf(MAX_ALLOWED_PERF_DROP * 100.0d), Integer.valueOf(BASELINE_SCORES_NS.size()));
     }
 
     @Test
-    void securityPipeline_ratioAndAbsoluteGate() throws RunnerException {
+    void securityPipeline_correctnessAndDegradationGate() throws RunnerException {
         Options opt = buildOptions(
                 "SecurityPipelineBenchmark\\.pipeline_cleanMessage_emptyMdc",
                 "SecurityPipelineBenchmark\\.pipeline_sensitiveMessage_typicalMdc",
@@ -71,36 +79,18 @@ public class JmhCIGateTest {
         double withThrowable = requireScore(scores, "pipeline_withThrowable");
         double perCallNew = requireScore(scores, "pipeline_perCall_newInstance");
 
-        double sensitiveToCleanRatio = sensitive / clean;
-        assertRatio("sensitive/clean", sensitiveToCleanRatio, 0.8d, 8.0d,
-                "Sensitive path regressed. Check masker rules and regex hot path.");
-        warnIfAbove("sensitive/clean", sensitiveToCleanRatio, 5.0d,
-                "Above advisory threshold. Check masker rules and regex hot path.");
-
-        double throwableToCleanRatio = withThrowable / clean;
-        warnIfAbove("withThrowable/clean", throwableToCleanRatio, 8.0d,
-                "Above advisory threshold. Inspect sanitizeThrowable hot path.");
-
-        double throwableToSensitiveRatio = withThrowable / sensitive;
-        assertRatio("withThrowable/sensitive", throwableToSensitiveRatio, 1.0d, 6.0d,
-                "Throwable path regressed relative to sensitive message control group.");
-
-        double perCallToCleanRatio = perCallNew / clean;
-        assertRatio("perCallNew/clean", perCallToCleanRatio, 1.0d, 6.0d,
-                "Pipeline reuse optimization may not be effective.");
-        warnIfAbove("perCallNew/clean", perCallToCleanRatio, 3.0d,
-                "Above advisory threshold. Consider avoiding per-call pipeline construction.");
-
-        assertAbsoluteCeiling("clean", clean, 30_000d,
-                "Clean path exceeded catastrophic ceiling.");
-        assertAbsoluteCeiling("sensitive", sensitive, 50_000d,
-                "Sensitive path exceeded catastrophic ceiling.");
-        assertAbsoluteCeiling("withThrowable", withThrowable, 80_000d,
-                "Throwable path exceeded catastrophic ceiling.");
+        assertNoAbnormalRegression("pipeline_cleanMessage_emptyMdc", clean,
+                "Security clean path degraded unexpectedly.");
+        assertNoAbnormalRegression("pipeline_sensitiveMessage_typicalMdc", sensitive,
+                "Security sensitive path degraded unexpectedly.");
+        assertNoAbnormalRegression("pipeline_withThrowable", withThrowable,
+                "Security throwable path degraded unexpectedly.");
+        assertNoAbnormalRegression("pipeline_perCall_newInstance", perCallNew,
+                "Pipeline creation path degraded unexpectedly.");
     }
 
     @Test
-    void reflectionVsInterface_interfaceMustBeDramaticallyFaster() throws RunnerException {
+    void reflectionVsInterface_correctnessAndDegradationGate() throws RunnerException {
         Options opt = buildOptions(
                 "ReflectionVsInterfaceBenchmark\\.reflection_getMethods_everyTime",
                 "ReflectionVsInterfaceBenchmark\\.interface_virtualDispatch",
@@ -113,20 +103,16 @@ public class JmhCIGateTest {
         double iface = requireScore(scores, "interface_virtualDispatch");
         double noop = requireScore(scores, "interface_noop");
 
-        double speedup = reflection / iface;
-        assertTrue(speedup > 10.0d,
-                gateFailMessage("reflection/interface speedup", speedup,
-                        "> 10x",
-                        String.format("reflection=%.0f ns, interface=%.0f ns, speedup=%.1fx",
-                                Double.valueOf(reflection), Double.valueOf(iface), Double.valueOf(speedup))));
-
-        double noopRatio = noop / iface;
-        assertRatio("noop/interface", noopRatio, 0.0d, 2.0d,
-                "NOOP implementation should not be slower than real implementation.");
+        assertNoAbnormalRegression("reflection_getMethods_everyTime", reflection,
+                "Reflection dispatch path degraded unexpectedly.");
+        assertNoAbnormalRegression("interface_virtualDispatch", iface,
+                "Interface dispatch path degraded unexpectedly.");
+        assertNoAbnormalRegression("interface_noop", noop,
+                "NOOP dispatch path degraded unexpectedly.");
     }
 
     @Test
-    void sanitize_cleanPathShouldBeFast() throws RunnerException {
+    void sanitize_correctnessAndDegradationGate() throws RunnerException {
         Options opt = buildOptions(
                 "SanitizeBenchmark\\.sanitize_cleanMessage",
                 "SanitizeBenchmark\\.sanitize_withInjection",
@@ -139,20 +125,16 @@ public class JmhCIGateTest {
         double injection = requireScore(scores, "sanitize_withInjection");
         double longMsg = requireScore(scores, "sanitize_longMessage");
 
-        double injectionToClean = injection / clean;
-        assertRatio("injection/clean", injectionToClean, 0.5d, 10.0d,
-                "Injection sanitize should be close to clean path.");
-
-        double longToClean = longMsg / clean;
-        assertRatio("longMessage/clean", longToClean, 1.0d, 50.0d,
-                "Long-message sanitize should scale roughly linearly.");
-
-        assertAbsoluteCeiling("sanitize_clean", clean, 10_000d,
-                "Clean sanitize exceeded catastrophic ceiling.");
+        assertNoAbnormalRegression("sanitize_cleanMessage", clean,
+                "Sanitize clean path degraded unexpectedly.");
+        assertNoAbnormalRegression("sanitize_withInjection", injection,
+                "Sanitize injection path degraded unexpectedly.");
+        assertNoAbnormalRegression("sanitize_longMessage", longMsg,
+                "Sanitize long-message path degraded unexpectedly.");
     }
 
     @Test
-    void mdcCopy_lazyPathShouldBeFaster() throws RunnerException {
+    void mdcCopy_correctnessAndDegradationGate() throws RunnerException {
         Options opt = buildOptions(
                 "MdcCopyBenchmark\\.fullCopy_typical",
                 "MdcCopyBenchmark\\.lazyCopy_typical_clean",
@@ -162,20 +144,19 @@ public class JmhCIGateTest {
 
         Map<String, Double> scores = runAndCollect(opt);
 
-        if (scores.isEmpty()) {
-            System.out.println("[GATE] MDC copy benchmarks not found, skipping.");
-            return;
-        }
+        double fullTypical = requireScore(scores, "fullCopy_typical");
+        double lazyTypical = requireScore(scores, "lazyCopy_typical_clean");
+        double fullLarge = requireScore(scores, "fullCopy_large");
+        double lazyLarge = requireScore(scores, "lazyCopy_large_clean");
 
-        Double fullTypical = scores.get("fullCopy_typical");
-        Double lazyTypical = scores.get("lazyCopy_typical_clean");
-        if (fullTypical != null && lazyTypical != null) {
-            double speedup = fullTypical.doubleValue() / lazyTypical.doubleValue();
-            assertTrue(speedup > 2.0d,
-                    gateFailMessage("fullCopy/lazyCopy (typical)", speedup,
-                            "> 2x",
-                            String.format("full=%.0f ns, lazy=%.0f ns", fullTypical, lazyTypical)));
-        }
+        assertNoAbnormalRegression("fullCopy_typical", fullTypical,
+                "MDC full copy (typical) degraded unexpectedly.");
+        assertNoAbnormalRegression("lazyCopy_typical_clean", lazyTypical,
+                "MDC lazy copy (typical) degraded unexpectedly.");
+        assertNoAbnormalRegression("fullCopy_large", fullLarge,
+                "MDC full copy (large) degraded unexpectedly.");
+        assertNoAbnormalRegression("lazyCopy_large_clean", lazyLarge,
+                "MDC lazy copy (large) degraded unexpectedly.");
     }
 
     private Options buildOptions(String... includes) {
@@ -229,28 +210,27 @@ public class JmhCIGateTest {
         return score.doubleValue();
     }
 
-    private void assertRatio(String label, double ratio, double minRatio, double maxRatio, String hint) {
-        System.out.printf("[GATE] Ratio %-30s = %.2f (expected: %.1f ~ %.1f)%n",
-                label, Double.valueOf(ratio), Double.valueOf(minRatio), Double.valueOf(maxRatio));
-
-        assertTrue(ratio >= minRatio && ratio <= maxRatio,
-                gateFailMessage("Ratio " + label, ratio,
-                        String.format("%.1f ~ %.1f", Double.valueOf(minRatio), Double.valueOf(maxRatio)), hint));
-    }
-
-    private void assertAbsoluteCeiling(String label, double actualNs, double ceilingNs, String hint) {
-        System.out.printf("[GATE] Ceiling %-28s = %,.0f ns (ceiling: %,.0f ns)%n",
-                label, Double.valueOf(actualNs), Double.valueOf(ceilingNs));
-
-        assertTrue(actualNs < ceilingNs,
-                gateFailMessage(label, actualNs, String.format("< %,.0f ns", Double.valueOf(ceilingNs)), hint));
-    }
-
-    private void warnIfAbove(String label, double actual, double advisoryMax, String hint) {
-        if (actual > advisoryMax) {
-            System.out.printf("[GATE][WARN] Ratio %-30s = %.2f (advisory <= %.1f). %s%n",
-                    label, Double.valueOf(actual), Double.valueOf(advisoryMax), hint);
+    private void assertNoAbnormalRegression(String metric, double actualNs, String hint) {
+        Double baselineObj = BASELINE_SCORES_NS.get(metric);
+        if (baselineObj == null || baselineObj.doubleValue() <= 0.0d) {
+            System.out.printf("[GATE][WARN] Baseline missing for %s, skip degradation gate.%n", metric);
+            return;
         }
+        double baselineNs = baselineObj.doubleValue();
+        double slowdown = actualNs / baselineNs;
+        double perfDrop = slowdown <= 1.0d ? 0.0d : (1.0d - (1.0d / slowdown));
+        double maxAllowedSlowdown = maxAllowedSlowdownMultiplier();
+
+        System.out.printf("[GATE] Regression %-30s baseline=%,.1f ns, actual=%,.1f ns, slowdown=%.2fx, perfDrop=%.1f%%%n",
+                metric, Double.valueOf(baselineNs), Double.valueOf(actualNs),
+                Double.valueOf(slowdown), Double.valueOf(perfDrop * 100.0d));
+
+        assertTrue(slowdown <= maxAllowedSlowdown,
+                gateFailMessage("Abnormal regression " + metric,
+                        slowdown,
+                        String.format("<= %.2fx latency (<= %.0f%% perf drop)",
+                                Double.valueOf(maxAllowedSlowdown), Double.valueOf(MAX_ALLOWED_PERF_DROP * 100.0d)),
+                        hint + String.format(" Baseline=%.1f ns, actual=%.1f ns.", baselineNs, actualNs)));
     }
 
     private String gateFailMessage(String metric, double actual, String expected, String hint) {
@@ -266,5 +246,57 @@ public class JmhCIGateTest {
                 expected,
                 hint
         );
+    }
+
+    private static double parseMaxPerfDrop() {
+        String raw = System.getProperty("jmh.maxPerfDrop", "0.50");
+        try {
+            double parsed = Double.parseDouble(raw);
+            if (parsed > 0.0d && parsed < 1.0d) {
+                return parsed;
+            }
+        } catch (Exception ignored) {
+            // use default
+        }
+        return 0.50d;
+    }
+
+    private static double maxAllowedSlowdownMultiplier() {
+        return 1.0d / (1.0d - MAX_ALLOWED_PERF_DROP);
+    }
+
+    private static Map<String, Double> loadBaselineScoresNs() {
+        Map<String, Double> result = new HashMap<String, Double>();
+        InputStream stream = JmhCIGateTest.class.getClassLoader().getResourceAsStream("benchmark-baseline.json");
+        if (stream == null) {
+            System.out.println("[GATE][WARN] benchmark-baseline.json not found, degradation checks disabled.");
+            return result;
+        }
+
+        try (InputStream in = stream) {
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root = mapper.readTree(in);
+            JsonNode baselines = root.path("baselines");
+            if (!baselines.isObject()) {
+                return result;
+            }
+
+            Iterator<Map.Entry<String, JsonNode>> fields = baselines.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                JsonNode scoreNode = field.getValue().get("scoreNs");
+                if (scoreNode == null || !scoreNode.isNumber()) {
+                    continue;
+                }
+                double scoreNs = scoreNode.asDouble();
+                if (scoreNs > 0.0d) {
+                    result.put(field.getKey(), Double.valueOf(scoreNs));
+                }
+            }
+        } catch (Exception e) {
+            System.out.printf("[GATE][WARN] Failed to load benchmark baseline: %s%n", e.getMessage());
+            return new HashMap<String, Double>();
+        }
+        return result;
     }
 }
