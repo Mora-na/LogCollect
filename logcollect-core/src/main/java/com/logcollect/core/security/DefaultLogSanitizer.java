@@ -214,7 +214,7 @@ public class DefaultLogSanitizer implements LogSanitizer {
     }
 
     private static String markThrowableInjectedLines(String cleaned) {
-        StringBuilder sb = new StringBuilder(cleaned.length() + 16);
+        StringBuilder sb = null;
         int lineStart = 0;
         int lineIndex = 0;
         int len = cleaned.length();
@@ -225,14 +225,20 @@ public class DefaultLogSanitizer implements LogSanitizer {
                 continue;
             }
 
-            String line = cleaned.substring(lineStart, i);
-            if (lineIndex == 0 || isStandardStackLine(line)) {
-                sb.append(line);
+            boolean standardLine = lineIndex == 0 || isStandardStackLine(cleaned, lineStart, i);
+            if (standardLine) {
+                if (sb != null) {
+                    sb.append(cleaned, lineStart, i);
+                }
             } else {
-                sb.append("\t[ex-msg] ").append(line);
+                if (sb == null) {
+                    sb = new StringBuilder(len + 16);
+                    sb.append(cleaned, 0, lineStart);
+                }
+                sb.append("\t[ex-msg] ").append(cleaned, lineStart, i);
             }
 
-            if (i < len) {
+            if (i < len && sb != null) {
                 sb.append('\n');
             }
 
@@ -240,40 +246,40 @@ public class DefaultLogSanitizer implements LogSanitizer {
             lineIndex++;
         }
 
-        return sb.toString();
+        return sb == null ? cleaned : sb.toString();
     }
 
-    private static boolean isStandardStackLine(String line) {
-        if (line == null) {
+    private static boolean isStandardStackLine(String value, int lineStart, int lineEndExclusive) {
+        if (value == null) {
             return true;
         }
 
-        int start = 0;
-        int end = line.length() - 1;
-        while (start <= end && Character.isWhitespace(line.charAt(start))) {
+        int start = lineStart;
+        int end = lineEndExclusive - 1;
+        while (start <= end && Character.isWhitespace(value.charAt(start))) {
             start++;
         }
-        while (end >= start && Character.isWhitespace(line.charAt(end))) {
+        while (end >= start && Character.isWhitespace(value.charAt(end))) {
             end--;
         }
         if (start > end) {
             return true;
         }
 
-        if (regionStartsWith(line, start, "at ")) {
+        if (regionStartsWith(value, start, end + 1, "at ")) {
             return true;
         }
-        if (regionStartsWith(line, start, "Caused by:")) {
+        if (regionStartsWith(value, start, end + 1, "Caused by:")) {
             return true;
         }
-        if (regionStartsWith(line, start, "Suppressed:")) {
+        if (regionStartsWith(value, start, end + 1, "Suppressed:")) {
             return true;
         }
-        return isOmittedFramesLine(line, start, end);
+        return isOmittedFramesLine(value, start, end);
     }
 
     private static boolean isOmittedFramesLine(String line, int start, int end) {
-        if (!regionStartsWith(line, start, "... ")) {
+        if (!regionStartsWith(line, start, end + 1, "... ")) {
             return false;
         }
         int i = start + 4;
@@ -294,8 +300,8 @@ public class DefaultLogSanitizer implements LogSanitizer {
                 || regionEquals(line, i, end, "common frames omitted");
     }
 
-    private static boolean regionStartsWith(String value, int offset, String prefix) {
-        if (offset < 0 || offset + prefix.length() > value.length()) {
+    private static boolean regionStartsWith(String value, int offset, int endExclusive, String prefix) {
+        if (offset < 0 || offset + prefix.length() > endExclusive) {
             return false;
         }
         for (int i = 0; i < prefix.length(); i++) {

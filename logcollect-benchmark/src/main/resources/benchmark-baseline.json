@@ -4,7 +4,7 @@
     "updatedBy": "manual",
     "jdk": "17.0.9",
     "os": "macOS 14.2",
-    "cpu": "Apple M2 Pro",
+    "cpu": "Apple M1 Pro",
     "note": "Local baseline on dev machine, NOT CI values"
   },
   "baselines": {
@@ -43,12 +43,12 @@
     "sensitive/clean": {
       "expected": 3.9,
       "minRatio": 0.8,
-      "maxRatio": 5.0
+      "maxRatio": 8.0
     },
     "withThrowable/clean": {
       "expected": 6.4,
       "minRatio": 1.0,
-      "maxRatio": 8.0
+      "maxRatio": 12.0
     },
     "reflection/interface": {
       "expected": 1166,

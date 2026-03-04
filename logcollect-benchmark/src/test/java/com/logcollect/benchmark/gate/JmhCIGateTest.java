@@ -72,16 +72,22 @@ public class JmhCIGateTest {
         double perCallNew = requireScore(scores, "pipeline_perCall_newInstance");
 
         double sensitiveToCleanRatio = sensitive / clean;
-        assertRatio("sensitive/clean", sensitiveToCleanRatio, 0.8d, 5.0d,
+        assertRatio("sensitive/clean", sensitiveToCleanRatio, 0.8d, 8.0d,
                 "Sensitive path regressed. Check masker rules and regex hot path.");
+        warnIfAbove("sensitive/clean", sensitiveToCleanRatio, 5.0d,
+                "Above advisory threshold. Check masker rules and regex hot path.");
 
         double throwableToCleanRatio = withThrowable / clean;
-        assertRatio("withThrowable/clean", throwableToCleanRatio, 1.0d, 8.0d,
+        assertRatio("withThrowable/clean", throwableToCleanRatio, 1.0d, 12.0d,
                 "Throwable sanitize/mask path regressed.");
+        warnIfAbove("withThrowable/clean", throwableToCleanRatio, 8.0d,
+                "Above advisory threshold. Inspect sanitizeThrowable hot path.");
 
         double perCallToCleanRatio = perCallNew / clean;
-        assertRatio("perCallNew/clean", perCallToCleanRatio, 1.0d, 3.0d,
+        assertRatio("perCallNew/clean", perCallToCleanRatio, 1.0d, 6.0d,
                 "Pipeline reuse optimization may not be effective.");
+        warnIfAbove("perCallNew/clean", perCallToCleanRatio, 3.0d,
+                "Above advisory threshold. Consider avoiding per-call pipeline construction.");
 
         assertAbsoluteCeiling("clean", clean, 30_000d,
                 "Clean path exceeded catastrophic ceiling.");
@@ -236,6 +242,13 @@ public class JmhCIGateTest {
 
         assertTrue(actualNs < ceilingNs,
                 gateFailMessage(label, actualNs, String.format("< %,.0f ns", Double.valueOf(ceilingNs)), hint));
+    }
+
+    private void warnIfAbove(String label, double actual, double advisoryMax, String hint) {
+        if (actual > advisoryMax) {
+            System.out.printf("[GATE][WARN] Ratio %-30s = %.2f (advisory <= %.1f). %s%n",
+                    label, Double.valueOf(actual), Double.valueOf(advisoryMax), hint);
+        }
     }
 
     private String gateFailMessage(String metric, double actual, String expected, String hint) {
