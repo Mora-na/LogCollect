@@ -26,13 +26,20 @@ import static org.junit.jupiter.api.Assertions.fail;
  * <p>Design:
  * 1) Correctness first: benchmark must run and produce valid scores.
  * 2) No hard performance thresholds in CI.
- * 3) Fail only on abnormal degradation against baseline (default: >=50% perf drop).
+ * 3) Fail only on abnormal degradation against baseline, with tiered jitter tolerance:
+ *    baseline < 10ns -> allow up to 5x slowdown;
+ *    baseline 10~100ns -> allow up to 2x slowdown;
+ *    baseline > 100ns -> allow up to 1.5x slowdown.
  */
 public class JmhCIGateTest {
 
     private static final String JMH_MODE = System.getProperty("jmh.mode", "ci");
-    private static final double MAX_ALLOWED_PERF_DROP = parseMaxPerfDrop();
     private static final Map<String, Double> BASELINE_SCORES_NS = loadBaselineScoresNs();
+    private static final double FAST_BASELINE_NS = 10.0d;
+    private static final double MID_BASELINE_NS = 100.0d;
+    private static final double FAST_MAX_SLOWDOWN = 5.0d;
+    private static final double MID_MAX_SLOWDOWN = 2.0d;
+    private static final double SLOW_MAX_SLOWDOWN = 1.5d;
 
     private static final int WARMUP_ITERATIONS;
     private static final int WARMUP_TIME_SEC;
@@ -59,8 +66,16 @@ public class JmhCIGateTest {
                 JMH_MODE, Integer.valueOf(WARMUP_ITERATIONS), Integer.valueOf(WARMUP_TIME_SEC),
                 Integer.valueOf(MEASUREMENT_ITERATIONS), Integer.valueOf(MEASUREMENT_TIME_SEC),
                 Integer.valueOf(FORKS));
-        System.out.printf("[GATE] Degradation gate: maxPerfDrop=%.0f%% (baseline metrics=%d)%n",
-                Double.valueOf(MAX_ALLOWED_PERF_DROP * 100.0d), Integer.valueOf(BASELINE_SCORES_NS.size()));
+        System.out.printf(
+                "[GATE] Degradation gate tiers: baseline<%.0fns -> <=%.1fx, %.0f~%.0fns -> <=%.1fx, >%.0fns -> <=%.1fx (baseline metrics=%d)%n",
+                Double.valueOf(FAST_BASELINE_NS),
+                Double.valueOf(FAST_MAX_SLOWDOWN),
+                Double.valueOf(FAST_BASELINE_NS),
+                Double.valueOf(MID_BASELINE_NS),
+                Double.valueOf(MID_MAX_SLOWDOWN),
+                Double.valueOf(MID_BASELINE_NS),
+                Double.valueOf(SLOW_MAX_SLOWDOWN),
+                Integer.valueOf(BASELINE_SCORES_NS.size()));
     }
 
     @Test
@@ -218,18 +233,17 @@ public class JmhCIGateTest {
         }
         double baselineNs = baselineObj.doubleValue();
         double slowdown = actualNs / baselineNs;
-        double perfDrop = slowdown <= 1.0d ? 0.0d : (1.0d - (1.0d / slowdown));
-        double maxAllowedSlowdown = maxAllowedSlowdownMultiplier();
+        double maxAllowedSlowdown = maxAllowedSlowdownMultiplier(baselineNs);
 
-        System.out.printf("[GATE] Regression %-30s baseline=%,.1f ns, actual=%,.1f ns, slowdown=%.2fx, perfDrop=%.1f%%%n",
+        System.out.printf("[GATE] Regression %-30s baseline=%,.1f ns, actual=%,.1f ns, slowdown=%.2fx, gate=%s%n",
                 metric, Double.valueOf(baselineNs), Double.valueOf(actualNs),
-                Double.valueOf(slowdown), Double.valueOf(perfDrop * 100.0d));
+                Double.valueOf(slowdown), gateTierDescription(baselineNs));
 
         assertTrue(slowdown <= maxAllowedSlowdown,
                 gateFailMessage("Abnormal regression " + metric,
                         slowdown,
-                        String.format("<= %.2fx latency (<= %.0f%% perf drop)",
-                                Double.valueOf(maxAllowedSlowdown), Double.valueOf(MAX_ALLOWED_PERF_DROP * 100.0d)),
+                        String.format("<= %.2fx latency (%s)",
+                                Double.valueOf(maxAllowedSlowdown), gateTierDescription(baselineNs)),
                         hint + String.format(" Baseline=%.1f ns, actual=%.1f ns.", baselineNs, actualNs)));
     }
 
@@ -248,21 +262,27 @@ public class JmhCIGateTest {
         );
     }
 
-    private static double parseMaxPerfDrop() {
-        String raw = System.getProperty("jmh.maxPerfDrop", "0.50");
-        try {
-            double parsed = Double.parseDouble(raw);
-            if (parsed > 0.0d && parsed < 1.0d) {
-                return parsed;
-            }
-        } catch (Exception ignored) {
-            // use default
+    static double maxAllowedSlowdownMultiplier(double baselineNs) {
+        if (baselineNs < FAST_BASELINE_NS) {
+            return FAST_MAX_SLOWDOWN;
         }
-        return 0.50d;
+        if (baselineNs <= MID_BASELINE_NS) {
+            return MID_MAX_SLOWDOWN;
+        }
+        return SLOW_MAX_SLOWDOWN;
     }
 
-    private static double maxAllowedSlowdownMultiplier() {
-        return 1.0d / (1.0d - MAX_ALLOWED_PERF_DROP);
+    static String gateTierDescription(double baselineNs) {
+        if (baselineNs < FAST_BASELINE_NS) {
+            return String.format("baseline<%.0fns => <=%.1fx",
+                    Double.valueOf(FAST_BASELINE_NS), Double.valueOf(FAST_MAX_SLOWDOWN));
+        }
+        if (baselineNs <= MID_BASELINE_NS) {
+            return String.format("baseline %.0f~%.0fns => <=%.1fx",
+                    Double.valueOf(FAST_BASELINE_NS), Double.valueOf(MID_BASELINE_NS), Double.valueOf(MID_MAX_SLOWDOWN));
+        }
+        return String.format("baseline>%.0fns => <=%.1fx",
+                Double.valueOf(MID_BASELINE_NS), Double.valueOf(SLOW_MAX_SLOWDOWN));
     }
 
     private static Map<String, Double> loadBaselineScoresNs() {
@@ -276,9 +296,20 @@ public class JmhCIGateTest {
         try (InputStream in = stream) {
             ObjectMapper mapper = new ObjectMapper();
             JsonNode root = mapper.readTree(in);
-            JsonNode baselines = root.path("baselines");
+            String runtimeJdkKey = resolveRuntimeJdkKey();
+            JsonNode jdkBaselines = root.path("jdkBaselines").path(runtimeJdkKey).path("baselines");
+            JsonNode baselines = jdkBaselines.isObject() ? jdkBaselines : root.path("baselines");
+
             if (!baselines.isObject()) {
                 return result;
+            }
+
+            if (jdkBaselines.isObject()) {
+                System.out.printf("[GATE] Loaded baseline set for %s (metrics=%d)%n",
+                        runtimeJdkKey, Integer.valueOf(jdkBaselines.size()));
+            } else {
+                System.out.printf("[GATE][WARN] baseline set for %s not found, fallback to legacy baselines.%n",
+                        runtimeJdkKey);
             }
 
             Iterator<Map.Entry<String, JsonNode>> fields = baselines.fields();
@@ -298,5 +329,25 @@ public class JmhCIGateTest {
             return new HashMap<String, Double>();
         }
         return result;
+    }
+
+    private static String resolveRuntimeJdkKey() {
+        String specVersion = System.getProperty("java.specification.version", "");
+        if (specVersion == null || specVersion.isEmpty()) {
+            return "unknown";
+        }
+        if (specVersion.startsWith("1.")) {
+            specVersion = specVersion.substring(2);
+        }
+        int dot = specVersion.indexOf('.');
+        if (dot > 0) {
+            specVersion = specVersion.substring(0, dot);
+        }
+        try {
+            int major = Integer.parseInt(specVersion);
+            return "jdk" + major;
+        } catch (NumberFormatException ex) {
+            return "unknown";
+        }
     }
 }

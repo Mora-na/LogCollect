@@ -1,82 +1,437 @@
 {
   "_meta": {
-    "updatedAt": "2026-03-04T02:20:00Z",
-    "updatedBy": "manual",
+    "updatedAt": "2026-03-04T02:56:06Z",
+    "updatedBy": "panpan",
     "jdk": "17.0.18",
-    "os": "macOS 14.2",
-    "cpu": "Apple M1 Pro",
-    "note": "Degradation baseline for CI smoke gate (local reference values, NOT CI absolute targets)"
+    "os": "Darwin 25.3.0",
+    "cpu": "arm64",
+    "note": "Degradation baseline for CI smoke gate (auto-selected by runtime JDK)",
+    "defaultJdkKey": "jdk17",
+    "jdkKey": "jdk17",
+    "javaHome": "/Users/panpan/Library/Java/JavaVirtualMachines/azul-17.0.18/Contents/Home",
+    "jvmArgs": "-Xms512m -Xmx512m -XX:+UseG1GC",
+    "jmhArgs": "-f 2 -wi 3 -i 5 -w 1s -r 1s -t 1 -tu ns -bm avgt"
   },
   "baselines": {
-    "pipeline_cleanMessage_emptyMdc": {
-      "scoreNs": 2800,
-      "errorNs": 150,
-      "ciCeilingMultiplier": 10.0
-    },
-    "pipeline_perCall_newInstance": {
-      "scoreNs": 12500,
-      "errorNs": 400,
-      "ciCeilingMultiplier": 4.0
-    },
-    "pipeline_sensitiveMessage_typicalMdc": {
-      "scoreNs": 11000,
-      "errorNs": 800,
-      "ciCeilingMultiplier": 5.0
-    },
-    "pipeline_withThrowable": {
-      "scoreNs": 18000,
-      "errorNs": 1200,
-      "ciCeilingMultiplier": 4.5
-    },
-    "sanitize_cleanMessage": {
-      "scoreNs": 1300,
-      "errorNs": 100,
-      "ciCeilingMultiplier": 10.0
-    },
-    "sanitize_withInjection": {
-      "scoreNs": 3900,
-      "errorNs": 120,
-      "ciCeilingMultiplier": 5.0
-    },
-    "sanitize_longMessage": {
-      "scoreNs": 49500,
-      "errorNs": 3500,
-      "ciCeilingMultiplier": 4.0
-    },
-    "reflection_getMethods_everyTime": {
-      "scoreNs": 3500,
-      "errorNs": 200,
-      "ciCeilingMultiplier": 8.0
-    },
-    "interface_virtualDispatch": {
-      "scoreNs": 3,
-      "errorNs": 0.5,
-      "ciCeilingMultiplier": 100.0
-    },
     "interface_noop": {
       "scoreNs": 0.7,
-      "errorNs": 0.05,
+      "errorNs": 0.0,
       "ciCeilingMultiplier": 100.0
     },
-    "fullCopy_typical": {
-      "scoreNs": 43,
-      "errorNs": 2,
-      "ciCeilingMultiplier": 10.0
-    },
-    "lazyCopy_typical_clean": {
-      "scoreNs": 1.0,
-      "errorNs": 0.05,
+    "interface_virtualDispatch": {
+      "scoreNs": 2.3,
+      "errorNs": 0.0,
       "ciCeilingMultiplier": 100.0
+    },
+    "reflection_getMethods_everyTime": {
+      "scoreNs": 167.5,
+      "errorNs": 3.4,
+      "ciCeilingMultiplier": 8.0
     },
     "fullCopy_large": {
-      "scoreNs": 126,
-      "errorNs": 5,
+      "scoreNs": 125.5,
+      "errorNs": 0.4,
+      "ciCeilingMultiplier": 10.0
+    },
+    "fullCopy_typical": {
+      "scoreNs": 41.6,
+      "errorNs": 1.6,
       "ciCeilingMultiplier": 10.0
     },
     "lazyCopy_large_clean": {
-      "scoreNs": 263,
-      "errorNs": 33,
+      "scoreNs": 257.3,
+      "errorNs": 0.6,
       "ciCeilingMultiplier": 5.0
+    },
+    "lazyCopy_typical_clean": {
+      "scoreNs": 1.0,
+      "errorNs": 0.0,
+      "ciCeilingMultiplier": 100.0
+    },
+    "sanitize_cleanMessage": {
+      "scoreNs": 1297.7,
+      "errorNs": 2.6,
+      "ciCeilingMultiplier": 10.0
+    },
+    "sanitize_longMessage": {
+      "scoreNs": 49244.6,
+      "errorNs": 489.5,
+      "ciCeilingMultiplier": 4.0
+    },
+    "sanitize_withInjection": {
+      "scoreNs": 3780.7,
+      "errorNs": 10.5,
+      "ciCeilingMultiplier": 5.0
+    },
+    "pipeline_cleanMessage_emptyMdc": {
+      "scoreNs": 1592.9,
+      "errorNs": 22.0,
+      "ciCeilingMultiplier": 10.0
+    },
+    "pipeline_perCall_newInstance": {
+      "scoreNs": 11410.4,
+      "errorNs": 1768.5,
+      "ciCeilingMultiplier": 4.0
+    },
+    "pipeline_sensitiveMessage_typicalMdc": {
+      "scoreNs": 8969.1,
+      "errorNs": 26.4,
+      "ciCeilingMultiplier": 5.0
+    },
+    "pipeline_withThrowable": {
+      "scoreNs": 25625.6,
+      "errorNs": 135.3,
+      "ciCeilingMultiplier": 4.5
+    }
+  },
+  "jdkBaselines": {
+    "jdk8": {
+      "_meta": {
+        "updatedAt": "2026-03-04T02:40:14Z",
+        "updatedBy": "panpan",
+        "jdk": "1.8.0_482",
+        "jdkKey": "jdk8",
+        "javaHome": "/Users/panpan/Library/Java/JavaVirtualMachines/azul-1.8.0_482/Contents/Home",
+        "os": "Darwin 25.3.0",
+        "cpu": "arm64",
+        "jvmArgs": "-Xms512m -Xmx512m -XX:+UseG1GC",
+        "jmhArgs": "-f 2 -wi 3 -i 5 -w 1s -r 1s -t 1 -tu ns -bm avgt",
+        "note": "Auto-updated by update-baseline-json.py"
+      },
+      "baselines": {
+        "interface_noop": {
+          "scoreNs": 0.7,
+          "errorNs": 0.0,
+          "ciCeilingMultiplier": 100.0
+        },
+        "interface_virtualDispatch": {
+          "scoreNs": 2.3,
+          "errorNs": 0.0,
+          "ciCeilingMultiplier": 100.0
+        },
+        "reflection_getMethods_everyTime": {
+          "scoreNs": 150.1,
+          "errorNs": 1.9,
+          "ciCeilingMultiplier": 8.0
+        },
+        "fullCopy_large": {
+          "scoreNs": 160.1,
+          "errorNs": 2.7,
+          "ciCeilingMultiplier": 10.0
+        },
+        "fullCopy_typical": {
+          "scoreNs": 50.6,
+          "errorNs": 1.6,
+          "ciCeilingMultiplier": 10.0
+        },
+        "lazyCopy_large_clean": {
+          "scoreNs": 261.9,
+          "errorNs": 1.4,
+          "ciCeilingMultiplier": 5.0
+        },
+        "lazyCopy_typical_clean": {
+          "scoreNs": 2.9,
+          "errorNs": 0.0,
+          "ciCeilingMultiplier": 100.0
+        },
+        "sanitize_cleanMessage": {
+          "scoreNs": 1292.8,
+          "errorNs": 8.1,
+          "ciCeilingMultiplier": 10.0
+        },
+        "sanitize_longMessage": {
+          "scoreNs": 49045.3,
+          "errorNs": 182.7,
+          "ciCeilingMultiplier": 4.0
+        },
+        "sanitize_withInjection": {
+          "scoreNs": 4547.8,
+          "errorNs": 24.8,
+          "ciCeilingMultiplier": 5.0
+        },
+        "pipeline_cleanMessage_emptyMdc": {
+          "scoreNs": 1585.6,
+          "errorNs": 9.0,
+          "ciCeilingMultiplier": 10.0
+        },
+        "pipeline_perCall_newInstance": {
+          "scoreNs": 11594.0,
+          "errorNs": 86.5,
+          "ciCeilingMultiplier": 4.0
+        },
+        "pipeline_sensitiveMessage_typicalMdc": {
+          "scoreNs": 10778.9,
+          "errorNs": 64.1,
+          "ciCeilingMultiplier": 5.0
+        },
+        "pipeline_withThrowable": {
+          "scoreNs": 26458.1,
+          "errorNs": 130.1,
+          "ciCeilingMultiplier": 4.5
+        }
+      },
+      "ratios": {}
+    },
+    "jdk11": {
+      "_meta": {
+        "updatedAt": "2026-03-04T02:44:06Z",
+        "updatedBy": "panpan",
+        "jdk": "11.0.30",
+        "jdkKey": "jdk11",
+        "javaHome": "/Users/panpan/Library/Java/JavaVirtualMachines/azul-11.0.30/Contents/Home",
+        "os": "Darwin 25.3.0",
+        "cpu": "arm64",
+        "jvmArgs": "-Xms512m -Xmx512m -XX:+UseG1GC",
+        "jmhArgs": "-f 2 -wi 3 -i 5 -w 1s -r 1s -t 1 -tu ns -bm avgt",
+        "note": "Auto-updated by update-baseline-json.py"
+      },
+      "baselines": {
+        "interface_noop": {
+          "scoreNs": 0.7,
+          "errorNs": 0.0,
+          "ciCeilingMultiplier": 100.0
+        },
+        "interface_virtualDispatch": {
+          "scoreNs": 2.3,
+          "errorNs": 0.0,
+          "ciCeilingMultiplier": 100.0
+        },
+        "reflection_getMethods_everyTime": {
+          "scoreNs": 101.7,
+          "errorNs": 0.9,
+          "ciCeilingMultiplier": 8.0
+        },
+        "fullCopy_large": {
+          "scoreNs": 173.4,
+          "errorNs": 0.6,
+          "ciCeilingMultiplier": 10.0
+        },
+        "fullCopy_typical": {
+          "scoreNs": 51.5,
+          "errorNs": 0.7,
+          "ciCeilingMultiplier": 10.0
+        },
+        "lazyCopy_large_clean": {
+          "scoreNs": 352.4,
+          "errorNs": 1.8,
+          "ciCeilingMultiplier": 5.0
+        },
+        "lazyCopy_typical_clean": {
+          "scoreNs": 2.9,
+          "errorNs": 0.0,
+          "ciCeilingMultiplier": 100.0
+        },
+        "sanitize_cleanMessage": {
+          "scoreNs": 1298.4,
+          "errorNs": 9.4,
+          "ciCeilingMultiplier": 10.0
+        },
+        "sanitize_longMessage": {
+          "scoreNs": 54979.2,
+          "errorNs": 7702.2,
+          "ciCeilingMultiplier": 4.0
+        },
+        "sanitize_withInjection": {
+          "scoreNs": 4004.1,
+          "errorNs": 23.2,
+          "ciCeilingMultiplier": 5.0
+        },
+        "pipeline_cleanMessage_emptyMdc": {
+          "scoreNs": 2401.9,
+          "errorNs": 29.2,
+          "ciCeilingMultiplier": 10.0
+        },
+        "pipeline_perCall_newInstance": {
+          "scoreNs": 11750.5,
+          "errorNs": 574.1,
+          "ciCeilingMultiplier": 4.0
+        },
+        "pipeline_sensitiveMessage_typicalMdc": {
+          "scoreNs": 9984.9,
+          "errorNs": 442.6,
+          "ciCeilingMultiplier": 5.0
+        },
+        "pipeline_withThrowable": {
+          "scoreNs": 26322.4,
+          "errorNs": 236.9,
+          "ciCeilingMultiplier": 4.5
+        }
+      },
+      "ratios": {}
+    },
+    "jdk17": {
+      "_meta": {
+        "updatedAt": "2026-03-04T02:47:56Z",
+        "updatedBy": "panpan",
+        "jdk": "17.0.18",
+        "jdkKey": "jdk17",
+        "javaHome": "/Users/panpan/Library/Java/JavaVirtualMachines/azul-17.0.18/Contents/Home",
+        "os": "Darwin 25.3.0",
+        "cpu": "arm64",
+        "jvmArgs": "-Xms512m -Xmx512m -XX:+UseG1GC",
+        "jmhArgs": "-f 2 -wi 3 -i 5 -w 1s -r 1s -t 1 -tu ns -bm avgt",
+        "note": "Auto-updated by update-baseline-json.py"
+      },
+      "baselines": {
+        "interface_noop": {
+          "scoreNs": 0.7,
+          "errorNs": 0.0,
+          "ciCeilingMultiplier": 100.0
+        },
+        "interface_virtualDispatch": {
+          "scoreNs": 2.3,
+          "errorNs": 0.0,
+          "ciCeilingMultiplier": 100.0
+        },
+        "reflection_getMethods_everyTime": {
+          "scoreNs": 167.5,
+          "errorNs": 3.4,
+          "ciCeilingMultiplier": 8.0
+        },
+        "fullCopy_large": {
+          "scoreNs": 125.5,
+          "errorNs": 0.4,
+          "ciCeilingMultiplier": 10.0
+        },
+        "fullCopy_typical": {
+          "scoreNs": 41.6,
+          "errorNs": 1.6,
+          "ciCeilingMultiplier": 10.0
+        },
+        "lazyCopy_large_clean": {
+          "scoreNs": 257.3,
+          "errorNs": 0.6,
+          "ciCeilingMultiplier": 5.0
+        },
+        "lazyCopy_typical_clean": {
+          "scoreNs": 1.0,
+          "errorNs": 0.0,
+          "ciCeilingMultiplier": 100.0
+        },
+        "sanitize_cleanMessage": {
+          "scoreNs": 1297.7,
+          "errorNs": 2.6,
+          "ciCeilingMultiplier": 10.0
+        },
+        "sanitize_longMessage": {
+          "scoreNs": 49244.6,
+          "errorNs": 489.5,
+          "ciCeilingMultiplier": 4.0
+        },
+        "sanitize_withInjection": {
+          "scoreNs": 3780.7,
+          "errorNs": 10.5,
+          "ciCeilingMultiplier": 5.0
+        },
+        "pipeline_cleanMessage_emptyMdc": {
+          "scoreNs": 1592.9,
+          "errorNs": 22.0,
+          "ciCeilingMultiplier": 10.0
+        },
+        "pipeline_perCall_newInstance": {
+          "scoreNs": 11410.4,
+          "errorNs": 1768.5,
+          "ciCeilingMultiplier": 4.0
+        },
+        "pipeline_sensitiveMessage_typicalMdc": {
+          "scoreNs": 8969.1,
+          "errorNs": 26.4,
+          "ciCeilingMultiplier": 5.0
+        },
+        "pipeline_withThrowable": {
+          "scoreNs": 25625.6,
+          "errorNs": 135.3,
+          "ciCeilingMultiplier": 4.5
+        }
+      },
+      "ratios": {}
+    },
+    "jdk21": {
+      "_meta": {
+        "updatedAt": "2026-03-04T02:56:06Z",
+        "updatedBy": "panpan",
+        "jdk": "21.0.10",
+        "jdkKey": "jdk21",
+        "javaHome": "/Users/panpan/Library/Java/JavaVirtualMachines/azul-21.0.10/Contents/Home",
+        "os": "Darwin 25.3.0",
+        "cpu": "arm64",
+        "jvmArgs": "-Xms512m -Xmx512m -XX:+UseG1GC",
+        "jmhArgs": "-f 2 -wi 3 -i 5 -w 1s -r 1s -t 1 -tu ns -bm avgt",
+        "note": "Auto-updated by update-baseline-json.py"
+      },
+      "baselines": {
+        "interface_noop": {
+          "scoreNs": 0.8,
+          "errorNs": 0.0,
+          "ciCeilingMultiplier": 100.0
+        },
+        "interface_virtualDispatch": {
+          "scoreNs": 2.3,
+          "errorNs": 0.0,
+          "ciCeilingMultiplier": 100.0
+        },
+        "reflection_getMethods_everyTime": {
+          "scoreNs": 169.7,
+          "errorNs": 1.5,
+          "ciCeilingMultiplier": 8.0
+        },
+        "fullCopy_large": {
+          "scoreNs": 142.3,
+          "errorNs": 0.8,
+          "ciCeilingMultiplier": 10.0
+        },
+        "fullCopy_typical": {
+          "scoreNs": 45.6,
+          "errorNs": 0.2,
+          "ciCeilingMultiplier": 10.0
+        },
+        "lazyCopy_large_clean": {
+          "scoreNs": 378.9,
+          "errorNs": 2.9,
+          "ciCeilingMultiplier": 5.0
+        },
+        "lazyCopy_typical_clean": {
+          "scoreNs": 1.0,
+          "errorNs": 0.0,
+          "ciCeilingMultiplier": 100.0
+        },
+        "sanitize_cleanMessage": {
+          "scoreNs": 1277.1,
+          "errorNs": 9.1,
+          "ciCeilingMultiplier": 10.0
+        },
+        "sanitize_longMessage": {
+          "scoreNs": 57269.3,
+          "errorNs": 10399.2,
+          "ciCeilingMultiplier": 4.0
+        },
+        "sanitize_withInjection": {
+          "scoreNs": 3705.7,
+          "errorNs": 23.1,
+          "ciCeilingMultiplier": 5.0
+        },
+        "pipeline_cleanMessage_emptyMdc": {
+          "scoreNs": 2400.8,
+          "errorNs": 17.4,
+          "ciCeilingMultiplier": 10.0
+        },
+        "pipeline_perCall_newInstance": {
+          "scoreNs": 11735.1,
+          "errorNs": 88.4,
+          "ciCeilingMultiplier": 4.0
+        },
+        "pipeline_sensitiveMessage_typicalMdc": {
+          "scoreNs": 10704.2,
+          "errorNs": 76.8,
+          "ciCeilingMultiplier": 5.0
+        },
+        "pipeline_withThrowable": {
+          "scoreNs": 25999.2,
+          "errorNs": 68.3,
+          "ciCeilingMultiplier": 4.5
+        }
+      },
+      "ratios": {}
     }
   },
   "ratios": {}
