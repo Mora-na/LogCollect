@@ -527,8 +527,11 @@ public class LogCollectConfigResolver {
         if (annotation.pipelineTimeoutMs() != 50) {
             config.setSecurityPipelineTimeoutMs(annotation.pipelineTimeoutMs());
         }
+        if (annotation.pipelineRingBufferCapacity() > 0) {
+            config.setPipelineRingBufferCapacity(annotation.pipelineRingBufferCapacity());
+        }
         if (annotation.pipelineQueueCapacity() != 8192) {
-            config.setPipelineQueueCapacity(annotation.pipelineQueueCapacity());
+            config.setPipelineRingBufferCapacity(annotation.pipelineQueueCapacity());
         }
 
         if (annotation.handlerTimeoutMs() != 5000) {
@@ -566,9 +569,18 @@ public class LogCollectConfigResolver {
         applyDataSize(props, "buffer.total-max-bytes", config::setGlobalBufferTotalMaxBytes);
         applyDataSize(props, "buffer.hard-ceiling-bytes", config::setGlobalBufferHardCeilingBytes);
         applyDouble(props, "buffer.estimation-factor", config::setGlobalBufferEstimationFactor);
+        applyDataSize(props, "buffer.memory-sync-threshold-bytes", config::setBufferMemorySyncThresholdBytes);
         applyBoolean(props, "pipeline.enabled", config::setPipelineEnabled);
-        applyInt(props, "pipeline.queue-capacity", config::setPipelineQueueCapacity);
+        applyInt(props, "pipeline.ring-buffer-capacity", config::setPipelineRingBufferCapacity);
+        if (props.containsKey("pipeline.queue-capacity") && !props.containsKey("pipeline.ring-buffer-capacity")) {
+            applyInt(props, "pipeline.queue-capacity", config::setPipelineRingBufferCapacity);
+            LogCollectInternalLogger.warn(
+                    "Detected deprecated config key 'pipeline.queue-capacity'; mapped to 'pipeline.ring-buffer-capacity'.");
+        }
         applyInt(props, "pipeline.consumer-threads", config::setPipelineConsumerThreads);
+        applyInt(props, "pipeline.overflow-queue-capacity", config::setPipelineOverflowQueueCapacity);
+        applyInt(props, "pipeline.unpublished-slot-timeout-ms", config::setPipelineUnpublishedSlotTimeoutMs);
+        applyString(props, "pipeline.consumer-idle-strategy", config::setPipelineConsumerIdleStrategy);
         applyDouble(props, "pipeline.backpressure-warning", config::setPipelineBackpressureWarning);
         applyDouble(props, "pipeline.backpressure-critical", config::setPipelineBackpressureCritical);
         applyInt(props, "pipeline.handoff-timeout-ms", config::setPipelineHandoffTimeoutMs);
@@ -797,9 +809,10 @@ public class LogCollectConfigResolver {
     private void syncPipelineRuntimeWarnings(Map<String, String> globals,
                                              Map<String, String> changedProperties,
                                              String source) {
-        if (hasChangedOrConfigured(globals, changedProperties, "pipeline.queue-capacity")) {
+        if (hasChangedOrConfigured(globals, changedProperties, "pipeline.ring-buffer-capacity")
+                || hasChangedOrConfigured(globals, changedProperties, "pipeline.queue-capacity")) {
             LogCollectInternalLogger.warn(
-                    "pipeline.queue-capacity changed (source={}) but requires restart to take effect.",
+                    "pipeline.ring-buffer-capacity changed (source={}) but requires restart to take effect.",
                     source == null ? "unknown" : source);
         }
         if (hasChangedOrConfigured(globals, changedProperties, "pipeline.consumer-threads")) {

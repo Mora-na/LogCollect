@@ -257,10 +257,12 @@ public class LogCollectAspect {
                 && pipelineManager != null;
         if (config.isUseBuffer()) {
             if (pipelineActive) {
-                buffer = new SingleWriterBuffer(
-                        config.getMaxBufferSize(),
-                        config.getMaxBufferBytes(),
-                        Math.min(256, Math.max(16, config.getMaxBufferSize())));
+                if (collectMode == CollectMode.SINGLE) {
+                    buffer = new SingleWriterBuffer(
+                            config.getMaxBufferSize(),
+                            config.getMaxBufferBytes(),
+                            config.getMaxBufferSize());
+                }
             } else {
                 BoundedBufferPolicy policy = new BoundedBufferPolicy(
                         config.getMaxBufferBytes(),

@@ -63,6 +63,26 @@ public final class LogLinePatternParser {
         return renderRaw(content, level, timestamp, threadName, loggerName, throwableString, mdcContext, tokens);
     }
 
+    public static void formatRawTo(StringBuilder target,
+                                   String traceId,
+                                   String content,
+                                   String level,
+                                   long timestamp,
+                                   String threadName,
+                                   String loggerName,
+                                   String throwableString,
+                                   Map<String, String> mdcContext,
+                                   String pattern) {
+        if (target == null) {
+            return;
+        }
+        String safePattern = (pattern == null || pattern.isEmpty())
+                ? LogLineDefaults.getEffectivePattern()
+                : pattern;
+        List<PatternToken> tokens = CACHE.computeIfAbsent(safePattern, LogLinePatternParser::compile);
+        renderRawTo(target, content, level, timestamp, threadName, loggerName, throwableString, mdcContext, tokens);
+    }
+
     public static void invalidateCache() {
         CACHE.clear();
         DTF_CACHE.clear();
@@ -115,6 +135,20 @@ public final class LogLinePatternParser {
             token.appendRawTo(sb, content, level, timestamp, threadName, loggerName, throwableString, mdcContext);
         }
         return sb.toString();
+    }
+
+    private static void renderRawTo(StringBuilder target,
+                                    String content,
+                                    String level,
+                                    long timestamp,
+                                    String threadName,
+                                    String loggerName,
+                                    String throwableString,
+                                    Map<String, String> mdcContext,
+                                    List<PatternToken> tokens) {
+        for (PatternToken token : tokens) {
+            token.appendRawTo(target, content, level, timestamp, threadName, loggerName, throwableString, mdcContext);
+        }
     }
 
     private static int parseIntOrZero(String value) {

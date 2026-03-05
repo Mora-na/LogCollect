@@ -34,8 +34,19 @@ class LogCollectPipelineManagerTest extends CoreUnitTestBase {
         manager.registerContext(null);
         manager.registerContext(context);
 
-        PipelineQueue queue = (PipelineQueue) context.getPipelineQueue();
-        queue.offer(raw(context, "manager-msg", "INFO"));
+        PipelineRingBuffer ringBuffer = (PipelineRingBuffer) context.getPipelineQueue();
+        long seq = ringBuffer.tryClaim();
+        MutableRawLogRecord slot = ringBuffer.getSlot(seq);
+        slot.populate(
+                "manager-msg",
+                "INFO",
+                "ut.logger",
+                "main",
+                System.currentTimeMillis(),
+                context.getTraceId(),
+                null,
+                java.util.Collections.emptyMap());
+        ringBuffer.publish(seq);
         Thread.sleep(20L);
 
         manager.closeContext(null);
@@ -60,22 +71,10 @@ class LogCollectPipelineManagerTest extends CoreUnitTestBase {
         config.setEnableSanitize(false);
         config.setEnableMask(false);
         config.setUseBuffer(true);
-        config.setPipelineQueueCapacity(8);
+        config.setPipelineRingBufferCapacity(8);
         config.setPipelineBackpressureWarning(0.6d);
         config.setPipelineBackpressureCritical(0.9d);
         config.setPipelineHandoffTimeoutMs(1);
         return config;
-    }
-
-    private RawLogRecord raw(LogCollectContext context, String content, String level) {
-        return new RawLogRecord(
-                content,
-                null,
-                level,
-                "ut.logger",
-                "main",
-                System.currentTimeMillis(),
-                java.util.Collections.emptyMap(),
-                context);
     }
 }

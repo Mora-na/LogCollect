@@ -103,11 +103,11 @@ public class LogCollectConfigValidator implements SmartInitializingSingleton {
         if (consumerThreads < 1 || consumerThreads > 16) {
             LogCollectInternalLogger.warn("consumer-threads={} unusual. Recommended range: 1~4.", consumerThreads);
         }
-        int queueCapacity = properties.getGlobal().getPipeline().getQueueCapacity();
-        if ((queueCapacity & (queueCapacity - 1)) != 0) {
+        int ringCapacity = properties.getGlobal().getPipeline().getRingBufferCapacity();
+        if ((ringCapacity & (ringCapacity - 1)) != 0) {
             LogCollectInternalLogger.info(
-                    "pipeline.queue-capacity={} is not a power of 2. Some queue implementations may round up.",
-                    queueCapacity);
+                    "pipeline.ring-buffer-capacity={} is not a power of 2. RingBuffer will auto round up.",
+                    ringCapacity);
         }
     }
 }

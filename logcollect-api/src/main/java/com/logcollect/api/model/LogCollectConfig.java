@@ -21,7 +21,14 @@ public class LogCollectConfig {
     private CollectMode collectMode = CollectMode.AUTO;
     private CollectMode effectiveCollectMode;
     private boolean pipelineEnabled = true;
-    private int pipelineQueueCapacity = 8192;
+    /**
+     * @deprecated replaced by pipelineRingBufferCapacity in v2.1.
+     */
+    private int pipelineQueueCapacity = 4096;
+    private int pipelineRingBufferCapacity = 4096;
+    private int pipelineOverflowQueueCapacity = 1024;
+    private int pipelineUnpublishedSlotTimeoutMs = 100;
+    private String pipelineConsumerIdleStrategy = "PARK";
     private int pipelineConsumerThreads = 2;
     private double pipelineBackpressureWarning = 0.7d;
     private double pipelineBackpressureCritical = 0.9d;
@@ -35,6 +42,7 @@ public class LogCollectConfig {
     private long globalBufferTotalMaxBytes = 100L * 1024 * 1024;
     private long globalBufferHardCeilingBytes = 0L;
     private double globalBufferEstimationFactor = 1.0d;
+    private long bufferMemorySyncThresholdBytes = 4096L;
 
     // ===== 熔断降级配置 =====
     private boolean enableDegrade = true;
@@ -160,6 +168,40 @@ public class LogCollectConfig {
 
     public void setPipelineQueueCapacity(int pipelineQueueCapacity) {
         this.pipelineQueueCapacity = pipelineQueueCapacity;
+        this.pipelineRingBufferCapacity = pipelineQueueCapacity;
+    }
+
+    public int getPipelineRingBufferCapacity() {
+        return pipelineRingBufferCapacity;
+    }
+
+    public void setPipelineRingBufferCapacity(int pipelineRingBufferCapacity) {
+        this.pipelineRingBufferCapacity = pipelineRingBufferCapacity;
+        this.pipelineQueueCapacity = pipelineRingBufferCapacity;
+    }
+
+    public int getPipelineOverflowQueueCapacity() {
+        return pipelineOverflowQueueCapacity;
+    }
+
+    public void setPipelineOverflowQueueCapacity(int pipelineOverflowQueueCapacity) {
+        this.pipelineOverflowQueueCapacity = pipelineOverflowQueueCapacity;
+    }
+
+    public int getPipelineUnpublishedSlotTimeoutMs() {
+        return pipelineUnpublishedSlotTimeoutMs;
+    }
+
+    public void setPipelineUnpublishedSlotTimeoutMs(int pipelineUnpublishedSlotTimeoutMs) {
+        this.pipelineUnpublishedSlotTimeoutMs = pipelineUnpublishedSlotTimeoutMs;
+    }
+
+    public String getPipelineConsumerIdleStrategy() {
+        return pipelineConsumerIdleStrategy;
+    }
+
+    public void setPipelineConsumerIdleStrategy(String pipelineConsumerIdleStrategy) {
+        this.pipelineConsumerIdleStrategy = pipelineConsumerIdleStrategy;
     }
 
     public int getPipelineConsumerThreads() {
@@ -248,6 +290,14 @@ public class LogCollectConfig {
 
     public void setGlobalBufferEstimationFactor(double globalBufferEstimationFactor) {
         this.globalBufferEstimationFactor = globalBufferEstimationFactor;
+    }
+
+    public long getBufferMemorySyncThresholdBytes() {
+        return bufferMemorySyncThresholdBytes;
+    }
+
+    public void setBufferMemorySyncThresholdBytes(long bufferMemorySyncThresholdBytes) {
+        this.bufferMemorySyncThresholdBytes = bufferMemorySyncThresholdBytes;
     }
 
     public boolean isEnableDegrade() {

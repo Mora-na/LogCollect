@@ -70,10 +70,9 @@ public final class LogCollectPipelineManager {
             return;
         }
         LogCollectConfig config = context.getConfig();
-        int queueCapacity = config == null ? 8192 : Math.max(1, config.getPipelineQueueCapacity());
-        double warning = config == null ? 0.7d : config.getPipelineBackpressureWarning();
-        double critical = config == null ? 0.9d : config.getPipelineBackpressureCritical();
-        context.setPipelineQueue(new PipelineQueue(queueCapacity, warning, critical));
+        int ringCapacity = config == null ? 4096 : Math.max(2, config.getPipelineRingBufferCapacity());
+        int overflowCapacity = config == null ? 1024 : Math.max(1, config.getPipelineOverflowQueueCapacity());
+        context.setPipelineQueue(new PipelineRingBuffer(ringCapacity, overflowCapacity));
 
         PipelineConsumer consumer = selectConsumer(context);
         if (consumer != null) {
@@ -100,7 +99,8 @@ public final class LogCollectPipelineManager {
         long handoffTimeoutMs = 5L;
         LogCollectConfig config = context.getConfig();
         if (config != null) {
-            handoffTimeoutMs = Math.max(1L, config.getPipelineHandoffTimeoutMs());
+            handoffTimeoutMs = Math.max(1L, config.getPipelineHandoffTimeoutMs())
+                    + Math.max(1L, config.getPipelineUnpublishedSlotTimeoutMs());
         }
         consumer.closeAndFlush(context, TimeUnit.MILLISECONDS.toNanos(handoffTimeoutMs));
     }

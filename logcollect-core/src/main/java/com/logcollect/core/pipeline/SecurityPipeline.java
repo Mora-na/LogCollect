@@ -103,6 +103,34 @@ public class SecurityPipeline {
                                                            Map<String, String> mdcContext,
                                                            SecurityMetrics metrics,
                                                            long deadlineNanos) {
+        MutableProcessedLogRecord mutable = new MutableProcessedLogRecord();
+        processRawInto(traceId, content, level, timestamp, threadName, loggerName, throwableString,
+                mdcContext, metrics, deadlineNanos, mutable);
+        return new ProcessedLogRecord(
+                mutable.getTraceId(),
+                mutable.getProcessedMessage(),
+                mutable.getLevel(),
+                mutable.getTimestamp(),
+                mutable.getThreadName(),
+                mutable.getLoggerName(),
+                mutable.getProcessedThrowable(),
+                mutable.getMdcContext());
+    }
+
+    public void processRawInto(String traceId,
+                               String content,
+                               String level,
+                               long timestamp,
+                               String threadName,
+                               String loggerName,
+                               String throwableString,
+                               Map<String, String> mdcContext,
+                               SecurityMetrics metrics,
+                               long deadlineNanos,
+                               MutableProcessedLogRecord target) {
+        if (target == null) {
+            return;
+        }
         SecurityMetrics metricsRef = metrics == null ? SecurityMetrics.NOOP : metrics;
 
         SinglePassSecurityProcessor.ProcessResult contentResult;
@@ -157,15 +185,15 @@ public class SecurityPipeline {
             safeMdc = sanitizeMdc(mdcContext);
         }
 
-        return new ProcessedLogRecord(
-                traceId,
-                guardedContent,
-                level,
-                timestamp,
-                threadName,
-                loggerName,
-                guardedThrowable,
-                safeMdc);
+        target.traceId = traceId;
+        target.processedMessage = guardedContent;
+        target.level = level;
+        target.timestamp = timestamp;
+        target.threadName = threadName;
+        target.loggerName = loggerName;
+        target.processedThrowable = guardedThrowable;
+        target.mdcContext = safeMdc;
+        target.fastPathHit = contentResult.isFastPathHit() || throwableResult.isFastPathHit();
     }
 
     private boolean isTimedOut(long deadlineNanos) {

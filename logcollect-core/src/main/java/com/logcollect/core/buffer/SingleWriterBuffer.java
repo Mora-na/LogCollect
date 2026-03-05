@@ -27,7 +27,7 @@ public final class SingleWriterBuffer {
     public SingleWriterBuffer(int maxSize, long maxBytes, int initialCapacity) {
         this.maxSize = Math.max(1, maxSize);
         this.maxBytes = maxBytes;
-        this.entries = new ArrayList<LogEntry>(Math.max(1, Math.min(initialCapacity, this.maxSize)));
+        this.entries = new ArrayList<LogEntry>(this.maxSize);
     }
 
     public void offer(LogEntry entry, long entryBytes) {

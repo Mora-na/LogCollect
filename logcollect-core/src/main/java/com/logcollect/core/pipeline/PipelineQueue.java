@@ -4,7 +4,10 @@ import java.util.concurrent.ArrayBlockingQueue;
 
 /**
  * 业务线程与 Consumer 线程之间的有界传输队列。
+ *
+ * @deprecated v2.1 起由 {@link PipelineRingBuffer} 取代，仅保留兼容。
  */
+@Deprecated
 public final class PipelineQueue {
 
     public enum OfferResult {

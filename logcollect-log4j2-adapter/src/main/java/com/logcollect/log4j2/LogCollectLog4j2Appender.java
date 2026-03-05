@@ -24,10 +24,7 @@ import com.logcollect.core.context.LogCollectIgnoreManager;
 import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.internal.LogCollectInternalLogger;
-import com.logcollect.core.pipeline.LogCollectPipelineManager;
-import com.logcollect.core.pipeline.PipelineQueue;
-import com.logcollect.core.pipeline.RawLogRecord;
-import com.logcollect.core.pipeline.SecurityPipeline;
+import com.logcollect.core.pipeline.*;
 import com.logcollect.core.security.DefaultLogMasker;
 import com.logcollect.core.security.DefaultLogSanitizer;
 import com.logcollect.core.security.QuickSanitizer;
@@ -130,7 +127,7 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                 return;
             }
             if (config != null && config.isPipelineEnabled()
-                    && context.getPipelineQueue() instanceof PipelineQueue
+                    && context.getPipelineQueue() != null
                     && pipelineManager != null) {
                 appendToPipeline(event, context, level, loggerName, m);
                 return;
@@ -211,56 +208,105 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                                   String level,
                                   String loggerName,
                                   LogCollectMetrics metrics) {
-        if (context.isClosed()) {
+        if (context.isClosed() || context.isClosing()) {
             context.incrementDiscardedCount();
             metrics.incrementDiscarded(context.getMethodSignature(), "buffer_closed_late_arrival");
             return;
         }
-        PipelineQueue queue = (PipelineQueue) context.getPipelineQueue();
+        Object queue = context.getPipelineQueue();
         if (queue == null) {
             return;
         }
-        Map<String, String> mdcCopy = new HashMap<String, String>(event.getContextData().toMap());
-        RawLogRecord record = new RawLogRecord(
-                resolveRawMessage(event),
-                extractThrowableString(event),
-                level,
-                loggerName,
-                safeIntern(event.getThreadName()),
-                event.getTimeMillis(),
-                mdcCopy,
-                context);
 
-        PipelineQueue.OfferResult result = queue.offer(record);
-        metrics.updatePipelineQueueUtilization(context.getMethodSignature(), queue.utilization());
-        if (result == PipelineQueue.OfferResult.ACCEPTED) {
+        if (queue instanceof PipelineRingBuffer) {
+            PipelineRingBuffer ringBuffer = (PipelineRingBuffer) queue;
+            long sequence = ringBuffer.tryClaim();
+            if (sequence >= 0L) {
+                MutableRawLogRecord slot = ringBuffer.getSlot(sequence);
+                slot.populate(
+                        resolveRawMessage(event),
+                        level,
+                        loggerName,
+                        safeIntern(event.getThreadName()),
+                        event.getTimeMillis(),
+                        context.getTraceId(),
+                        extractThrowableString(event),
+                        new HashMap<String, String>(event.getContextData().toMap()));
+                ringBuffer.publish(sequence);
+                metrics.updatePipelineQueueUtilization(context.getMethodSignature(), ringBuffer.utilization());
+                return;
+            }
+
+            context.incrementDiscardedCount();
+            metrics.incrementPipelineBackpressure(context.getMethodSignature(), level);
+            metrics.updatePipelineQueueUtilization(context.getMethodSignature(), ringBuffer.utilization());
+
+            if (isWarnOrAbove(level)) {
+                RawLogRecord overflow = new RawLogRecord(
+                        resolveRawMessage(event),
+                        extractThrowableString(event),
+                        level,
+                        loggerName,
+                        safeIntern(event.getThreadName()),
+                        event.getTimeMillis(),
+                        new HashMap<String, String>(event.getContextData().toMap()),
+                        context);
+                if (ringBuffer.offerOverflow(overflow)) {
+                    metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
+                    return;
+                }
+                metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
+                DegradeFallbackHandler.handleDegraded(
+                        context,
+                        DegradeReason.PIPELINE_QUEUE_FULL.code(),
+                        Collections.singletonList(overflow.content),
+                        overflow.level);
+                return;
+            }
+            metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
             return;
         }
-        context.incrementDiscardedCount();
-        if (result == PipelineQueue.OfferResult.FULL) {
-            metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
+
+        if (queue instanceof PipelineQueue) {
+            PipelineQueue legacyQueue = (PipelineQueue) queue;
+            RawLogRecord raw = new RawLogRecord(
+                    resolveRawMessage(event),
+                    extractThrowableString(event),
+                    level,
+                    loggerName,
+                    safeIntern(event.getThreadName()),
+                    event.getTimeMillis(),
+                    new HashMap<String, String>(event.getContextData().toMap()),
+                    context);
+            PipelineQueue.OfferResult result = legacyQueue.offer(raw);
+            metrics.updatePipelineQueueUtilization(context.getMethodSignature(), legacyQueue.utilization());
+            if (result == PipelineQueue.OfferResult.ACCEPTED) {
+                return;
+            }
+
+            context.incrementDiscardedCount();
             metrics.incrementPipelineBackpressure(context.getMethodSignature(), level);
+            if (result == PipelineQueue.OfferResult.BACKPRESSURE_REJECTED) {
+                metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
+                return;
+            }
+
             if (isWarnOrAbove(level)) {
-                degradeAsyncSubmit(context, record, DegradeReason.PIPELINE_QUEUE_FULL);
+                metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
+                DegradeFallbackHandler.handleDegraded(
+                        context,
+                        DegradeReason.PIPELINE_QUEUE_FULL.code(),
+                        Collections.singletonList(raw.content),
+                        raw.level);
+            } else {
+                metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
             }
             return;
         }
-        metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
-        metrics.incrementPipelineBackpressure(context.getMethodSignature(), level);
-        if (isWarnOrAbove(level)) {
-            degradeAsyncSubmit(context, record, DegradeReason.PIPELINE_BACKPRESSURE);
-        }
-    }
 
-    private void degradeAsyncSubmit(LogCollectContext context, RawLogRecord record, DegradeReason reason) {
-        if (context == null || record == null || reason == null) {
-            return;
-        }
-        AsyncFlushExecutor.submitOrRun(() -> DegradeFallbackHandler.handleDegraded(
-                context,
-                reason.code(),
-                Collections.singletonList(record.content),
-                record.level));
+        context.incrementDiscardedCount();
+        metrics.incrementPipelineBackpressure(context.getMethodSignature(), level);
+        metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
     }
 
     private SecurityPipeline.ProcessedLogRecord securityProcess(LogCollectContext context,

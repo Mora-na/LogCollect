@@ -228,6 +228,7 @@ public class LogCollectProperties {
         private String hardCeilingBytes;
         private String counterMode = "EXACT_CAS";
         private double estimationFactor = 1.0d;
+        private long memorySyncThresholdBytes = 4096L;
 
         public boolean isEnabled() {
             return enabled;
@@ -293,6 +294,14 @@ public class LogCollectProperties {
             this.estimationFactor = estimationFactor;
         }
 
+        public long getMemorySyncThresholdBytes() {
+            return memorySyncThresholdBytes;
+        }
+
+        public void setMemorySyncThresholdBytes(long memorySyncThresholdBytes) {
+            this.memorySyncThresholdBytes = memorySyncThresholdBytes;
+        }
+
         public long getMaxBytesValue() {
             return DataSizeParser.parseToBytes(maxBytes);
         }
@@ -311,7 +320,14 @@ public class LogCollectProperties {
 
     public static class Pipeline {
         private boolean enabled = true;
-        private int queueCapacity = 8192;
+        /**
+         * @deprecated replaced by ringBufferCapacity in v2.1.
+         */
+        private int queueCapacity = 4096;
+        private int ringBufferCapacity = 4096;
+        private int overflowQueueCapacity = 1024;
+        private int unpublishedSlotTimeoutMs = 100;
+        private String consumerIdleStrategy = "PARK";
         private int consumerThreads = 2;
         private double backpressureWarning = 0.7d;
         private double backpressureCritical = 0.9d;
@@ -331,6 +347,40 @@ public class LogCollectProperties {
 
         public void setQueueCapacity(int queueCapacity) {
             this.queueCapacity = queueCapacity;
+            this.ringBufferCapacity = queueCapacity;
+        }
+
+        public int getRingBufferCapacity() {
+            return ringBufferCapacity;
+        }
+
+        public void setRingBufferCapacity(int ringBufferCapacity) {
+            this.ringBufferCapacity = ringBufferCapacity;
+            this.queueCapacity = ringBufferCapacity;
+        }
+
+        public int getOverflowQueueCapacity() {
+            return overflowQueueCapacity;
+        }
+
+        public void setOverflowQueueCapacity(int overflowQueueCapacity) {
+            this.overflowQueueCapacity = overflowQueueCapacity;
+        }
+
+        public int getUnpublishedSlotTimeoutMs() {
+            return unpublishedSlotTimeoutMs;
+        }
+
+        public void setUnpublishedSlotTimeoutMs(int unpublishedSlotTimeoutMs) {
+            this.unpublishedSlotTimeoutMs = unpublishedSlotTimeoutMs;
+        }
+
+        public String getConsumerIdleStrategy() {
+            return consumerIdleStrategy;
+        }
+
+        public void setConsumerIdleStrategy(String consumerIdleStrategy) {
+            this.consumerIdleStrategy = consumerIdleStrategy;
         }
 
         public int getConsumerThreads() {
@@ -728,6 +778,7 @@ public class LogCollectProperties {
         private Integer maxNestingDepth;
         private Boolean enableMetrics;
         private Integer pipelineTimeoutMs;
+        private Integer pipelineRingBufferCapacity;
         private Integer pipelineQueueCapacity;
 
         public String getLevel() {
@@ -832,6 +883,16 @@ public class LogCollectProperties {
 
         public void setPipelineQueueCapacity(Integer pipelineQueueCapacity) {
             this.pipelineQueueCapacity = pipelineQueueCapacity;
+            this.pipelineRingBufferCapacity = pipelineQueueCapacity;
+        }
+
+        public Integer getPipelineRingBufferCapacity() {
+            return pipelineRingBufferCapacity;
+        }
+
+        public void setPipelineRingBufferCapacity(Integer pipelineRingBufferCapacity) {
+            this.pipelineRingBufferCapacity = pipelineRingBufferCapacity;
+            this.pipelineQueueCapacity = pipelineRingBufferCapacity;
         }
     }
 

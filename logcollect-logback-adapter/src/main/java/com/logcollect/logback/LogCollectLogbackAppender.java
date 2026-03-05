@@ -29,10 +29,7 @@ import com.logcollect.core.context.LogCollectIgnoreManager;
 import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.internal.LogCollectInternalLogger;
-import com.logcollect.core.pipeline.LogCollectPipelineManager;
-import com.logcollect.core.pipeline.PipelineQueue;
-import com.logcollect.core.pipeline.RawLogRecord;
-import com.logcollect.core.pipeline.SecurityPipeline;
+import com.logcollect.core.pipeline.*;
 import com.logcollect.core.security.DefaultLogMasker;
 import com.logcollect.core.security.DefaultLogSanitizer;
 import com.logcollect.core.security.QuickSanitizer;
@@ -40,7 +37,6 @@ import com.logcollect.core.security.SecurityComponentRegistry;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -112,7 +108,7 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                 return;
             }
             if (config != null && config.isPipelineEnabled()
-                    && context.getPipelineQueue() instanceof PipelineQueue
+                    && context.getPipelineQueue() != null
                     && pipelineManager != null) {
                 appendToPipeline(event, context, level, loggerName, mdc, m);
                 return;
@@ -195,66 +191,106 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                                   String loggerName,
                                   Map<String, String> mdc,
                                   LogCollectMetrics metrics) {
-        if (context.isClosed()) {
+        if (context.isClosed() || context.isClosing()) {
             context.incrementDiscardedCount();
             metrics.incrementDiscarded(context.getMethodSignature(), "buffer_closed_late_arrival");
             return;
         }
-        PipelineQueue queue = (PipelineQueue) context.getPipelineQueue();
+        Object queue = context.getPipelineQueue();
         if (queue == null) {
             return;
         }
 
-        String content = resolveRawMessage(event);
-        String throwable = extractThrowableString(event);
-        Map<String, String> mdcCopy = copyMdc(mdc);
-        RawLogRecord raw = new RawLogRecord(
-                content,
-                throwable,
-                level,
-                loggerName,
-                event.getThreadName(),
-                event.getTimeStamp(),
-                mdcCopy,
-                context);
+        if (queue instanceof PipelineRingBuffer) {
+            PipelineRingBuffer ringBuffer = (PipelineRingBuffer) queue;
+            long sequence = ringBuffer.tryClaim();
+            if (sequence >= 0L) {
+                MutableRawLogRecord slot = ringBuffer.getSlot(sequence);
+                slot.populate(
+                        resolveRawMessage(event),
+                        level,
+                        loggerName,
+                        event.getThreadName(),
+                        event.getTimeStamp(),
+                        context.getTraceId(),
+                        extractThrowableString(event),
+                        mdc);
+                ringBuffer.publish(sequence);
+                metrics.updatePipelineQueueUtilization(context.getMethodSignature(), ringBuffer.utilization());
+                return;
+            }
 
-        PipelineQueue.OfferResult result = queue.offer(raw);
-        metrics.updatePipelineQueueUtilization(context.getMethodSignature(), queue.utilization());
-        if (result == PipelineQueue.OfferResult.ACCEPTED) {
+            context.incrementDiscardedCount();
+            metrics.incrementPipelineBackpressure(context.getMethodSignature(), level);
+            metrics.updatePipelineQueueUtilization(context.getMethodSignature(), ringBuffer.utilization());
+
+            if (isWarnOrAbove(level)) {
+                RawLogRecord overflow = new RawLogRecord(
+                        resolveRawMessage(event),
+                        extractThrowableString(event),
+                        level,
+                        loggerName,
+                        event.getThreadName(),
+                        event.getTimeStamp(),
+                        mdc == null ? Collections.emptyMap() : mdc,
+                        context);
+                if (ringBuffer.offerOverflow(overflow)) {
+                    metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
+                    return;
+                }
+                metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
+                DegradeFallbackHandler.handleDegraded(
+                        context,
+                        DegradeReason.PIPELINE_QUEUE_FULL.code(),
+                        Collections.singletonList(overflow.content),
+                        overflow.level);
+                return;
+            }
+            metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
             return;
         }
-        context.incrementDiscardedCount();
-        if (result == PipelineQueue.OfferResult.FULL) {
-            metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
+
+        if (queue instanceof PipelineQueue) {
+            PipelineQueue legacyQueue = (PipelineQueue) queue;
+            RawLogRecord raw = new RawLogRecord(
+                    resolveRawMessage(event),
+                    extractThrowableString(event),
+                    level,
+                    loggerName,
+                    event.getThreadName(),
+                    event.getTimeStamp(),
+                    mdc == null ? Collections.<String, String>emptyMap() : mdc,
+                    context);
+            PipelineQueue.OfferResult result = legacyQueue.offer(raw);
+            metrics.updatePipelineQueueUtilization(context.getMethodSignature(), legacyQueue.utilization());
+            if (result == PipelineQueue.OfferResult.ACCEPTED) {
+                return;
+            }
+
+            context.incrementDiscardedCount();
             metrics.incrementPipelineBackpressure(context.getMethodSignature(), level);
+
+            if (result == PipelineQueue.OfferResult.BACKPRESSURE_REJECTED) {
+                metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
+                return;
+            }
+
             if (isWarnOrAbove(level)) {
-                degradeAsyncSubmit(context, raw, DegradeReason.PIPELINE_QUEUE_FULL);
+                metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
+                DegradeFallbackHandler.handleDegraded(
+                        context,
+                        DegradeReason.PIPELINE_QUEUE_FULL.code(),
+                        Collections.singletonList(raw.content),
+                        raw.level);
+            } else {
+                metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
             }
             return;
         }
-        metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
+
+        context.incrementDiscardedCount();
         metrics.incrementPipelineBackpressure(context.getMethodSignature(), level);
-        if (isWarnOrAbove(level)) {
-            degradeAsyncSubmit(context, raw, DegradeReason.PIPELINE_BACKPRESSURE);
-        }
-    }
-
-    private Map<String, String> copyMdc(Map<String, String> mdc) {
-        if (mdc == null || mdc.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        return new HashMap<String, String>(mdc);
-    }
-
-    private void degradeAsyncSubmit(LogCollectContext context, RawLogRecord record, DegradeReason reason) {
-        if (context == null || record == null || reason == null) {
-            return;
-        }
-        AsyncFlushExecutor.submitOrRun(() -> DegradeFallbackHandler.handleDegraded(
-                context,
-                reason.code(),
-                Collections.singletonList(record.content),
-                record.level));
+        metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
     }
 
     private SecurityPipeline.ProcessedLogRecord securityProcess(LogCollectContext context,

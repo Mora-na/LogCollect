@@ -56,6 +56,11 @@ public @interface LogCollect {
     boolean enableMask() default true;
     Class<? extends LogMasker> masker() default LogMasker.class;
     int pipelineTimeoutMs() default 50;
+    int pipelineRingBufferCapacity() default -1;
+    /**
+     * @deprecated replaced by pipelineRingBufferCapacity in v2.1.
+     */
+    @Deprecated
     int pipelineQueueCapacity() default 8192;
 
     // ===== 高级配置 =====

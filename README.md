@@ -48,6 +48,7 @@
 **运维与参考**
 
 - [13 生产部署指南](#13-生产部署指南)
+- [JVM 调优指南](docs/jvm-tuning-guide.md)
 - [14 常见问题](#14-常见问题)
 - [15 开发注意事项](#15-开发注意事项)
 
@@ -88,7 +89,7 @@
 │                        @LogCollect 核心特性                          │
 │                                                                     │
 │  🎯 精准聚合     仅捕获指定方法（含全部异步子线程）的日志              │
-│  ⚡ 极致性能     异步非阻塞 + 双阈值缓冲 + 无锁队列                  │
+│  ⚡ 极致性能     异步非阻塞 + 预分配环形缓冲 + 单写者刷写             │
 │  🔄 双收集模式   单条入库 / 聚合刷写，注解一键切换                    │
 │  🔗 上下文贯穿   LogCollectContext 跨 before → 收集 → after 全生命周期│
 │  🔒 纵深安全     9 层防御：注入过滤 / 脱敏 / 防 SQL 注入 / 防泄漏    │
@@ -265,31 +266,28 @@ public class ReconcileService {
 │ 2. 业务方法执行                                                │
 │    每条日志 → Appender 拦截 → 检查 MDC traceId                │
 │    ↓ 匹配                                                     │
-│ 3. 收集过滤                                                   │
-│    级别/Logger 过滤 → handler.shouldCollect() 自定义过滤       │
-│    ↓ 通过                                                     │
-│ 4. 安全流水线（唯一入口）                                       │
-│    SecurityPipeline: sanitize + mask                          │
-│    FastPathDetector 位掩码预扫描，干净文本直接透传              │
+│ 3. Appender 热路径（零分配主路径）                              │
+│    级别/Logger 过滤 → RingBuffer tryClaim                      │
+│    → 槽位 populate → publish                                   │
+│    （缓冲区满：WARN/ERROR 进入 overflow，低等级按策略丢弃）      │
+│    ↓                                                          │
+│ 4. Consumer 重逻辑                                              │
+│    shouldCollect() → SecurityPipeline(sanitize + mask + timeout)│
 │    ↓                                                          │
 │ 5. 模式分发                                                    │
-│    ├─ SINGLE:    构建 LogEntry → SingleModeBuffer              │
-│    └─ AGGREGATE: formatRaw → LogSegment → AggregateModeBuffer  │
+│    ├─ SINGLE:    LogEntry → SingleWriterBuffer                 │
+│    └─ AGGREGATE: formatRawTo → AggregateDirectBuffer           │
 │    ↓                                                          │
-│ 6. 缓冲层（双阈值：条数 + 内存 + 溢出策略）                     │
-│    单条超限（> maxBufferBytes）走 Direct Flush                │
-│    ↓ 达到阈值或方法结束                                        │
-│ 7. 熔断层（CLOSED → OPEN → HALF_OPEN）                        │
-│    ↓ 允许写入                                                 │
-│ 8. Handler 调用                                                │
-│    ├─ SINGLE:    循环调用 handler.appendLog(ctx, entry)        │
-│    └─ AGGREGATE: 一次调用 handler.flushAggregatedLog(ctx, agg) │
+│ 6. flush / 持久化                                               │
+│    ├─ SINGLE:    循环 handler.appendLog(ctx, entry)            │
+│    └─ AGGREGATE: handler.flushAggregatedLog(ctx, agg)          │
 │    ↓ 失败                                                     │
-│ 9. 降级层（流量削峰 → 熔断 → 兜底存储 → 终极丢弃）              │
+│ 7. 熔断与降级                                                   │
+│    CLOSED → OPEN → HALF_OPEN + FILE/MEMORY/策略降级            │
 ├──────────────────────────────────────────────────────────────┤
-│11. AOP 后置（finally）                                        │
-│    设置 returnValue / error → flush 剩余缓冲                  │
-│    → handler.after(context) → 栈式上下文 pop                  │
+│ 8. AOP 后置（finally）                                         │
+│    markClosing → Consumer drain 到 producerCursor             │
+│    → final flush → handler.after(context) → 栈式上下文 pop     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -300,30 +298,30 @@ public class ReconcileService {
                             │
             ┌───────────────┴────────────────┐
             │      Appender 层（适配器）       │
-            │  提取字段（无参数消息优先模板直取）│
-            │  ★ 立即释放原始事件引用          │
-            │  ★ 异常堆栈提取为 String         │
+            │  过滤 + 字段提取 + RingBuffer写入 │
+            │  ★ tryClaim/getSlot/publish      │
+            │  ★ 满载时分级背压                │
             └───────────────┬────────────────┘
-                            │ Raw fields
+                            │ MutableRawLogRecord slot
             ┌───────────────┴────────────────┐
-            │     安全流水线（Core 层）        │
+            │     Consumer（Core 层）           │
+            │  ① shouldCollect                 │
             │  ① FastPathDetector 位掩码预扫描 │
             │  ② sanitize(content)            │
             │  ③ sanitizeThrowable()          │
             │  ④ mask(content/throwable)      │
-            │  ⑤ → ProcessedLogRecord         │
+            │  ⑤ → MutableProcessedLogRecord  │
             └───────────────┬────────────────┘
                             │
                ┌────────────┴───────────────┐
                │                            │
        ┌───────┴────────┐         ┌─────────┴──────────┐
-       │  SINGLE 缓冲区  │         │  AGGREGATE 缓冲区   │
-       │  LogEntry 入队   │         │  formatRaw → 字符串  │
-       │                 │         │  存 LogSegment      │
+       │  SINGLE 缓冲区  │         │  AGGREGATE 直聚合    │
+       │ SingleWriterBuffer│       │ AggregateDirectBuffer│
        └───────┬─────────┘         └─────────┬──────────┘
                │ flush                       │ flush
                ↓                             ↓
-   handler.appendLog(ctx, entry)   StringBuilder 拼接 → AggregatedLog
+   handler.appendLog(ctx, entry)   buildAndReset → AggregatedLog
    逐条结构化存储                   handler.flushAggregatedLog(ctx, agg)
 ```
 
@@ -352,55 +350,57 @@ logcollect:
 
 启动时框架会检查 ROOT 上的同步 I/O Appender（如未异步包装的 `ConsoleAppender` / `FileAppender`），并输出性能告警。控制台 pattern 通过 `ConsolePatternDetector` SPI 自动探测，经 `PatternCleaner + PatternValidator` 清理校验后写入 `LogLineDefaults`。
 
-### 1.4 V2 双阶段流水线升级（本次实现）
+### 1.4 V2.1 双阶段流水线升级（退化修复版）
 
-#### 1.4.1 原设计缺陷（v1.x）
+#### 1.4.1 原设计缺陷（V2 基线）
 
-- 业务线程在 Appender 内执行完整安全流水线（sanitize + mask）和 buffer/flush 分支判断，热路径负担过重。
-- `SingleModeBuffer`/`AggregateModeBuffer` 依赖多原子变量 + CAS 结构，在高并发场景存在额外 cache line 争用。
-- 安全处理缺少“总预算”语义，超大输入会放大单条日志处理抖动。
-- Appender 与 Buffer 强耦合，业务线程与持久化线程边界不清晰，扩展 pipeline/backpressure 成本高。
+- **GC 全面退化**：V2 生产者与消费者热路径存在逐事件对象分配（`RawLogRecord`、队列节点、中间处理对象），跨线程生命周期拉长后放大 Young/Old GC 压力。
+- **e2e 多线程扩展比下降**：1 线程收益明显，但 8 线程受 Appender 锁竞争和队列竞争限制，`8t/1t` 比值回落。
+- **关闭协议复杂**：关闭窗口依赖回投和线程接管，边界判定复杂、维护成本高。
+- **AGGREGATE 中间对象冗余**：`ProcessedLogRecord -> LogEntry -> LogSegment -> StringBuilder` 链路过长，存在可消除分配。
 
-#### 1.4.2 升级方案落地（v2）
+#### 1.4.2 最优设计落地（V2.1）
 
-- **Phase 1（业务线程）只做轻量捕获**  
-  在 `LogCollectLogbackAppender` / `LogCollectLog4j2Appender` 中改为：`MDC + level/logger 过滤 -> 提取原始字段 -> RawLogRecord 入 PipelineQueue`。
-- **Phase 2（Consumer 线程）处理重逻辑**  
-  新增 `RawLogRecord`、`PipelineQueue`、`PipelineConsumer`、`LogCollectPipelineManager`，Consumer 负责 `shouldCollect -> SecurityPipeline -> LogEntry 构建 -> SingleWriterBuffer 入队 -> 阈值 flush`。
-- **单写者 Buffer**  
-  新增 `SingleWriterBuffer`，以 `ArrayList + plain int/long` 取代高频 CAS 计数路径，减少同步开销与对象分配。
-- **所有权转移协议**  
-  在 `LogCollectAspect` 的 `finally` 中接入 `pipelineManager.closeContext()`：`markClosing -> handoff -> drain 残留 -> final flush -> markClosed`。
-- **closing 竞争窗口修复**  
-  `PipelineConsumer` 在检测到 `closing=true` 后，不再继续向 `SingleWriterBuffer` 写入；对已弹出的记录执行回投（`PipelineQueue.forceOffer`）并交由 finally 线程接管，避免双写者竞争。
-- **全局内存管理重构**  
-  `GlobalBufferMemoryManager` 重构为 `AtomicLong + LongAdder` 双模式，`forceAllocate` 统一 CAS 精确路径，修复 STRIPED 模式下强制分配瞬时超射。
-- **安全流水线总预算**  
-  `SecurityPipeline` 新增 deadline 入口 `processRawRecordWithDeadline(...)`，支持总超时预算并记录超时指标。
-- **动态配置与参数面扩展**  
-  新增 `pipeline.*`、`security.pipeline-timeout-ms`，并支持注解级 `@LogCollect(pipelineTimeoutMs, pipelineQueueCapacity)` 覆盖。
+| 优化项 | 升级方案 | 代码落地 | 优化效果 |
+|------|---------|---------|---------|
+| S1 | MPSC 预分配环形缓冲区替代链式队列 | `PipelineRingBuffer` + `MutableRawLogRecord` + Appender `tryClaim/getSlot/publish` | 生产者热路径零分配；队列节点分配消除 |
+| S2 | Consumer 中间对象复用 | `MutableProcessedLogRecord` + `SecurityPipeline.processRawInto(...)` | 消费者不再逐事件 new `ProcessedLogRecord` |
+| S3 | AGGREGATE 直格式化 | `AggregateDirectBuffer` + `LogLinePatternParser.formatRawTo(...)` | 绕过 `LogEntry/LogSegment`，复用 `StringBuilder` |
+| S4 | Appender 去同步化 | Logback 适配器使用 `UnsynchronizedAppenderBase`（并保留线程安全数据结构） | 消除框架自身 `doAppend` 锁争用 |
+| S5 | SINGLE 单写者缓冲预分配 | `SingleWriterBuffer` 构造时按 `maxBufferSize` 预分配 | 消除 `ArrayList` 运行期扩容与拷贝 |
+| S6 | 全局内存记账批量化 | `BatchedMemoryAccountant`（阈值同步到 `GlobalBufferMemoryManager`） | 降低多 Consumer 下 CAS 频率与缓存争用 |
+| S7 | JVM 调优指导 | 新增 `docs/jvm-tuning-guide.md` | JDK17 场景可按建议参数进一步降低 GC 抖动 |
 
-#### 1.4.3 升级效果
+#### 1.4.3 关键设计变更（与旧设计缺陷一一对应）
 
-| 维度 | 升级前 | 升级后 |
-|------|--------|--------|
-| 业务线程热路径 | 完整安全处理 + Buffer 判定 | 轻量捕获 + 入队 |
-| 队列模型 | Buffer 直接承压 | 有界 `PipelineQueue` + 背压分级 |
-| Buffer 并发模型 | 多原子计数 + CAS | 单写者 `SingleWriterBuffer` |
-| 关闭语义 | AOP 直接 close buffer | `closing -> handoff -> drain -> final flush` |
-| 全局配额 | forceAllocate 在 STRIPED 路径存在精度风险 | forceAllocate 统一 CAS 精确控制 |
+| 原设计缺陷 | V2.1 方案 | 解决结果 |
+|-----------|-----------|---------|
+| 生产者逐事件 `new RawLogRecord + QueueNode` | 预分配 `PipelineRingBuffer` 槽位 + 序列发布 | 正常路径零分配，GC 源头下移 |
+| 消费者逐事件中间对象链路长 | `MutableProcessedLogRecord` 复用 + AGGREGATE 直写 | 消费者中间对象显著减少 |
+| AGGREGATE 依赖 `LogSegment` 队列 | `AggregateDirectBuffer` 直接聚合 | flush 前仅维护复用 `StringBuilder` |
+| Appender 锁竞争 | 无锁 Appender + CAS RingBuffer | 多线程写入抖动降低 |
+| 关闭阶段接管复杂 | `producerCursor/consumerCursor` 精确 drain + unpublished timeout | 关闭边界可判定、协议更简洁 |
+| 全局内存频繁 CAS | 本地批量记账后同步 | 降低高并发下全局计数争用 |
 
-#### 1.4.4 回归检查清单（方案逐条核对）
+#### 1.4.4 配置升级与兼容策略
 
-- [x] 双阶段架构落地：Appender 热路径迁移到 `RawLogRecord + PipelineQueue`。
-- [x] 新增单写者缓冲：`SingleWriterBuffer` 已接入 `LogCollectAspect` 的 pipeline 上下文构建。
-- [x] 所有权转移落地：`LogCollectPipelineManager.closeContext()` + `PipelineConsumer.closeAndFlush(...)`。
-- [x] closing 并发竞争回归：Consumer 关闭阶段回投记录，避免与 finally 线程并发写 buffer。
-- [x] 安全流水线 deadline：`SecurityPipeline.processRawRecordWithDeadline(...)` 已被 Consumer 使用。
-- [x] 全局内存管理重构：`GlobalBufferMemoryManager` 已改为 CAS/Adder 双计数并支持动态 limits。
-- [x] 新配置项落地：`logcollect.global.pipeline.*`、`logcollect.global.security.pipeline-timeout-ms`、注解级 `pipelineTimeoutMs/pipelineQueueCapacity`。
-- [x] 新降级原因落地：`PIPELINE_QUEUE_FULL`、`PIPELINE_BACKPRESSURE`、`BUFFER_CLOSED_LATE_ARRIVAL`。
-- [x] Metrics 扩展落地：pipeline queue utilization / consumer idle ratio / pipeline timeout / backpressure 计数。
+- 新增全局参数：`pipeline.ring-buffer-capacity`、`pipeline.overflow-queue-capacity`、`pipeline.unpublished-slot-timeout-ms`、`pipeline.consumer-idle-strategy`、`buffer.memory-sync-threshold-bytes`。
+- 注解新增：`@LogCollect(pipelineRingBufferCapacity=...)`。
+- 兼容保留：`pipeline.queue-capacity` 与 `@LogCollect(pipelineQueueCapacity)` 仍可用，但会映射到 ring 参数并输出迁移告警。
+- 热更新语义：`ring-buffer-capacity` 变更需要重建上下文（运行期变更会提示需重启生效）；其余新增参数按原有动态配置语义执行。
+
+#### 1.4.5 回归检查清单（方案逐条核对）
+
+- [x] S1：RingBuffer 主路径已接入 Logback/Log4j2 Appender，`PipelineQueue` 仅保留兼容。
+- [x] S2：Consumer 使用 `MutableProcessedLogRecord` 复用对象，安全流水线写入复用对象。
+- [x] S3：AGGREGATE 模式启用 `AggregateDirectBuffer` + `formatRawTo` 直写格式化。
+- [x] S4：Logback Appender 为无锁基类；并发路径仅使用线程安全结构（CAS/CLQ/LongAdder）。
+- [x] S5：`SingleWriterBuffer` 预分配容量，flush 后复用内部数组。
+- [x] S6：`BatchedMemoryAccountant` 已集成 Consumer，本地阈值同步到全局内存管理器。
+- [x] S7：新增 JVM 调优文档并在 README 引用。
+- [x] 关闭协议：`closeContext -> drainAndClose` 基于游标精确排空，支持未发布槽位超时跳过并记录指标。
+- [x] 配置迁移：旧 `queue-capacity` 自动映射新 key，注解旧参数同样映射。
+- [x] 回归验证：`mvn -q -Djacoco.skip=true test` 全仓通过。
 
 ---
 
@@ -529,15 +529,15 @@ public class ImportService {
 │  ┌──────┐  ┌──────┐  ┌──────┐        ┌─────────────────────────┐       │
 │  │Log 1 │→ │Log 2 │→ │Log N │ ────→  │ 批量循环调用 appendLog  │       │
 │  └──────┘  └──────┘  └──────┘        └─────────────────────────┘       │
-│   过滤+脱敏后逐条放入缓冲区    缓冲区: ConcurrentLinkedQueue<LogEntry>    │
+│   Consumer 串行写入 SingleWriterBuffer(ArrayList 预分配)                │
 │   达到阈值 / 方法结束 → flush  每次 flush 产生 N 次 handler 调用         │
 │                                                                         │
 │  AGGREGATE（聚合刷写模式）⭐ 默认                                        │
 │  ┌──────┐  ┌──────┐  ┌──────┐        ┌──────────────────────────────┐  │
 │  │Log 1 │→ │Log 2 │→ │Log N │ ────→  │ 一次调用 flushAggregatedLog │  │
 │  └──────┘  └──────┘  └──────┘        └──────────────────────────────┘  │
-│   过滤+脱敏后格式化为一行      缓冲区: ConcurrentLinkedQueue<LogSegment>  │
-│   达到阈值 / 方法结束 → flush  flush 时 StringBuilder 拼接，一次调用     │
+│   Consumer 直格式化到 AggregateDirectBuffer(StringBuilder 复用)         │
+│   达到阈值 / 方法结束 → flush  每批一次构建 AggregatedLog 并刷写        │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -547,8 +547,8 @@ public class ImportService {
 |------|--------|------------------|
 | Handler 调用 | N 次 `appendLog()` | 1~几次 `flushAggregatedLog()` |
 | 典型 DB 操作 | N 次 INSERT | 1 次 INSERT / UPDATE |
-| 对象开销 | 每条 ~128 字节（LogEntry 对象） | 每条 ~16 字节（仅格式化字符串） |
-| GC 压力 | N 个对象 | 极少对象，flush 时 StringBuilder 拼接 |
+| 对象开销 | 主要为 `LogEntry`（逐条不可避免） | 中间对象复用，flush 时批量分配 |
+| GC 压力 | 中等（按条创建 `LogEntry`） | 低（直写聚合缓冲，批量 `toString`） |
 | 适用场景 | 逐条入明细表、失败批次重试 | 大批量日志聚合到单条记录 |
 
 > AGGREGATE 在对象开销、调用次数、DB 写入次数上全面优于 SINGLE，因此设为默认。
@@ -657,23 +657,21 @@ handler.preferredMode() 返回值?
 
 ### 3.5 缓冲区设计
 
-**SingleModeBuffer**
+#### 3.5.1 Pipeline 主路径（默认）
 
-- 数据结构：`ConcurrentLinkedQueue<LogEntry>`（无锁队列，多线程并发 offer）
-- 内存跟踪：`LongAdder count` + `LongAdder bytes` + `BoundedBufferPolicy`
-- flush 触发：`count >= maxBufferSize` 或 `bytes >= maxBufferBytes`
-- 溢出策略：`FLUSH_EARLY`（默认）/ `DROP_OLDEST` / `DROP_NEWEST`
-- flush 动作：drain 全部 entry → 循环调用 `handler.appendLog(ctx, entry)`
+- Appender 线程只做字段提取并写入 `PipelineRingBuffer` 预分配槽位（MPSC）。
+- Consumer 线程串行处理，避免多线程并发写缓冲：
+  - `SINGLE`：写入 `SingleWriterBuffer`（`ArrayList` 预分配，按阈值批量 `appendLog`）。
+  - `AGGREGATE`：写入 `AggregateDirectBuffer`（复用 `StringBuilder`，直接格式化，按阈值批量 `flushAggregatedLog`）。
+- Pattern 热更：Consumer 检测 `logLinePattern` 版本变化，先 flush 旧版本批次再切换新版本。
+- 失败处理：统一走 `ResilientFlusher` 重试与降级兜底。
 
-**AggregateModeBuffer**
+#### 3.5.2 Legacy 兼容路径（仅 pipeline 关闭时）
 
-- 数据结构：`ConcurrentLinkedQueue<LogSegment>`（`LogSegment` = 格式化字符串 + level + timestamp + estimatedBytes + patternVersion）
-- Pattern 热更一致性：每个 LogSegment 记录 patternVersion，flush 时按版本分批
-- flush 动作：drain → StringBuilder 拼接 → 构建 `AggregatedLog` → 一次调用 `handler.flushAggregatedLog()`
+- 保留 `SingleModeBuffer` / `AggregateModeBuffer` 作为兼容实现。
+- `PipelineQueue` 也保留为兼容对象，供旧测试与历史配置平滑迁移。
 
-> **为何不直接用 StringBuilder**：`StringBuilder` 非线程安全，多线程并发 append 会数据错乱。`ConcurrentLinkedQueue<LogSegment>` 存储片段 + flush 时聚合，兼顾线程安全与内存效率。
-
-失败处理：`ResilientFlusher` 提供批级重试（含抖动退避，异步 flush 使用非阻塞退避调度）+ 本地兜底。
+> V2.1 的关键变化是将 “多线程并发聚合” 收敛为 “Appender 并发写 RingBuffer + Consumer 单线程聚合”，因此可以安全使用复用型 `StringBuilder`，并消除大量中间对象。
 
 ### 3.6 内存安全防护（v1.2.0）
 
@@ -719,26 +717,25 @@ handler.preferredMode() 返回值?
 
 | 组件 | 策略 | 无锁 |
 |------|------|------|
-| 日志入队 | `ConcurrentLinkedQueue.offer()` | ✅ |
-| 条数/字节统计 | `LongAdder` 分段累加 | ✅ |
-| 溢出策略 | `AtomicLong` / `AtomicInteger` CAS | ✅ |
+| 日志入队 | `PipelineRingBuffer.tryClaim/publish`（CAS + volatile 屏障） | ✅ |
+| 溢出通道 | `overflowQueue + overflowSize CAS` | ✅ |
 | flush 互斥 | `AtomicBoolean.compareAndSet()` | ✅ |
-| 关闭标记 | `AtomicBoolean` | ✅ |
-| 全局内存 | `AtomicLong` CAS（默认）/ `LongAdder`（可选） | ✅ |
+| 关闭标记 | `volatile/AtomicBoolean` | ✅ |
+| 全局内存 | `AtomicLong` + `BatchedMemoryAccountant` 批量同步 | ✅ |
 | 异步 flush 调度 | `ThreadPoolExecutor + CallerRunsPolicy` | ❌ Lock-based |
 
-> 日志收集热路径无锁（入队、计数、阈值判断均基于 CAS）。异步 flush 线程池饱和时 `CallerRunsPolicy` 触发自然反压。
+> 日志采集热路径无锁（Appender 仅 CAS claim + 槽位写入 + publish）。异步 flush 线程池饱和时 `CallerRunsPolicy` 触发自然反压。
 
 ### 3.8 调用时序示例
 
 **SINGLE（maxBufferSize=3）**
 
 ```
-日志1 → 过滤✅ → SecurityPipeline → LogEntry → 入队  count=1
-日志2 → 过滤✅ → SecurityPipeline → LogEntry → 入队  count=2
-日志3 → 过滤✅ → SecurityPipeline → LogEntry → 入队  count=3 → 达到阈值!
+日志1 → 过滤✅ → SecurityPipeline → LogEntry → SingleWriterBuffer  count=1
+日志2 → 过滤✅ → SecurityPipeline → LogEntry → SingleWriterBuffer  count=2
+日志3 → 过滤✅ → SecurityPipeline → LogEntry → SingleWriterBuffer  count=3 → 达到阈值!
   └─ flush: handler.appendLog(ctx, entry1/2/3)
-日志4 → 入队  count=1
+日志4 → SingleWriterBuffer  count=1
 方法结束 → final flush: handler.appendLog(ctx, entry4)
 
 超大日志（entryBytes > maxBufferBytes）：
@@ -748,13 +745,13 @@ handler.preferredMode() 返回值?
 **AGGREGATE（maxBufferSize=3）**
 
 ```
-日志1 → SecurityPipeline → formatLogLine → "[10:00] INFO ..." → 入队  count=1
-日志2 → SecurityPipeline → formatLogLine → "[10:01] INFO ..." → 入队  count=2
-日志3 → SecurityPipeline → formatLogLine → "[10:02] WARN ..." → 入队  count=3 → 达到阈值!
-  └─ flush: StringBuilder 拼接 → handler.flushAggregatedLog(ctx, AggregatedLog{
+日志1 → SecurityPipeline → formatRawTo(StringBuilder) → AggregateDirectBuffer  count=1
+日志2 → SecurityPipeline → formatRawTo(StringBuilder) → AggregateDirectBuffer  count=2
+日志3 → SecurityPipeline → formatRawTo(StringBuilder) → AggregateDirectBuffer  count=3 → 达到阈值!
+  └─ flush: buildAndReset() → handler.flushAggregatedLog(ctx, AggregatedLog{
        content="[10:00]...\n[10:01]...\n[10:02]...", entryCount=3,
        maxLevel="WARN", finalFlush=false })
-日志4 → 入队  count=1
+日志4 → AggregateDirectBuffer  count=1
 方法结束 → final flush: handler.flushAggregatedLog(ctx, AggregatedLog{
      ..., entryCount=1, finalFlush=true })
 ```
@@ -980,7 +977,8 @@ public class SimpleLogHandler implements LogCollectHandler {
 | `enableMask` | `boolean` | `true` | 启用敏感数据脱敏 |
 | `masker` | `Class` | `LogMasker.class` | 自定义脱敏器类型 |
 | `pipelineTimeoutMs` | `int` | `50` | 安全流水线总预算（毫秒），超时后跳过剩余步骤并记录指标 |
-| `pipelineQueueCapacity` | `int` | `8192` | 方法级 Pipeline 队列容量覆盖 |
+| `pipelineRingBufferCapacity` | `int` | `-1` | 方法级 RingBuffer 容量覆盖，`-1` 表示沿用全局配置 |
+| `pipelineQueueCapacity` | `int` | `8192`（已废弃） | 兼容参数，内部自动映射到 `pipelineRingBufferCapacity` |
 
 **高级配置**
 
@@ -1507,8 +1505,14 @@ logcollect.global.buffer.total-max-bytes=100MB
 # logcollect.global.buffer.hard-ceiling-bytes=150MB
 logcollect.global.buffer.counter-mode=EXACT_CAS
 logcollect.global.buffer.estimation-factor=1.0
+logcollect.global.buffer.memory-sync-threshold-bytes=4096
 logcollect.global.pipeline.enabled=true
-logcollect.global.pipeline.queue-capacity=8192
+logcollect.global.pipeline.ring-buffer-capacity=4096
+logcollect.global.pipeline.overflow-queue-capacity=1024
+logcollect.global.pipeline.unpublished-slot-timeout-ms=100
+logcollect.global.pipeline.consumer-idle-strategy=PARK
+# 兼容别名（已废弃）：未配置 ring-buffer-capacity 时才生效
+# logcollect.global.pipeline.queue-capacity=4096
 logcollect.global.pipeline.consumer-threads=2
 logcollect.global.pipeline.backpressure-warning=0.7
 logcollect.global.pipeline.backpressure-critical=0.9
@@ -1544,7 +1548,7 @@ logcollect.methods.com_example_service_OrderService_pay.level=ERROR
 logcollect.methods.com_example_service_OrderService_pay.async=false
 logcollect.methods.com_example_service_OrderService_pay.collect-mode=SINGLE
 logcollect.methods.com_example_job_ReconcileJob_execute.buffer.max-size=500
-logcollect.methods.com_example_job_ReconcileJob_execute.pipeline.queue-capacity=16384
+logcollect.methods.com_example_job_ReconcileJob_execute.pipeline.ring-buffer-capacity=16384
 logcollect.methods.com_example_job_ReconcileJob_execute.security.pipeline-timeout-ms=200
 ```
 
@@ -1560,9 +1564,14 @@ logcollect.global.security.mask.enabled=false
 # 放宽安全流水线预算（大文本场景）
 logcollect.global.security.pipeline-timeout-ms=100
 
+# 调整 RingBuffer 容量（需重启生效）
+logcollect.global.pipeline.ring-buffer-capacity=8192
+
 # 一键关闭日志收集
 logcollect.global.enabled=false
 ```
+
+> `pipeline.ring-buffer-capacity` 与旧别名 `pipeline.queue-capacity` 都属于启动期参数，运行中变更会记录提示并在下一次重启后生效。
 
 ---
 
@@ -1905,7 +1914,7 @@ logcollect-benchmark/
 
 | 场景 | 吞吐范围 | 评价 |
 |------|---------|------|
-| `isolated-8t-clean` | 5.4M~6.2M logs/s | 纯框架流水线（安全处理 + 缓冲区 + Handler 回调），无锁队列 + LongAdder 设计充分发挥 |
+| `isolated-8t-clean` | 5.4M~6.2M logs/s | 纯框架流水线（安全处理 + RingBuffer + Handler 回调），MPSC + 单写者设计充分发挥 |
 | `isolated-8t-sensitive` | 520K~810K logs/s | 含正则脱敏 + 净化，为 clean 的约 12%，正则引擎是已知瓶颈，但绝对值仍远超生产需求 |
 
 结论：框架内部流水线在高并发下维持极高吞吐，CAS 无锁热路径设计有效。
@@ -2032,7 +2041,40 @@ per-jdk 编译在关键业务路径（e2e-8t）上的收益如下：
 
 框架在“业务日志聚合”定位下，性能表现显著高于大多数生产需求，安全与可靠性机制完备，可以放心落地。真实瓶颈不在框架，而在 Handler 的持久化层，这也说明框架设计目标达成：它不应成为瓶颈，也确实没有成为瓶颈。
 
-### 12.4 快速命令
+### 12.4 V2.1 退化修复目标与门禁（新增）
+
+#### 12.4.1 原设计缺陷（V2 基线）
+
+| 缺陷 | 现象 | 根因 |
+|------|------|------|
+| GC 全面退化 | 多数场景 GC 开销高于 V1，JDK17 更明显 | 逐事件对象分配 + 跨线程生命周期延长 |
+| e2e 扩展比下降 | `8t/1t` 比值明显回落 | Appender 锁竞争 + 队列模型开销 |
+| 关闭协议复杂 | closing 窗口处理复杂，维护成本高 | 队列边界不精确 + 回投逻辑 |
+
+#### 12.4.2 V2.1 方案对应关系
+
+| 问题 | V2.1 对策 | 当前实现 |
+|------|-----------|---------|
+| 生产者分配/队列节点分配 | S1 RingBuffer 预分配槽位 | `PipelineRingBuffer` + `MutableRawLogRecord` |
+| 消费者中间对象分配 | S2 复用处理对象 | `MutableProcessedLogRecord` |
+| AGGREGATE 中间对象链路 | S3 直格式化聚合 | `AggregateDirectBuffer` + `formatRawTo` |
+| Appender 锁竞争 | S4 无锁 Appender | Logback `UnsynchronizedAppenderBase` |
+| SINGLE 扩容抖动 | S5 预分配 | `SingleWriterBuffer` 构造预分配 |
+| 全局 CAS 热点 | S6 批量记账 | `BatchedMemoryAccountant` |
+| JDK17 GC 放大 | S7 调优指导 | `docs/jvm-tuning-guide.md` |
+
+#### 12.4.3 发布门禁（本次回归）
+
+- [x] 单元/集成：`mvn -q -Djacoco.skip=true test` 全仓通过。
+- [x] 兼容回归：旧 `pipeline.queue-capacity` 与 `@LogCollect(pipelineQueueCapacity)` 均自动映射。
+- [x] Adapter 回归：Logback/Log4j2 的 pipeline 分支均兼容 ring + legacy queue。
+- [x] 文档一致性：README 已标注原设计缺陷、升级方案、优化效果、配置迁移策略。
+- [x] 性能门禁冒烟：`mvn -q -pl logcollect-benchmark -Pbenchmark-ci -Dtest=JmhCIGateTest -Djmh.mode=ci test` 通过。
+- [ ] 全量性能矩阵：12 个 GC 场景 + e2e 扩展比 + dual-build 策略结果需在专用 benchmark 环境刷新。
+
+> JVM 参数建议与验证步骤见：`docs/jvm-tuning-guide.md`。
+
+### 12.5 快速命令
 
 ```bash
 # CI 门禁
@@ -2215,7 +2257,7 @@ log.info("诊断: {}", LogCollectContextUtils.diagnosticInfo());
 | 组件 | 策略 |
 |------|------|
 | `LogCollectContext` | `final` + `volatile` + `AtomicInteger/Long` + `ConcurrentHashMap` |
-| Buffer | `ConcurrentLinkedQueue` + `LongAdder` + CAS flush |
+| Buffer | `PipelineRingBuffer`（MPSC）+ `SingleWriterBuffer/AggregateDirectBuffer`（单消费者） |
 | `CircuitBreaker` | `AtomicReference<State>` + CAS |
 | 上下文栈 | `ThreadLocal<Deque>` |
 | 脱敏规则 | `CopyOnWriteArrayList` |
