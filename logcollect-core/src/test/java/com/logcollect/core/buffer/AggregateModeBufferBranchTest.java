@@ -252,6 +252,8 @@ class AggregateModeBufferBranchTest extends CoreUnitTestBase {
                 "t", "c", null, null, SecurityPipeline.SecurityMetrics.NOOP);
         assertThat(runtimeBuffer.offerRaw(runtimeContext, record)).isTrue();
         verify(runtimeHandler, atLeastOnce()).onError(eq(runtimeContext), any(Throwable.class), eq("formatLogLine"));
+        verify(runtimeHandler, atLeastOnce()).formatLogLine(any(LogEntry.class));
+        verify(runtimeHandler, never()).logLinePattern();
 
         LogCollectHandler errorHandler = mock(LogCollectHandler.class);
         when(errorHandler.aggregatedLogSeparator()).thenReturn("\n");

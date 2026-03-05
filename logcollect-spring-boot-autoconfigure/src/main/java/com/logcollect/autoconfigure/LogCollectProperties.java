@@ -86,6 +86,9 @@ public class LogCollectProperties {
         private Buffer buffer = new Buffer();
 
         @NestedConfigurationProperty
+        private Pipeline pipeline = new Pipeline();
+
+        @NestedConfigurationProperty
         private Flush flush = new Flush();
 
         @NestedConfigurationProperty
@@ -149,6 +152,14 @@ public class LogCollectProperties {
 
         public void setBuffer(Buffer buffer) {
             this.buffer = buffer;
+        }
+
+        public Pipeline getPipeline() {
+            return pipeline;
+        }
+
+        public void setPipeline(Pipeline pipeline) {
+            this.pipeline = pipeline;
         }
 
         public Flush getFlush() {
@@ -292,6 +303,63 @@ public class LogCollectProperties {
 
         public long getHardCeilingBytesValue() {
             return DataSizeParser.parseToBytes(hardCeilingBytes);
+        }
+    }
+
+    public static class Pipeline {
+        private boolean enabled = true;
+        private int queueCapacity = 8192;
+        private int consumerThreads = 2;
+        private double backpressureWarning = 0.7d;
+        private double backpressureCritical = 0.9d;
+        private int handoffTimeoutMs = 5;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getQueueCapacity() {
+            return queueCapacity;
+        }
+
+        public void setQueueCapacity(int queueCapacity) {
+            this.queueCapacity = queueCapacity;
+        }
+
+        public int getConsumerThreads() {
+            return consumerThreads;
+        }
+
+        public void setConsumerThreads(int consumerThreads) {
+            this.consumerThreads = consumerThreads;
+        }
+
+        public double getBackpressureWarning() {
+            return backpressureWarning;
+        }
+
+        public void setBackpressureWarning(double backpressureWarning) {
+            this.backpressureWarning = backpressureWarning;
+        }
+
+        public double getBackpressureCritical() {
+            return backpressureCritical;
+        }
+
+        public void setBackpressureCritical(double backpressureCritical) {
+            this.backpressureCritical = backpressureCritical;
+        }
+
+        public int getHandoffTimeoutMs() {
+            return handoffTimeoutMs;
+        }
+
+        public void setHandoffTimeoutMs(int handoffTimeoutMs) {
+            this.handoffTimeoutMs = handoffTimeoutMs;
         }
     }
 
@@ -470,6 +538,8 @@ public class LogCollectProperties {
         @NestedConfigurationProperty
         private Mask mask = new Mask();
 
+        private int pipelineTimeoutMs = 50;
+
         public Sanitize getSanitize() {
             return sanitize;
         }
@@ -484,6 +554,14 @@ public class LogCollectProperties {
 
         public void setMask(Mask mask) {
             this.mask = mask;
+        }
+
+        public int getPipelineTimeoutMs() {
+            return pipelineTimeoutMs;
+        }
+
+        public void setPipelineTimeoutMs(int pipelineTimeoutMs) {
+            this.pipelineTimeoutMs = pipelineTimeoutMs;
         }
     }
 
@@ -646,6 +724,8 @@ public class LogCollectProperties {
         private Boolean transactionIsolation;
         private Integer maxNestingDepth;
         private Boolean enableMetrics;
+        private Integer pipelineTimeoutMs;
+        private Integer pipelineQueueCapacity;
 
         public String getLevel() {
             return level;
@@ -733,6 +813,22 @@ public class LogCollectProperties {
 
         public void setEnableMetrics(Boolean enableMetrics) {
             this.enableMetrics = enableMetrics;
+        }
+
+        public Integer getPipelineTimeoutMs() {
+            return pipelineTimeoutMs;
+        }
+
+        public void setPipelineTimeoutMs(Integer pipelineTimeoutMs) {
+            this.pipelineTimeoutMs = pipelineTimeoutMs;
+        }
+
+        public Integer getPipelineQueueCapacity() {
+            return pipelineQueueCapacity;
+        }
+
+        public void setPipelineQueueCapacity(Integer pipelineQueueCapacity) {
+            this.pipelineQueueCapacity = pipelineQueueCapacity;
         }
     }
 

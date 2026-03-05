@@ -3,6 +3,7 @@ package com.logcollect.log4j2;
 import com.logcollect.api.backpressure.BackpressureAction;
 import com.logcollect.api.backpressure.BackpressureCallback;
 import com.logcollect.api.enums.CollectMode;
+import com.logcollect.api.enums.DegradeReason;
 import com.logcollect.api.enums.SamplingStrategy;
 import com.logcollect.api.enums.TotalLimitPolicy;
 import com.logcollect.api.exception.LogCollectDegradeException;
@@ -23,6 +24,9 @@ import com.logcollect.core.context.LogCollectIgnoreManager;
 import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.internal.LogCollectInternalLogger;
+import com.logcollect.core.pipeline.LogCollectPipelineManager;
+import com.logcollect.core.pipeline.PipelineQueue;
+import com.logcollect.core.pipeline.RawLogRecord;
 import com.logcollect.core.pipeline.SecurityPipeline;
 import com.logcollect.core.security.DefaultLogMasker;
 import com.logcollect.core.security.DefaultLogSanitizer;
@@ -61,6 +65,7 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
 
     private volatile SecurityComponentRegistry securityRegistry;
     private volatile LogCollectMetrics metrics = NoopLogCollectMetrics.INSTANCE;
+    private volatile LogCollectPipelineManager pipelineManager;
 
     protected LogCollectLog4j2Appender(String name, Filter filter) {
         super(name, filter, null, true, null);
@@ -81,6 +86,10 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         this.metrics = metrics != null ? metrics : NoopLogCollectMetrics.INSTANCE;
     }
 
+    public void setPipelineManager(LogCollectPipelineManager pipelineManager) {
+        this.pipelineManager = pipelineManager;
+    }
+
     @Override
     public void append(LogEvent event) {
         LogCollectContext context = null;
@@ -89,8 +98,8 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             if (mdcTraceId == null || mdcTraceId.isEmpty()) {
                 return;
             }
-            context = LogCollectContextManager.current();
-            if (context == null || !mdcTraceId.equals(context.getTraceId())) {
+            context = LogCollectContextManager.get(mdcTraceId);
+            if (context == null) {
                 return;
             }
 
@@ -118,6 +127,12 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             if (context.isLoggerExcluded(loggerName)) {
                 context.incrementDiscardedCount();
                 m.incrementDiscarded(methodKey, "logger_filter");
+                return;
+            }
+            if (config != null && config.isPipelineEnabled()
+                    && context.getPipelineQueue() instanceof PipelineQueue
+                    && pipelineManager != null) {
+                appendToPipeline(event, context, level, loggerName, m);
                 return;
             }
             if (!allowByBackpressure(context, level, methodKey, m)) {
@@ -189,6 +204,63 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             return NoopLogCollectMetrics.INSTANCE;
         }
         return this.metrics;
+    }
+
+    private void appendToPipeline(LogEvent event,
+                                  LogCollectContext context,
+                                  String level,
+                                  String loggerName,
+                                  LogCollectMetrics metrics) {
+        if (context.isClosed()) {
+            context.incrementDiscardedCount();
+            metrics.incrementDiscarded(context.getMethodSignature(), "buffer_closed_late_arrival");
+            return;
+        }
+        PipelineQueue queue = (PipelineQueue) context.getPipelineQueue();
+        if (queue == null) {
+            return;
+        }
+        Map<String, String> mdcCopy = new HashMap<String, String>(event.getContextData().toMap());
+        RawLogRecord record = new RawLogRecord(
+                resolveRawMessage(event),
+                extractThrowableString(event),
+                level,
+                loggerName,
+                safeIntern(event.getThreadName()),
+                event.getTimeMillis(),
+                mdcCopy,
+                context);
+
+        PipelineQueue.OfferResult result = queue.offer(record);
+        metrics.updatePipelineQueueUtilization(context.getMethodSignature(), queue.utilization());
+        if (result == PipelineQueue.OfferResult.ACCEPTED) {
+            return;
+        }
+        context.incrementDiscardedCount();
+        if (result == PipelineQueue.OfferResult.FULL) {
+            metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
+            metrics.incrementPipelineBackpressure(context.getMethodSignature(), level);
+            if (isWarnOrAbove(level)) {
+                degradeAsyncSubmit(context, record, DegradeReason.PIPELINE_QUEUE_FULL);
+            }
+            return;
+        }
+        metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
+        metrics.incrementPipelineBackpressure(context.getMethodSignature(), level);
+        if (isWarnOrAbove(level)) {
+            degradeAsyncSubmit(context, record, DegradeReason.PIPELINE_BACKPRESSURE);
+        }
+    }
+
+    private void degradeAsyncSubmit(LogCollectContext context, RawLogRecord record, DegradeReason reason) {
+        if (context == null || record == null || reason == null) {
+            return;
+        }
+        AsyncFlushExecutor.submitOrRun(() -> DegradeFallbackHandler.handleDegraded(
+                context,
+                reason.code(),
+                Collections.singletonList(record.content),
+                record.level));
     }
 
     private SecurityPipeline.ProcessedLogRecord securityProcess(LogCollectContext context,

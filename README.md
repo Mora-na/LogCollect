@@ -352,6 +352,56 @@ logcollect:
 
 启动时框架会检查 ROOT 上的同步 I/O Appender（如未异步包装的 `ConsoleAppender` / `FileAppender`），并输出性能告警。控制台 pattern 通过 `ConsolePatternDetector` SPI 自动探测，经 `PatternCleaner + PatternValidator` 清理校验后写入 `LogLineDefaults`。
 
+### 1.4 V2 双阶段流水线升级（本次实现）
+
+#### 1.4.1 原设计缺陷（v1.x）
+
+- 业务线程在 Appender 内执行完整安全流水线（sanitize + mask）和 buffer/flush 分支判断，热路径负担过重。
+- `SingleModeBuffer`/`AggregateModeBuffer` 依赖多原子变量 + CAS 结构，在高并发场景存在额外 cache line 争用。
+- 安全处理缺少“总预算”语义，超大输入会放大单条日志处理抖动。
+- Appender 与 Buffer 强耦合，业务线程与持久化线程边界不清晰，扩展 pipeline/backpressure 成本高。
+
+#### 1.4.2 升级方案落地（v2）
+
+- **Phase 1（业务线程）只做轻量捕获**  
+  在 `LogCollectLogbackAppender` / `LogCollectLog4j2Appender` 中改为：`MDC + level/logger 过滤 -> 提取原始字段 -> RawLogRecord 入 PipelineQueue`。
+- **Phase 2（Consumer 线程）处理重逻辑**  
+  新增 `RawLogRecord`、`PipelineQueue`、`PipelineConsumer`、`LogCollectPipelineManager`，Consumer 负责 `shouldCollect -> SecurityPipeline -> LogEntry 构建 -> SingleWriterBuffer 入队 -> 阈值 flush`。
+- **单写者 Buffer**  
+  新增 `SingleWriterBuffer`，以 `ArrayList + plain int/long` 取代高频 CAS 计数路径，减少同步开销与对象分配。
+- **所有权转移协议**  
+  在 `LogCollectAspect` 的 `finally` 中接入 `pipelineManager.closeContext()`：`markClosing -> handoff -> drain 残留 -> final flush -> markClosed`。
+- **closing 竞争窗口修复**  
+  `PipelineConsumer` 在检测到 `closing=true` 后，不再继续向 `SingleWriterBuffer` 写入；对已弹出的记录执行回投（`PipelineQueue.forceOffer`）并交由 finally 线程接管，避免双写者竞争。
+- **全局内存管理重构**  
+  `GlobalBufferMemoryManager` 重构为 `AtomicLong + LongAdder` 双模式，`forceAllocate` 统一 CAS 精确路径，修复 STRIPED 模式下强制分配瞬时超射。
+- **安全流水线总预算**  
+  `SecurityPipeline` 新增 deadline 入口 `processRawRecordWithDeadline(...)`，支持总超时预算并记录超时指标。
+- **动态配置与参数面扩展**  
+  新增 `pipeline.*`、`security.pipeline-timeout-ms`，并支持注解级 `@LogCollect(pipelineTimeoutMs, pipelineQueueCapacity)` 覆盖。
+
+#### 1.4.3 升级效果
+
+| 维度 | 升级前 | 升级后 |
+|------|--------|--------|
+| 业务线程热路径 | 完整安全处理 + Buffer 判定 | 轻量捕获 + 入队 |
+| 队列模型 | Buffer 直接承压 | 有界 `PipelineQueue` + 背压分级 |
+| Buffer 并发模型 | 多原子计数 + CAS | 单写者 `SingleWriterBuffer` |
+| 关闭语义 | AOP 直接 close buffer | `closing -> handoff -> drain -> final flush` |
+| 全局配额 | forceAllocate 在 STRIPED 路径存在精度风险 | forceAllocate 统一 CAS 精确控制 |
+
+#### 1.4.4 回归检查清单（方案逐条核对）
+
+- [x] 双阶段架构落地：Appender 热路径迁移到 `RawLogRecord + PipelineQueue`。
+- [x] 新增单写者缓冲：`SingleWriterBuffer` 已接入 `LogCollectAspect` 的 pipeline 上下文构建。
+- [x] 所有权转移落地：`LogCollectPipelineManager.closeContext()` + `PipelineConsumer.closeAndFlush(...)`。
+- [x] closing 并发竞争回归：Consumer 关闭阶段回投记录，避免与 finally 线程并发写 buffer。
+- [x] 安全流水线 deadline：`SecurityPipeline.processRawRecordWithDeadline(...)` 已被 Consumer 使用。
+- [x] 全局内存管理重构：`GlobalBufferMemoryManager` 已改为 CAS/Adder 双计数并支持动态 limits。
+- [x] 新配置项落地：`logcollect.global.pipeline.*`、`logcollect.global.security.pipeline-timeout-ms`、注解级 `pipelineTimeoutMs/pipelineQueueCapacity`。
+- [x] 新降级原因落地：`PIPELINE_QUEUE_FULL`、`PIPELINE_BACKPRESSURE`、`BUFFER_CLOSED_LATE_ARRIVAL`。
+- [x] Metrics 扩展落地：pipeline queue utilization / consumer idle ratio / pipeline timeout / backpressure 计数。
+
 ---
 
 ## 2 上下文模型与传播机制
@@ -929,6 +979,8 @@ public class SimpleLogHandler implements LogCollectHandler {
 | `sanitizer` | `Class` | `LogSanitizer.class` | 自定义净化器类型 |
 | `enableMask` | `boolean` | `true` | 启用敏感数据脱敏 |
 | `masker` | `Class` | `LogMasker.class` | 自定义脱敏器类型 |
+| `pipelineTimeoutMs` | `int` | `50` | 安全流水线总预算（毫秒），超时后跳过剩余步骤并记录指标 |
+| `pipelineQueueCapacity` | `int` | `8192` | 方法级 Pipeline 队列容量覆盖 |
 
 **高级配置**
 
@@ -1454,6 +1506,12 @@ logcollect.global.buffer.total-max-bytes=100MB
 logcollect.global.buffer.hard-ceiling-bytes=150MB
 logcollect.global.buffer.counter-mode=EXACT_CAS
 logcollect.global.buffer.estimation-factor=1.0
+logcollect.global.pipeline.enabled=true
+logcollect.global.pipeline.queue-capacity=8192
+logcollect.global.pipeline.consumer-threads=2
+logcollect.global.pipeline.backpressure-warning=0.7
+logcollect.global.pipeline.backpressure-critical=0.9
+logcollect.global.pipeline.handoff-timeout-ms=5
 logcollect.global.flush.core-threads=2
 logcollect.global.flush.max-threads=4
 logcollect.global.flush.queue-capacity=4096
@@ -1467,6 +1525,7 @@ logcollect.global.degrade.file.max-total-size=500MB
 logcollect.global.degrade.file.ttl-days=90
 logcollect.global.security.sanitize.enabled=true
 logcollect.global.security.mask.enabled=true
+logcollect.global.security.pipeline-timeout-ms=50
 # 已废弃（v1.2.0 起不生效，仅保留兼容）
 logcollect.global.guard.max-content-length=32768
 logcollect.global.guard.max-throwable-length=65536
@@ -1484,6 +1543,8 @@ logcollect.methods.com_example_service_OrderService_pay.level=ERROR
 logcollect.methods.com_example_service_OrderService_pay.async=false
 logcollect.methods.com_example_service_OrderService_pay.collect-mode=SINGLE
 logcollect.methods.com_example_job_ReconcileJob_execute.buffer.max-size=500
+logcollect.methods.com_example_job_ReconcileJob_execute.pipeline.queue-capacity=16384
+logcollect.methods.com_example_job_ReconcileJob_execute.security.pipeline-timeout-ms=200
 ```
 
 ### 9.4 动态调整示例
@@ -1494,6 +1555,9 @@ logcollect.global.level=ERROR
 
 # 临时关闭脱敏（排查问题）
 logcollect.global.security.mask.enabled=false
+
+# 放宽安全流水线预算（大文本场景）
+logcollect.global.security.pipeline-timeout-ms=100
 
 # 一键关闭日志收集
 logcollect.global.enabled=false
@@ -1521,6 +1585,8 @@ logcollect.global.enabled=false
 | `logcollect.security.sanitize.hits.total` | `method` | 净化器命中 |
 | `logcollect.security.mask.hits.total` | `method` | 脱敏器命中 |
 | `logcollect.security.fastpath.hits.total` | `method` | 快速路径命中 |
+| `logcollect.pipeline.backpressure.total` | `method`, `level` | Pipeline 背压拒绝计数 |
+| `logcollect.security.pipeline.timeout.total` | `method`, `step` | 安全流水线预算超时计数 |
 | `logcollect.config.refresh.total` | `source` | 配置刷新 |
 | `logcollect.handler.timeout.total` | `method` | Handler 超时 |
 
@@ -1530,6 +1596,8 @@ logcollect.global.enabled=false
 |------|------|
 | `logcollect.buffer.utilization` | 缓冲区使用率 |
 | `logcollect.buffer.global.utilization` | 全局缓冲区使用率 |
+| `logcollect.pipeline.queue.utilization` | Pipeline 队列使用率 |
+| `logcollect.pipeline.consumer.idle.ratio` | Consumer 空闲比 |
 | `logcollect.circuit.state` | 熔断器状态（0/1/2） |
 | `logcollect.active.collections` | 活跃 @LogCollect 数 |
 | `logcollect.degrade.file.total.bytes` | 降级文件总大小 |
@@ -1540,6 +1608,7 @@ logcollect.global.enabled=false
 |------|------|
 | `logcollect.persist.duration` | 单批次入库耗时 |
 | `logcollect.security.pipeline.duration` | 安全流水线耗时 |
+| `logcollect.pipeline.consumer.process.duration` | Consumer 单条处理耗时 |
 | `logcollect.handler.duration` | Handler 执行耗时 |
 
 ### 10.2 健康检查

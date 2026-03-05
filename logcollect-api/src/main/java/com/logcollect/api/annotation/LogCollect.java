@@ -55,6 +55,8 @@ public @interface LogCollect {
     Class<? extends LogSanitizer> sanitizer() default LogSanitizer.class;
     boolean enableMask() default true;
     Class<? extends LogMasker> masker() default LogMasker.class;
+    int pipelineTimeoutMs() default 50;
+    int pipelineQueueCapacity() default 8192;
 
     // ===== 高级配置 =====
     int handlerTimeoutMs() default 5000;

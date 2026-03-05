@@ -38,6 +38,7 @@ public class LogCollectConfigResolver {
                     "buffer.hard-ceiling-bytes",
                     "buffer.counter-mode",
                     "buffer.estimation-factor",
+                    "pipeline.consumer-threads",
                     "metrics.prefix",
                     "guard.max-content-length",
                     "guard.max-throwable-length"
@@ -523,6 +524,12 @@ public class LogCollectConfigResolver {
         if (annotation.masker() != com.logcollect.api.masker.LogMasker.class) {
             config.setMaskerClass(annotation.masker());
         }
+        if (annotation.pipelineTimeoutMs() != 50) {
+            config.setSecurityPipelineTimeoutMs(annotation.pipelineTimeoutMs());
+        }
+        if (annotation.pipelineQueueCapacity() != 8192) {
+            config.setPipelineQueueCapacity(annotation.pipelineQueueCapacity());
+        }
 
         if (annotation.handlerTimeoutMs() != 5000) {
             config.setHandlerTimeoutMs(annotation.handlerTimeoutMs());
@@ -559,6 +566,12 @@ public class LogCollectConfigResolver {
         applyDataSize(props, "buffer.total-max-bytes", config::setGlobalBufferTotalMaxBytes);
         applyDataSize(props, "buffer.hard-ceiling-bytes", config::setGlobalBufferHardCeilingBytes);
         applyDouble(props, "buffer.estimation-factor", config::setGlobalBufferEstimationFactor);
+        applyBoolean(props, "pipeline.enabled", config::setPipelineEnabled);
+        applyInt(props, "pipeline.queue-capacity", config::setPipelineQueueCapacity);
+        applyInt(props, "pipeline.consumer-threads", config::setPipelineConsumerThreads);
+        applyDouble(props, "pipeline.backpressure-warning", config::setPipelineBackpressureWarning);
+        applyDouble(props, "pipeline.backpressure-critical", config::setPipelineBackpressureCritical);
+        applyInt(props, "pipeline.handoff-timeout-ms", config::setPipelineHandoffTimeoutMs);
 
         applyBoolean(props, "degrade.enabled", config::setEnableDegrade);
         applyInt(props, "degrade.fail-threshold", config::setDegradeFailThreshold);
@@ -577,6 +590,7 @@ public class LogCollectConfigResolver {
 
         applyBoolean(props, "security.sanitize.enabled", config::setEnableSanitize);
         applyBoolean(props, "security.mask.enabled", config::setEnableMask);
+        applyInt(props, "security.pipeline-timeout-ms", config::setSecurityPipelineTimeoutMs);
         applyInt(props, "guard.max-content-length", config::setGuardMaxContentLength);
         applyInt(props, "guard.max-throwable-length", config::setGuardMaxThrowableLength);
 
@@ -672,6 +686,7 @@ public class LogCollectConfigResolver {
         syncEstimationFactor(globals, changedProperties, source);
         syncGlobalBufferLimits(globals, changedProperties, source);
         syncCounterModeWarning(globals, changedProperties, source);
+        syncPipelineRuntimeWarnings(globals, changedProperties, source);
     }
 
     private void syncDeprecatedGuardNotice(Map<String, String> globals,
@@ -776,6 +791,21 @@ public class LogCollectConfigResolver {
             LogCollectInternalLogger.warn(
                     "counter-mode change detected (source={}): current={}, requested={}. Requires restart, ignored at runtime.",
                     source == null ? "unknown" : source, current, requested);
+        }
+    }
+
+    private void syncPipelineRuntimeWarnings(Map<String, String> globals,
+                                             Map<String, String> changedProperties,
+                                             String source) {
+        if (hasChangedOrConfigured(globals, changedProperties, "pipeline.queue-capacity")) {
+            LogCollectInternalLogger.warn(
+                    "pipeline.queue-capacity changed (source={}) but requires restart to take effect.",
+                    source == null ? "unknown" : source);
+        }
+        if (hasChangedOrConfigured(globals, changedProperties, "pipeline.consumer-threads")) {
+            LogCollectInternalLogger.warn(
+                    "pipeline.consumer-threads changed (source={}) but requires restart to take effect.",
+                    source == null ? "unknown" : source);
         }
     }
 

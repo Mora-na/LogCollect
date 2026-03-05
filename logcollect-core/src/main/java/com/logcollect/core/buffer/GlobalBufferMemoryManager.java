@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.LongAdder;
 /**
  * 全局缓冲内存配额管理器。
  *
- * <p>soft limit（软限）用于常规配额约束，hard ceiling（硬顶）用于高等级强制分配上限。
+ * <p>soft limit（软限）用于常规配额，hard ceiling（硬顶）用于强制分配上限。</p>
  */
 public class GlobalBufferMemoryManager {
     public enum CounterMode {
@@ -34,12 +34,12 @@ public class GlobalBufferMemoryManager {
 
     private final AtomicLong maxTotalBytes;
     private final AtomicLong hardCeilingBytes;
+
+    private final AtomicLong usedBytesCas;
+    private final LongAdder usedBytesAdder;
+    private final AtomicLong forceAllocateUsed;
+
     private final CounterMode counterMode;
-
-    private final AtomicLong totalUsed = new AtomicLong(0L);
-    private final LongAdder stripedTotalUsed;
-    private final Object stripedClampLock = new Object();
-
     private volatile LogCollectMetrics metrics = NoopLogCollectMetrics.INSTANCE;
 
     public GlobalBufferMemoryManager(long maxTotalBytes) {
@@ -52,11 +52,15 @@ public class GlobalBufferMemoryManager {
 
     public GlobalBufferMemoryManager(long maxTotalBytes, CounterMode counterMode, long hardCeilingBytes) {
         this.counterMode = counterMode == null ? CounterMode.EXACT_CAS : counterMode;
-        long soft = validateMaxBytes(maxTotalBytes);
-        this.maxTotalBytes = new AtomicLong(soft);
-        long hard = resolveHardCeilingBytes(soft, hardCeilingBytes);
-        this.hardCeilingBytes = new AtomicLong(hard);
-        this.stripedTotalUsed = this.counterMode == CounterMode.STRIPED_LONG_ADDER ? new LongAdder() : null;
+        long validatedSoft = validateMaxBytes(maxTotalBytes);
+        this.maxTotalBytes = new AtomicLong(validatedSoft);
+
+        long ceiling = resolveHardCeilingBytes(validatedSoft, hardCeilingBytes);
+        this.hardCeilingBytes = new AtomicLong(ceiling);
+
+        this.usedBytesCas = new AtomicLong(0L);
+        this.usedBytesAdder = this.counterMode == CounterMode.STRIPED_LONG_ADDER ? new LongAdder() : null;
+        this.forceAllocateUsed = new AtomicLong(0L);
         updateMetrics();
     }
 
@@ -64,76 +68,70 @@ public class GlobalBufferMemoryManager {
         if (bytes <= 0) {
             return true;
         }
-        long soft = maxTotalBytes.get();
-        if (soft <= 0) {
+        long softLimit = maxTotalBytes.get();
+        if (softLimit <= 0) {
             return true;
         }
-        if (counterMode == CounterMode.STRIPED_LONG_ADDER) {
-            long estimated = stripedTotalUsed.sum() + bytes;
-            if (estimated > soft) {
-                updateMetrics();
-                return false;
+
+        if (counterMode == CounterMode.EXACT_CAS) {
+            while (true) {
+                long current = usedBytesCas.get();
+                long next = current + bytes;
+                if (next > softLimit) {
+                    updateMetrics();
+                    return false;
+                }
+                if (usedBytesCas.compareAndSet(current, next)) {
+                    updateMetrics();
+                    return true;
+                }
             }
-            stripedTotalUsed.add(bytes);
-            if (stripedTotalUsed.sum() > soft) {
-                stripedTotalUsed.add(-bytes);
-                updateMetrics();
-                return false;
-            }
+        }
+
+        long preCheck = usedBytesAdder.sum() + forceAllocateUsed.get() + bytes;
+        if (preCheck > softLimit) {
             updateMetrics();
-            return true;
+            return false;
         }
-        while (true) {
-            long current = totalUsed.get();
-            long next = current + bytes;
-            if (next > soft) {
-                updateMetrics();
-                return false;
-            }
-            if (totalUsed.compareAndSet(current, next)) {
-                updateMetrics();
-                return true;
-            }
+
+        usedBytesAdder.add(bytes);
+        long postCheck = usedBytesAdder.sum() + forceAllocateUsed.get();
+        if (postCheck > softLimit) {
+            usedBytesAdder.add(-bytes);
+            updateMetrics();
+            return false;
         }
+        updateMetrics();
+        return true;
     }
 
     /**
      * 高等级日志强制分配。
      *
-     * <p>可突破 soft limit，但不能突破 hard ceiling。
-     *
-     * @return true 分配成功；false 表示达到硬顶
+     * <p>无论 counterMode 是什么，forceAllocate 始终走 CAS 精确路径，消除 STRIPED 瞬时超射。</p>
      */
     public boolean forceAllocate(long bytes) {
         if (bytes <= 0) {
             return true;
         }
-        long hard = hardCeilingBytes.get();
-        if (counterMode == CounterMode.STRIPED_LONG_ADDER) {
-            if (hard > 0) {
-                long estimated = stripedTotalUsed.sum() + bytes;
-                if (estimated > hard) {
-                    updateMetrics();
-                    return false;
-                }
-            }
-            stripedTotalUsed.add(bytes);
-            if (hard > 0 && stripedTotalUsed.sum() > hard) {
-                stripedTotalUsed.add(-bytes);
-                updateMetrics();
-                return false;
-            }
+        long ceiling = hardCeilingBytes.get();
+        if (ceiling <= 0) {
+            doAdd(bytes);
             updateMetrics();
             return true;
         }
+
         while (true) {
-            long current = totalUsed.get();
-            long next = current + bytes;
-            if (hard > 0 && next > hard) {
+            long currentForce = forceAllocateUsed.get();
+            long currentTotal = getCurrentUsedBytes();
+            long nextTotal = currentTotal + bytes;
+            if (nextTotal > ceiling) {
                 updateMetrics();
                 return false;
             }
-            if (totalUsed.compareAndSet(current, next)) {
+            if (forceAllocateUsed.compareAndSet(currentForce, currentForce + bytes)) {
+                doAdd(bytes);
+                forceAllocateUsed.addAndGet(-bytes);
                 updateMetrics();
                 return true;
             }
@@ -144,47 +142,34 @@ public class GlobalBufferMemoryManager {
         if (bytes <= 0) {
             return;
         }
-        if (counterMode == CounterMode.STRIPED_LONG_ADDER) {
-            stripedTotalUsed.add(-bytes);
-            long remaining = stripedTotalUsed.sum();
-            if (remaining < 0) {
-                synchronized (stripedClampLock) {
-                    long current = stripedTotalUsed.sum();
-                    if (current < 0) {
-                        stripedTotalUsed.add(-current);
-                    }
-                }
+        if (counterMode == CounterMode.EXACT_CAS) {
+            long left = usedBytesCas.addAndGet(-bytes);
+            if (left < 0) {
+                usedBytesCas.set(0L);
             }
         } else {
-            long remaining = totalUsed.addAndGet(-bytes);
-            if (remaining < 0) {
-                totalUsed.set(0);
+            usedBytesAdder.add(-bytes);
+            long left = usedBytesAdder.sum();
+            if (left < 0) {
+                usedBytesAdder.add(-left);
             }
         }
         updateMetrics();
     }
 
-    /**
-     * 动态更新软限与硬顶。
-     */
-    public void updateLimits(long newMaxTotalBytes, long newHardCeilingBytes) {
-        long validatedSoft = validateMaxBytes(newMaxTotalBytes);
+    public void updateLimits(long newSoftBytes, long newHardBytes) {
+        long validatedSoft = validateMaxBytes(newSoftBytes);
         long oldSoft = this.maxTotalBytes.getAndSet(validatedSoft);
-        long oldHard = this.hardCeilingBytes.get();
-        long resolvedHard = resolveHardCeilingBytes(validatedSoft, newHardCeilingBytes);
-        this.hardCeilingBytes.set(resolvedHard);
 
-        long used = getCurrentUsedBytes();
+        long ceiling = resolveHardCeilingBytes(validatedSoft, newHardBytes);
+        long oldHard = this.hardCeilingBytes.getAndSet(ceiling);
+
+        long currentUsed = getCurrentUsedBytes();
         LogCollectInternalLogger.info(
-                "Global buffer limits updated: soft {} -> {}, hard {} -> {}, used={}",
+                "Global buffer limits updated: soft {} -> {}, hard {} -> {}, used={} ",
                 formatBytes(oldSoft), formatBytes(validatedSoft),
-                formatBytes(oldHard), formatBytes(resolvedHard),
-                formatBytes(used));
-        if (validatedSoft > 0 && used > validatedSoft) {
-            LogCollectInternalLogger.warn(
-                    "New soft limit ({}) < current usage ({}). New allocations will be rejected until usage drops.",
-                    formatBytes(validatedSoft), formatBytes(used));
-        }
+                formatBytes(oldHard), formatBytes(ceiling),
+                formatBytes(currentUsed));
         updateMetrics();
     }
 
@@ -205,11 +190,11 @@ public class GlobalBufferMemoryManager {
     }
 
     public long getCurrentUsedBytes() {
-        if (counterMode == CounterMode.STRIPED_LONG_ADDER) {
-            long used = stripedTotalUsed.sum();
-            return Math.max(0L, used);
-        }
-        return Math.max(0L, totalUsed.get());
+        long base = counterMode == CounterMode.EXACT_CAS
+                ? usedBytesCas.get()
+                : usedBytesAdder.sum();
+        long result = base + forceAllocateUsed.get();
+        return Math.max(0L, result);
     }
 
     public long getTotalUsed() {
@@ -233,20 +218,18 @@ public class GlobalBufferMemoryManager {
         updateMetrics();
     }
 
-    private void updateMetrics() {
-        LogCollectMetrics m = metrics == null ? NoopLogCollectMetrics.INSTANCE : metrics;
-        m.updateGlobalBufferUtilization(utilization());
-        m.updateGlobalHardCeilingUtilization(hardCeilingUtilization());
+    private void doAdd(long bytes) {
+        if (counterMode == CounterMode.EXACT_CAS) {
+            usedBytesCas.addAndGet(bytes);
+        } else {
+            usedBytesAdder.add(bytes);
+        }
     }
 
-    private long resolveHardCeilingBytes(long soft, long explicitHard) {
-        if (explicitHard > 0) {
-            return explicitHard;
-        }
-        if (soft <= 0) {
-            return 0L;
-        }
-        return (long) (soft * DEFAULT_HARD_CEILING_RATIO);
+    private void updateMetrics() {
+        LogCollectMetrics current = metrics == null ? NoopLogCollectMetrics.INSTANCE : metrics;
+        current.updateGlobalBufferUtilization(utilization());
+        current.updateGlobalHardCeilingUtilization(hardCeilingUtilization());
     }
 
     private long validateMaxBytes(long bytes) {
@@ -261,11 +244,21 @@ public class GlobalBufferMemoryManager {
         return bytes;
     }
 
+    private long resolveHardCeilingBytes(long soft, long explicitHard) {
+        if (explicitHard > 0) {
+            return explicitHard;
+        }
+        if (soft <= 0) {
+            return 0L;
+        }
+        return (long) (soft * DEFAULT_HARD_CEILING_RATIO);
+    }
+
     private String formatBytes(long bytes) {
-        if (bytes < 0) {
+        if (bytes < 0L) {
             return "unknown";
         }
-        if (bytes < 1024) {
+        if (bytes < 1024L) {
             return bytes + "B";
         }
         if (bytes < 1024L * 1024L) {

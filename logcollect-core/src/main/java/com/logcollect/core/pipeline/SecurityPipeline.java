@@ -89,12 +89,39 @@ public class SecurityPipeline {
                                                String throwableString,
                                                Map<String, String> mdcContext,
                                                SecurityMetrics metrics) {
+        return processRawRecordWithDeadline(traceId, content, level, timestamp, threadName, loggerName,
+                throwableString, mdcContext, metrics, Long.MAX_VALUE);
+    }
+
+    public ProcessedLogRecord processRawRecordWithDeadline(String traceId,
+                                                           String content,
+                                                           String level,
+                                                           long timestamp,
+                                                           String threadName,
+                                                           String loggerName,
+                                                           String throwableString,
+                                                           Map<String, String> mdcContext,
+                                                           SecurityMetrics metrics,
+                                                           long deadlineNanos) {
         SecurityMetrics metricsRef = metrics == null ? SecurityMetrics.NOOP : metrics;
 
-        SinglePassSecurityProcessor.ProcessResult contentResult =
-                processor.process(content, true);
-        SinglePassSecurityProcessor.ProcessResult throwableResult =
-                processor.process(throwableString, false);
+        SinglePassSecurityProcessor.ProcessResult contentResult;
+        if (isTimedOut(deadlineNanos)) {
+            metricsRef.onPipelineTimeout("content");
+            contentResult = new SinglePassSecurityProcessor.ProcessResult(content, false, false, false);
+        } else {
+            contentResult = processor.process(content, true);
+        }
+
+        SinglePassSecurityProcessor.ProcessResult throwableResult;
+        if (throwableString == null) {
+            throwableResult = new SinglePassSecurityProcessor.ProcessResult(null, false, false, false);
+        } else if (isTimedOut(deadlineNanos)) {
+            metricsRef.onPipelineTimeout("throwable");
+            throwableResult = new SinglePassSecurityProcessor.ProcessResult(throwableString, false, false, false);
+        } else {
+            throwableResult = processor.process(throwableString, false);
+        }
 
         if (contentResult.isSanitizedModified()) {
             metricsRef.onContentSanitized();
@@ -122,6 +149,14 @@ public class SecurityPipeline {
             guardedThrowable = lengthGuard.guardThrowable(guardedThrowable);
         }
 
+        Map<String, String> safeMdc;
+        if (isTimedOut(deadlineNanos)) {
+            metricsRef.onPipelineTimeout("mdc");
+            safeMdc = mdcContext == null ? Collections.emptyMap() : mdcContext;
+        } else {
+            safeMdc = sanitizeMdc(mdcContext);
+        }
+
         return new ProcessedLogRecord(
                 traceId,
                 guardedContent,
@@ -130,7 +165,11 @@ public class SecurityPipeline {
                 threadName,
                 loggerName,
                 guardedThrowable,
-                sanitizeMdc(mdcContext));
+                safeMdc);
+    }
+
+    private boolean isTimedOut(long deadlineNanos) {
+        return deadlineNanos != Long.MAX_VALUE && System.nanoTime() >= deadlineNanos;
     }
 
     private Map<String, String> sanitizeMdc(Map<String, String> mdcContext) {
@@ -272,6 +311,9 @@ public class SecurityPipeline {
         }
 
         default void onFastPathHit() {
+        }
+
+        default void onPipelineTimeout(String step) {
         }
 
         SecurityMetrics NOOP = new SecurityMetrics() {

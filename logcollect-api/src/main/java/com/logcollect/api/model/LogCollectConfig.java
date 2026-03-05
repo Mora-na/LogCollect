@@ -20,6 +20,12 @@ public class LogCollectConfig {
     private LogFramework logFramework = LogFramework.AUTO;
     private CollectMode collectMode = CollectMode.AUTO;
     private CollectMode effectiveCollectMode;
+    private boolean pipelineEnabled = true;
+    private int pipelineQueueCapacity = 8192;
+    private int pipelineConsumerThreads = 2;
+    private double pipelineBackpressureWarning = 0.7d;
+    private double pipelineBackpressureCritical = 0.9d;
+    private int pipelineHandoffTimeoutMs = 5;
 
     // ===== 缓冲区配置 =====
     private boolean useBuffer = true;
@@ -47,6 +53,7 @@ public class LogCollectConfig {
     private Class<? extends LogSanitizer> sanitizerClass = LogSanitizer.class;
     private boolean enableMask = true;
     private Class<? extends LogMasker> maskerClass = LogMasker.class;
+    private int securityPipelineTimeoutMs = 50;
     private int guardMaxContentLength = 32 * 1024;
     private int guardMaxThrowableLength = 64 * 1024;
 
@@ -137,6 +144,54 @@ public class LogCollectConfig {
 
     public void setEffectiveCollectMode(CollectMode effectiveCollectMode) {
         this.effectiveCollectMode = effectiveCollectMode;
+    }
+
+    public boolean isPipelineEnabled() {
+        return pipelineEnabled;
+    }
+
+    public void setPipelineEnabled(boolean pipelineEnabled) {
+        this.pipelineEnabled = pipelineEnabled;
+    }
+
+    public int getPipelineQueueCapacity() {
+        return pipelineQueueCapacity;
+    }
+
+    public void setPipelineQueueCapacity(int pipelineQueueCapacity) {
+        this.pipelineQueueCapacity = pipelineQueueCapacity;
+    }
+
+    public int getPipelineConsumerThreads() {
+        return pipelineConsumerThreads;
+    }
+
+    public void setPipelineConsumerThreads(int pipelineConsumerThreads) {
+        this.pipelineConsumerThreads = pipelineConsumerThreads;
+    }
+
+    public double getPipelineBackpressureWarning() {
+        return pipelineBackpressureWarning;
+    }
+
+    public void setPipelineBackpressureWarning(double pipelineBackpressureWarning) {
+        this.pipelineBackpressureWarning = pipelineBackpressureWarning;
+    }
+
+    public double getPipelineBackpressureCritical() {
+        return pipelineBackpressureCritical;
+    }
+
+    public void setPipelineBackpressureCritical(double pipelineBackpressureCritical) {
+        this.pipelineBackpressureCritical = pipelineBackpressureCritical;
+    }
+
+    public int getPipelineHandoffTimeoutMs() {
+        return pipelineHandoffTimeoutMs;
+    }
+
+    public void setPipelineHandoffTimeoutMs(int pipelineHandoffTimeoutMs) {
+        this.pipelineHandoffTimeoutMs = pipelineHandoffTimeoutMs;
     }
 
     public boolean isUseBuffer() {
@@ -305,6 +360,14 @@ public class LogCollectConfig {
 
     public void setMaskerClass(Class<? extends LogMasker> maskerClass) {
         this.maskerClass = maskerClass;
+    }
+
+    public int getSecurityPipelineTimeoutMs() {
+        return securityPipelineTimeoutMs;
+    }
+
+    public void setSecurityPipelineTimeoutMs(int securityPipelineTimeoutMs) {
+        this.securityPipelineTimeoutMs = securityPipelineTimeoutMs;
     }
 
     public int getGuardMaxContentLength() {

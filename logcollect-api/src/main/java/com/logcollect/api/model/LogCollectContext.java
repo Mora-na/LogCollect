@@ -7,6 +7,7 @@ import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -49,6 +50,10 @@ public class LogCollectContext {
     private final LogCollectHandler handler;
     /** 当前调用绑定的缓冲区实例（SINGLE/AGGREGATE 的实现不同）。 */
     private final Object buffer;
+    /** Pipeline 队列（V2 双阶段流水线）。 */
+    private volatile Object pipelineQueue;
+    /** Pipeline Consumer（用于关闭交接）。 */
+    private volatile Object pipelineConsumer;
     /** 当前调用绑定的熔断器实例。 */
     private final Object circuitBreaker;
     /** 当前最低采集级别。 */
@@ -69,6 +74,12 @@ public class LogCollectContext {
     private final AtomicLong totalCollectedBytes = new AtomicLong(0);
     /** 本次调用累计 flush 次数。 */
     private final AtomicInteger flushCount = new AtomicInteger(0);
+    /** 方法结束后标记 closing，通知 Consumer 停止处理。 */
+    private volatile boolean closing;
+    /** 方法生命周期结束标记。 */
+    private volatile boolean closed;
+    /** Consumer 是否正在处理当前 context 的记录。 */
+    private final AtomicBoolean consumerProcessing = new AtomicBoolean(false);
 
     /**
      * 业务侧主键/关联 ID。
@@ -193,6 +204,14 @@ public class LogCollectContext {
      */
     public Object getBuffer() { return buffer; }
 
+    public Object getPipelineQueue() { return pipelineQueue; }
+
+    public void setPipelineQueue(Object pipelineQueue) { this.pipelineQueue = pipelineQueue; }
+
+    public Object getPipelineConsumer() { return pipelineConsumer; }
+
+    public void setPipelineConsumer(Object pipelineConsumer) { this.pipelineConsumer = pipelineConsumer; }
+
     /**
      * @return 当前调用熔断器实例（内部对象，通常仅框架内部使用）
      */
@@ -312,6 +331,18 @@ public class LogCollectContext {
      * flush 次数加 1（框架每次真正执行 flush 后调用）。
      */
     public void incrementFlushCount() { flushCount.incrementAndGet(); }
+
+    public boolean isClosing() { return closing; }
+
+    public void markClosing() { this.closing = true; }
+
+    public boolean isClosed() { return closed; }
+
+    public void markClosed() { this.closed = true; }
+
+    public boolean isConsumerProcessing() { return consumerProcessing.get(); }
+
+    public void setConsumerProcessing(boolean processing) { this.consumerProcessing.set(processing); }
 
     /**
      * @return 业务 ID（原始对象）

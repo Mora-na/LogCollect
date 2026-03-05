@@ -13,7 +13,10 @@ public enum DegradeReason {
     GLOBAL_QUOTA_EXHAUSTED("global_quota_exhausted"),
     GLOBAL_HARD_CEILING_REACHED("global_hard_ceiling_reached"),
     BUFFER_OVERFLOW_REJECTED("buffer_overflow_rejected"),
-    BUFFER_OVERFLOW_EVICTED("buffer_overflow_evicted");
+    BUFFER_OVERFLOW_EVICTED("buffer_overflow_evicted"),
+    PIPELINE_QUEUE_FULL("pipeline_queue_full"),
+    PIPELINE_BACKPRESSURE("pipeline_backpressure"),
+    BUFFER_CLOSED_LATE_ARRIVAL("buffer_closed_late_arrival");
 
     private final String code;
 

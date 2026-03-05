@@ -30,6 +30,11 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
     private final ConcurrentHashMap<String, Timer> persistTimers = new ConcurrentHashMap<String, Timer>();
     private final ConcurrentHashMap<String, Timer> securityTimers = new ConcurrentHashMap<String, Timer>();
     private final ConcurrentHashMap<String, Timer> handlerTimers = new ConcurrentHashMap<String, Timer>();
+    private final ConcurrentHashMap<String, Timer> pipelineProcessTimers = new ConcurrentHashMap<String, Timer>();
+    private final ConcurrentHashMap<String, AtomicReference<Double>> pipelineQueueUtilizations =
+            new ConcurrentHashMap<String, AtomicReference<Double>>();
+    private final ConcurrentHashMap<String, AtomicReference<Double>> pipelineConsumerIdleRatios =
+            new ConcurrentHashMap<String, AtomicReference<Double>>();
 
     private final AtomicInteger activeCollections = new AtomicInteger(0);
     private final AtomicReference<Double> globalBufferUtilization = new AtomicReference<Double>(0.0d);
@@ -188,6 +193,44 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
     }
 
     @Override
+    public void incrementPipelineBackpressure(String method, String level) {
+        String levelTag = safeValue(level, "UNKNOWN");
+        methodMeters(method).pipelineBackpressure(levelTag).increment();
+    }
+
+    @Override
+    public void incrementPipelineTimeout(String methodKey, String step) {
+        String stepTag = safeValue(step, "unknown");
+        methodMeters(methodKey).pipelineTimeout(stepTag).increment();
+    }
+
+    @Override
+    public void updatePipelineQueueUtilization(String methodKey, double utilization) {
+        String methodTag = normalizeMethodKey(methodKey);
+        AtomicReference<Double> gaugeValue = pipelineQueueUtilizations.computeIfAbsent(methodTag, key -> {
+            AtomicReference<Double> value = new AtomicReference<Double>(0.0d);
+            Gauge.builder(prefix + ".pipeline.queue.utilization", value, AtomicReference::get)
+                    .tag("method", methodTag)
+                    .register(registry);
+            return value;
+        });
+        gaugeValue.set(utilization);
+    }
+
+    @Override
+    public void updatePipelineConsumerIdleRatio(String consumerName, double idleRatio) {
+        String consumerTag = safeValue(consumerName, "unknown");
+        AtomicReference<Double> gaugeValue = pipelineConsumerIdleRatios.computeIfAbsent(consumerTag, key -> {
+            AtomicReference<Double> value = new AtomicReference<Double>(0.0d);
+            Gauge.builder(prefix + ".pipeline.consumer.idle.ratio", value, AtomicReference::get)
+                    .tag("consumer", consumerTag)
+                    .register(registry);
+            return value;
+        });
+        gaugeValue.set(idleRatio);
+    }
+
+    @Override
     public void incrementConfigRefresh(String source) {
         String sourceTag = safeValue(source, "unknown");
         configRefreshCounters.computeIfAbsent(sourceTag, key -> Counter.builder(prefix + ".config.refresh.total")
@@ -286,6 +329,26 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
         Timer.Sample timerSample = (Timer.Sample) sample;
         Timer timer = securityTimers.computeIfAbsent(methodTag,
                 key -> Timer.builder(prefix + ".security.pipeline.duration")
+                        .tag("method", methodTag)
+                        .publishPercentiles(0.5, 0.95, 0.99)
+                        .register(registry));
+        timerSample.stop(timer);
+    }
+
+    @Override
+    public Object startPipelineProcessTimer() {
+        return Timer.start(registry);
+    }
+
+    @Override
+    public void stopPipelineProcessTimer(Object timerSampleObj, String methodKey) {
+        if (!(timerSampleObj instanceof Timer.Sample)) {
+            return;
+        }
+        String methodTag = normalizeMethodKey(methodKey);
+        Timer.Sample timerSample = (Timer.Sample) timerSampleObj;
+        Timer timer = pipelineProcessTimers.computeIfAbsent(methodTag,
+                key -> Timer.builder(prefix + ".pipeline.consumer.process.duration")
                         .tag("method", methodTag)
                         .publishPercentiles(0.5, 0.95, 0.99)
                         .register(registry));
@@ -425,6 +488,10 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
                 new ConcurrentHashMap<String, Counter>();
         private final ConcurrentHashMap<String, Counter> overflowCounters =
                 new ConcurrentHashMap<String, Counter>();
+        private final ConcurrentHashMap<String, Counter> pipelineBackpressureCounters =
+                new ConcurrentHashMap<String, Counter>();
+        private final ConcurrentHashMap<String, Counter> pipelineTimeoutCounters =
+                new ConcurrentHashMap<String, Counter>();
         private final ConcurrentHashMap<String, Counter> directFlushCounters =
                 new ConcurrentHashMap<String, Counter>();
         private final ConcurrentHashMap<String, Counter> overflowDegradedCounters =
@@ -492,6 +559,22 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
                     .tag("method", methodTag)
                     .tag("overflowPolicy", overflowTag)
                     .register(registry));
+        }
+
+        private Counter pipelineBackpressure(String levelTag) {
+            return pipelineBackpressureCounters.computeIfAbsent(levelTag,
+                    k -> Counter.builder(prefix + ".pipeline.backpressure.total")
+                            .tag("method", methodTag)
+                            .tag("level", levelTag)
+                            .register(registry));
+        }
+
+        private Counter pipelineTimeout(String stepTag) {
+            return pipelineTimeoutCounters.computeIfAbsent(stepTag,
+                    k -> Counter.builder(prefix + ".security.pipeline.timeout.total")
+                            .tag("method", methodTag)
+                            .tag("step", stepTag)
+                            .register(registry));
         }
 
         private Counter directFlush(String outcomeTag) {

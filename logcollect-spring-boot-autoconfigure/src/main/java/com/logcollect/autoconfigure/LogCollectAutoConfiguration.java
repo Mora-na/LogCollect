@@ -18,6 +18,7 @@ import com.logcollect.core.format.ConsolePatternDetector;
 import com.logcollect.core.format.PatternCleaner;
 import com.logcollect.core.format.PatternValidator;
 import com.logcollect.core.internal.LogCollectInternalLogger;
+import com.logcollect.core.pipeline.LogCollectPipelineManager;
 import com.logcollect.core.runtime.LogCollectGlobalSwitch;
 import com.logcollect.core.security.DefaultLogMasker;
 import com.logcollect.core.security.DefaultLogSanitizer;
@@ -125,10 +126,32 @@ public class LogCollectAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public LogCollectPipelineManager logCollectPipelineManager(
+            LogCollectProperties props,
+            ObjectProvider<SecurityComponentRegistry> securityRegistryProvider) {
+        int consumerThreads = 2;
+        if (props != null && props.getGlobal() != null && props.getGlobal().getPipeline() != null) {
+            consumerThreads = props.getGlobal().getPipeline().getConsumerThreads();
+        }
+        LogCollectPipelineManager manager = new LogCollectPipelineManager(
+                consumerThreads,
+                securityRegistryProvider.getIfAvailable());
+        manager.start();
+        return manager;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public LogCollectLifecycle logCollectLifecycle(LogCollectBufferRegistry registry,
                                                    LogCollectGlobalSwitch globalSwitch,
-                                                   ObjectProvider<LogCollectMetrics> metricsProvider) {
-        return new LogCollectLifecycle(registry, globalSwitch, metricsProvider.getIfAvailable(), 15_000L);
+                                                   ObjectProvider<LogCollectMetrics> metricsProvider,
+                                                   ObjectProvider<LogCollectPipelineManager> pipelineManagerProvider) {
+        return new LogCollectLifecycle(
+                registry,
+                globalSwitch,
+                metricsProvider.getIfAvailable(),
+                pipelineManagerProvider.getIfAvailable(),
+                15_000L);
     }
 
     @Bean
@@ -200,8 +223,9 @@ public class LogCollectAutoConfiguration {
     @Bean
     public LogCollectConfigValidator logCollectConfigValidator(
             LogCollectConfigResolver resolver,
-            ObjectProvider<GlobalBufferMemoryManager> globalBufferManagerProvider) {
-        return new LogCollectConfigValidator(resolver, globalBufferManagerProvider.getIfAvailable());
+            ObjectProvider<GlobalBufferMemoryManager> globalBufferManagerProvider,
+            LogCollectProperties properties) {
+        return new LogCollectConfigValidator(resolver, globalBufferManagerProvider.getIfAvailable(), properties);
     }
 
     @Bean

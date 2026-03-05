@@ -10,6 +10,7 @@ import com.logcollect.api.enums.LogFramework;
 import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.core.format.ConsolePatternDetector;
 import com.logcollect.core.internal.LogCollectInternalLogger;
+import com.logcollect.core.pipeline.LogCollectPipelineManager;
 import com.logcollect.core.security.SecurityComponentRegistry;
 import com.logcollect.logback.LogCollectLogbackAppender;
 import com.logcollect.logback.LogbackConsolePatternDetector;
@@ -31,13 +32,16 @@ public class LogCollectLogbackAppenderAutoConfiguration implements InitializingB
     private final LogCollectProperties properties;
     private final LogCollectMetrics metrics;
     private final SecurityComponentRegistry securityRegistry;
+    private final LogCollectPipelineManager pipelineManager;
 
     public LogCollectLogbackAppenderAutoConfiguration(LogCollectProperties properties,
                                                       org.springframework.beans.factory.ObjectProvider<LogCollectMetrics> metricsProvider,
-                                                      org.springframework.beans.factory.ObjectProvider<SecurityComponentRegistry> securityRegistryProvider) {
+                                                      org.springframework.beans.factory.ObjectProvider<SecurityComponentRegistry> securityRegistryProvider,
+                                                      org.springframework.beans.factory.ObjectProvider<LogCollectPipelineManager> pipelineManagerProvider) {
         this.properties = properties;
         this.metrics = metricsProvider.getIfAvailable();
         this.securityRegistry = securityRegistryProvider.getIfAvailable();
+        this.pipelineManager = pipelineManagerProvider.getIfAvailable();
     }
 
     @Override
@@ -70,6 +74,7 @@ public class LogCollectLogbackAppenderAutoConfiguration implements InitializingB
                 if (appenderByName instanceof LogCollectLogbackAppender) {
                     ((LogCollectLogbackAppender) appenderByName).setSecurityRegistry(securityRegistry);
                     ((LogCollectLogbackAppender) appenderByName).setMetrics(metrics);
+                    ((LogCollectLogbackAppender) appenderByName).setPipelineManager(pipelineManager);
                     warnAboutSyncIoAppenders(root);
                     return;
                 }
@@ -89,6 +94,7 @@ public class LogCollectLogbackAppenderAutoConfiguration implements InitializingB
             appender.setContext(context);
             appender.setSecurityRegistry(securityRegistry);
             appender.setMetrics(metrics);
+            appender.setPipelineManager(pipelineManager);
             appender.start();
             root.addAppender(appender);
             LogCollectInternalLogger.info("Auto-registered LogCollect Logback appender '{}' on ROOT logger.",

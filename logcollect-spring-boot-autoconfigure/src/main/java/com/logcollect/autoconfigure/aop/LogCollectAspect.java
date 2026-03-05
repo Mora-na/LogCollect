@@ -22,6 +22,7 @@ import com.logcollect.core.context.LogCollectContextManager;
 import com.logcollect.core.degrade.DegradeFileManager;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.mdc.MDCAdapter;
+import com.logcollect.core.pipeline.LogCollectPipelineManager;
 import com.logcollect.core.pipeline.SecurityPipeline;
 import com.logcollect.core.runtime.LogCollectGlobalSwitch;
 import com.logcollect.core.security.DefaultLogMasker;
@@ -79,6 +80,9 @@ public class LogCollectAspect {
 
     @Autowired(required = false)
     private com.logcollect.autoconfigure.LogCollectBufferRegistry bufferRegistry;
+
+    @Autowired(required = false)
+    private LogCollectPipelineManager pipelineManager;
 
     private static final String ATTR_SECURITY_PIPELINE = "__securityPipeline";
     private static final String ATTR_SECURITY_METRICS = "__securityMetrics";
@@ -246,28 +250,41 @@ public class LogCollectAspect {
                                            CollectMode collectMode,
                                            LogCollect logCollect) {
         GlobalBufferMemoryManager manager = getGlobalBufferManager(config);
-        LogCollectBuffer buffer = null;
+        Object buffer = null;
+        boolean pipelineActive = config != null
+                && config.isUseBuffer()
+                && config.isPipelineEnabled()
+                && pipelineManager != null;
         if (config.isUseBuffer()) {
-            BoundedBufferPolicy policy = new BoundedBufferPolicy(
-                    config.getMaxBufferBytes(),
-                    config.getMaxBufferSize(),
-                    parseOverflowStrategy(config.getBufferOverflowStrategy()));
-            if (collectMode == CollectMode.AGGREGATE) {
-                buffer = new AggregateModeBuffer(
+            if (pipelineActive) {
+                buffer = new SingleWriterBuffer(
                         config.getMaxBufferSize(),
                         config.getMaxBufferBytes(),
-                        manager,
-                        handler,
-                        policy);
+                        Math.min(256, Math.max(16, config.getMaxBufferSize())));
             } else {
-                buffer = new SingleModeBuffer(
-                        config.getMaxBufferSize(),
+                BoundedBufferPolicy policy = new BoundedBufferPolicy(
                         config.getMaxBufferBytes(),
-                        manager,
-                        policy);
-            }
-            if (bufferRegistry != null) {
-                bufferRegistry.register(buffer);
+                        config.getMaxBufferSize(),
+                        parseOverflowStrategy(config.getBufferOverflowStrategy()));
+                LogCollectBuffer legacyBuffer;
+                if (collectMode == CollectMode.AGGREGATE) {
+                    legacyBuffer = new AggregateModeBuffer(
+                            config.getMaxBufferSize(),
+                            config.getMaxBufferBytes(),
+                            manager,
+                            handler,
+                            policy);
+                } else {
+                    legacyBuffer = new SingleModeBuffer(
+                            config.getMaxBufferSize(),
+                            config.getMaxBufferBytes(),
+                            manager,
+                            policy);
+                }
+                buffer = legacyBuffer;
+                if (bufferRegistry != null) {
+                    bufferRegistry.register(legacyBuffer);
+                }
             }
         }
         LogCollectContext context = new LogCollectContext(traceId, method, args, config, handler, buffer, breaker, collectMode);
@@ -290,6 +307,9 @@ public class LogCollectAspect {
             context.setAttribute("__backpressureCallback", backpressureCallback);
         }
         prepareSecuritySession(context, config, context.getMethodSignature(), bridgeMetrics);
+        if (pipelineActive) {
+            pipelineManager.registerContext(context);
+        }
         return context;
     }
 
@@ -524,6 +544,14 @@ public class LogCollectAspect {
 
     private void closeBuffer(LogCollectContext ctx) {
         try {
+            if (ctx != null
+                    && ctx.getConfig() != null
+                    && ctx.getConfig().isPipelineEnabled()
+                    && ctx.getPipelineQueue() != null
+                    && pipelineManager != null) {
+                pipelineManager.closeContext(ctx);
+                return;
+            }
             Object buf = ctx.getBuffer();
             if (buf instanceof LogCollectBuffer) {
                 ((LogCollectBuffer) buf).closeAndFlush(ctx);

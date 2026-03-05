@@ -4,6 +4,7 @@ import com.logcollect.api.enums.LogFramework;
 import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.core.format.ConsolePatternDetector;
 import com.logcollect.core.internal.LogCollectInternalLogger;
+import com.logcollect.core.pipeline.LogCollectPipelineManager;
 import com.logcollect.core.security.SecurityComponentRegistry;
 import com.logcollect.log4j2.Log4j2ConsolePatternDetector;
 import com.logcollect.log4j2.LogCollectLog4j2Appender;
@@ -27,13 +28,16 @@ public class LogCollectLog4j2AppenderAutoConfiguration implements InitializingBe
     private final LogCollectProperties properties;
     private final LogCollectMetrics metrics;
     private final SecurityComponentRegistry securityRegistry;
+    private final LogCollectPipelineManager pipelineManager;
 
     public LogCollectLog4j2AppenderAutoConfiguration(LogCollectProperties properties,
                                                      org.springframework.beans.factory.ObjectProvider<LogCollectMetrics> metricsProvider,
-                                                     org.springframework.beans.factory.ObjectProvider<SecurityComponentRegistry> securityRegistryProvider) {
+                                                     org.springframework.beans.factory.ObjectProvider<SecurityComponentRegistry> securityRegistryProvider,
+                                                     org.springframework.beans.factory.ObjectProvider<LogCollectPipelineManager> pipelineManagerProvider) {
         this.properties = properties;
         this.metrics = metricsProvider.getIfAvailable();
         this.securityRegistry = securityRegistryProvider.getIfAvailable();
+        this.pipelineManager = pipelineManagerProvider.getIfAvailable();
     }
 
     @Override
@@ -74,12 +78,14 @@ public class LogCollectLog4j2AppenderAutoConfiguration implements InitializingBe
             if (existingByName instanceof LogCollectLog4j2Appender) {
                 ((LogCollectLog4j2Appender) existingByName).setSecurityRegistry(securityRegistry);
                 ((LogCollectLog4j2Appender) existingByName).setMetrics(metrics);
+                ((LogCollectLog4j2Appender) existingByName).setPipelineManager(pipelineManager);
             }
 
             Appender logCollectAppender = findLogCollectAppender(log4jConfiguration.getAppenders());
             if (logCollectAppender instanceof LogCollectLog4j2Appender) {
                 ((LogCollectLog4j2Appender) logCollectAppender).setSecurityRegistry(securityRegistry);
                 ((LogCollectLog4j2Appender) logCollectAppender).setMetrics(metrics);
+                ((LogCollectLog4j2Appender) logCollectAppender).setPipelineManager(pipelineManager);
             }
             if (logCollectAppender == null) {
                 LogCollectLog4j2Appender created = LogCollectLog4j2Appender.createAppender(appenderName, null);
@@ -89,6 +95,7 @@ public class LogCollectLog4j2AppenderAutoConfiguration implements InitializingBe
                 }
                 created.setSecurityRegistry(securityRegistry);
                 created.setMetrics(metrics);
+                created.setPipelineManager(pipelineManager);
                 created.start();
                 log4jConfiguration.addAppender(created);
                 logCollectAppender = created;

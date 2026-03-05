@@ -15,6 +15,7 @@ import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.pipeline.SecurityPipeline;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -290,12 +291,33 @@ public class AggregateModeBuffer implements LogCollectBuffer {
         if (candidate == null) {
             return false;
         }
+        Class<?> candidateClass = candidate.getClass();
+        if (isProxyLikeHandlerClass(candidateClass)) {
+            return false;
+        }
         try {
-            Method method = candidate.getClass().getMethod("formatLogLine", LogEntry.class);
+            Method method = candidateClass.getMethod("formatLogLine", LogEntry.class);
             return method.getDeclaringClass() == LogCollectHandler.class;
         } catch (Exception ignore) {
             return false;
         }
+    }
+
+    private boolean isProxyLikeHandlerClass(Class<?> candidateClass) {
+        if (candidateClass == null) {
+            return false;
+        }
+        if (Proxy.isProxyClass(candidateClass)
+                || candidateClass.isSynthetic()
+                || candidateClass.isAnonymousClass()
+                || candidateClass.isLocalClass()) {
+            return true;
+        }
+        String name = candidateClass.getName();
+        return name.contains("$$")
+                || name.contains("Mockito")
+                || name.contains("ByteBuddy")
+                || name.contains("CGLIB");
     }
 
     @Override

@@ -118,6 +118,14 @@ class LogCollectConfigResolverAdditionalTest {
         assertThat(config.getSamplingRate()).isEqualTo(1.0d);
     }
 
+    @Test
+    void getCachedConfig_unknownKey_and_saveWithNullCache_areNoop() {
+        LogCollectConfigResolver resolver = new LogCollectConfigResolver(Collections.<LogCollectConfigSource>emptyList(), null);
+
+        assertThat(resolver.getCachedConfig("com.example.Unknown#method()")).isNull();
+        resolver.saveToLocalCache();
+    }
+
     @LogCollect(minLevel = "DEBUG", maxBufferSize = 123)
     private static void annotatedMethod() {
     }

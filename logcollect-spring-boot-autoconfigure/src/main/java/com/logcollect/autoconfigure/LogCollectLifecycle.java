@@ -3,6 +3,7 @@ package com.logcollect.autoconfigure;
 import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
 import com.logcollect.core.buffer.AsyncFlushExecutor;
 import com.logcollect.core.buffer.LogCollectBuffer;
+import com.logcollect.core.pipeline.LogCollectPipelineManager;
 import com.logcollect.core.runtime.LogCollectGlobalSwitch;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.InitializingBean;
@@ -24,20 +25,23 @@ public class LogCollectLifecycle implements SmartLifecycle, DisposableBean, Init
     private final LogCollectBufferRegistry registry;
     private final LogCollectGlobalSwitch globalSwitch;
     private final LogCollectMetrics metrics;
+    private final LogCollectPipelineManager pipelineManager;
     private final long shutdownTimeoutMs;
     private volatile boolean running = false;
 
     public LogCollectLifecycle(LogCollectBufferRegistry registry) {
-        this(registry, null, null, DEFAULT_SHUTDOWN_TIMEOUT_MS);
+        this(registry, null, null, null, DEFAULT_SHUTDOWN_TIMEOUT_MS);
     }
 
     public LogCollectLifecycle(LogCollectBufferRegistry registry,
                                LogCollectGlobalSwitch globalSwitch,
                                LogCollectMetrics metrics,
+                               LogCollectPipelineManager pipelineManager,
                                long shutdownTimeoutMs) {
         this.registry = registry;
         this.globalSwitch = globalSwitch;
         this.metrics = metrics;
+        this.pipelineManager = pipelineManager;
         this.shutdownTimeoutMs = shutdownTimeoutMs <= 0 ? DEFAULT_SHUTDOWN_TIMEOUT_MS : shutdownTimeoutMs;
     }
 
@@ -108,6 +112,9 @@ public class LogCollectLifecycle implements SmartLifecycle, DisposableBean, Init
             } catch (Error e) {
                 throw e;
             }
+        }
+        if (pipelineManager != null) {
+            pipelineManager.shutdown(timeoutMs);
         }
         AsyncFlushExecutor.shutdownAndAwait(timeoutMs);
     }

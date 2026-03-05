@@ -16,11 +16,14 @@ public class LogCollectConfigValidator implements SmartInitializingSingleton {
 
     private final LogCollectConfigResolver configResolver;
     private final GlobalBufferMemoryManager globalMemoryManager;
+    private final LogCollectProperties properties;
 
     public LogCollectConfigValidator(LogCollectConfigResolver configResolver,
-                                     GlobalBufferMemoryManager globalMemoryManager) {
+                                     GlobalBufferMemoryManager globalMemoryManager,
+                                     LogCollectProperties properties) {
         this.configResolver = configResolver;
         this.globalMemoryManager = globalMemoryManager;
+        this.properties = properties;
     }
 
     @Override
@@ -28,6 +31,7 @@ public class LogCollectConfigValidator implements SmartInitializingSingleton {
         validateGlobalProperties();
         validateCachedMethodConfigs();
         validateGlobalLimits();
+        validatePipelineConfig();
     }
 
     private void validateGlobalProperties() {
@@ -86,9 +90,24 @@ public class LogCollectConfigValidator implements SmartInitializingSingleton {
         long soft = globalMemoryManager.getMaxTotalBytes();
         long hard = globalMemoryManager.getHardCeilingBytes();
         if (hard > 0 && soft > 0 && hard < soft) {
-            LogCollectInternalLogger.warn(
-                    "hard-ceiling-bytes ({}) < total-max-bytes ({}). forceAllocate will always fail.",
-                    hard, soft);
+            throw new IllegalStateException(
+                    "[LogCollect] hard-ceiling-bytes (" + hard + ") < total-max-bytes (" + soft + ")");
+        }
+    }
+
+    private void validatePipelineConfig() {
+        if (properties == null || properties.getGlobal() == null || properties.getGlobal().getPipeline() == null) {
+            return;
+        }
+        int consumerThreads = properties.getGlobal().getPipeline().getConsumerThreads();
+        if (consumerThreads < 1 || consumerThreads > 16) {
+            LogCollectInternalLogger.warn("consumer-threads={} unusual. Recommended range: 1~4.", consumerThreads);
+        }
+        int queueCapacity = properties.getGlobal().getPipeline().getQueueCapacity();
+        if ((queueCapacity & (queueCapacity - 1)) != 0) {
+            LogCollectInternalLogger.info(
+                    "pipeline.queue-capacity={} is not a power of 2. Some queue implementations may round up.",
+                    queueCapacity);
         }
     }
 }

@@ -43,6 +43,25 @@ public interface LogCollectMetrics {
     default void incrementFastPathHits(String methodKey) {
     }
 
+    default void incrementPipelineBackpressure(String methodKey, String level) {
+    }
+
+    default void incrementPipelineTimeout(String methodKey, String step) {
+    }
+
+    default void updatePipelineQueueUtilization(String methodKey, double utilization) {
+    }
+
+    default void updatePipelineConsumerIdleRatio(String consumerName, double idleRatio) {
+    }
+
+    default Object startPipelineProcessTimer() {
+        return null;
+    }
+
+    default void stopPipelineProcessTimer(Object timerSample, String methodKey) {
+    }
+
     void incrementHandlerTimeout(String methodKey);
 
     default void incrementConfigRefresh(String source) {
