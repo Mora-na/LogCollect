@@ -103,9 +103,18 @@ public class LogCollectManagementEndpoint {
 
         if (bufferMemoryManager != null) {
             Map<String, Object> buffer = new LinkedHashMap<String, Object>();
-            buffer.put("totalUsedBytes", bufferMemoryManager.getTotalUsed());
-            buffer.put("maxTotalBytes", bufferMemoryManager.getMaxTotalBytes());
-            buffer.put("utilization", String.format("%.2f%%", bufferMemoryManager.utilization() * 100));
+            long used = bufferMemoryManager.getCurrentUsedBytes();
+            long soft = bufferMemoryManager.getMaxTotalBytes();
+            long hard = bufferMemoryManager.getHardCeilingBytes();
+            buffer.put("totalUsedBytes", used);
+            buffer.put("totalUsedHuman", formatBytes(used));
+            buffer.put("softLimitBytes", soft);
+            buffer.put("softLimitHuman", formatBytes(soft));
+            buffer.put("hardCeilingBytes", hard);
+            buffer.put("hardCeilingHuman", formatBytes(hard));
+            buffer.put("softUtilization", String.format("%.2f%%", bufferMemoryManager.utilization() * 100));
+            buffer.put("hardUtilization", String.format("%.2f%%", bufferMemoryManager.hardCeilingUtilization() * 100));
+            buffer.put("counterMode", bufferMemoryManager.getCounterMode().name());
             result.put("globalBuffer", buffer);
         }
 

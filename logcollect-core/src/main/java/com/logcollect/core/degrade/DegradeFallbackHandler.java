@@ -1,14 +1,17 @@
 package com.logcollect.core.degrade;
 
+import com.logcollect.api.enums.DegradeReason;
 import com.logcollect.api.enums.DegradeStorage;
 import com.logcollect.api.exception.LogCollectDegradeException;
 import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.api.metrics.NoopLogCollectMetrics;
 import com.logcollect.api.model.LogCollectConfig;
 import com.logcollect.api.model.LogCollectContext;
+import com.logcollect.api.model.LogEntry;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -102,6 +105,33 @@ public final class DegradeFallbackHandler {
         return fallbackSuccess;
     }
 
+    public static boolean handleDegraded(LogCollectContext context,
+                                         List<LogEntry> entries,
+                                         DegradeReason reason) {
+        List<String> lines = new ArrayList<String>();
+        String maxLevel = "TRACE";
+        if (entries != null) {
+            for (LogEntry entry : entries) {
+                if (entry == null) {
+                    continue;
+                }
+                lines.add(entry.getContent());
+                maxLevel = higherLevel(maxLevel, entry.getLevel());
+            }
+        }
+        return handleDegraded(context, code(reason), lines, maxLevel);
+    }
+
+    public static boolean handleDegraded(LogCollectContext context,
+                                         String formattedLine,
+                                         String level,
+                                         DegradeReason reason) {
+        List<String> lines = formattedLine == null
+                ? new ArrayList<String>()
+                : new ArrayList<String>(Collections.singletonList(formattedLine));
+        return handleDegraded(context, code(reason), lines, level);
+    }
+
     private static boolean degradeToFile(LogCollectContext context, List<String> lines) {
         Object fileManagerObj = context.getAttribute("__degradeFileManager");
         if (!(fileManagerObj instanceof DegradeFileManager)) {
@@ -152,5 +182,26 @@ public final class DegradeFallbackHandler {
             String reason = args[1] == null ? "unknown" : String.valueOf(args[1]);
             metrics.incrementDiscarded(method, reason);
         }
+    }
+
+    private static String code(DegradeReason reason) {
+        return reason == null ? "unknown" : reason.code();
+    }
+
+    private static String higherLevel(String left, String right) {
+        return levelRank(right) > levelRank(left) ? right : left;
+    }
+
+    private static int levelRank(String level) {
+        if (level == null) {
+            return 0;
+        }
+        String v = level.toUpperCase();
+        if ("FATAL".equals(v)) return 5;
+        if ("ERROR".equals(v)) return 4;
+        if ("WARN".equals(v)) return 3;
+        if ("INFO".equals(v)) return 2;
+        if ("DEBUG".equals(v)) return 1;
+        return 0;
     }
 }

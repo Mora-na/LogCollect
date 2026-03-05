@@ -363,7 +363,10 @@ public class LogCollectAspect {
         if (fallbackGlobalBufferManager == null) {
             synchronized (LogCollectAspect.class) {
                 if (fallbackGlobalBufferManager == null) {
-                    fallbackGlobalBufferManager = new GlobalBufferMemoryManager(config.getGlobalBufferTotalMaxBytes());
+                    fallbackGlobalBufferManager = new GlobalBufferMemoryManager(
+                            config.getGlobalBufferTotalMaxBytes(),
+                            GlobalBufferMemoryManager.CounterMode.EXACT_CAS,
+                            config.getGlobalBufferHardCeilingBytes());
                 }
             }
         }

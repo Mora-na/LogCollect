@@ -29,7 +29,10 @@ import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.pipeline.SecurityPipeline;
-import com.logcollect.core.security.*;
+import com.logcollect.core.security.DefaultLogMasker;
+import com.logcollect.core.security.DefaultLogSanitizer;
+import com.logcollect.core.security.QuickSanitizer;
+import com.logcollect.core.security.SecurityComponentRegistry;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -115,9 +118,8 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
             }
 
             long eventTimestamp = event.getTimeStamp();
-            String content = StringLengthGuard.guardContent(rawMessage, config.getGuardMaxContentLength());
-            String throwable = StringLengthGuard.guardThrowable(
-                    extractThrowableString(event), config.getGuardMaxThrowableLength());
+            String content = rawMessage;
+            String throwable = extractThrowableString(event);
 
             Object securityTimer = m.startSecurityTimer();
             SecurityPipeline.ProcessedLogRecord safeRecord = securityProcess(

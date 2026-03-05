@@ -13,9 +13,12 @@ import com.logcollect.core.test.CoreUnitTestBase;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -47,9 +50,10 @@ class SingleModeBufferBranchTest extends CoreUnitTestBase {
         LogCollectContext context = createTestContext(config, handler, CollectMode.SINGLE, null, null);
 
         SingleModeBuffer tooLarge = new SingleModeBuffer(100, 64, null);
-        assertThat(tooLarge.offer(context, createTestEntry(repeat("x", 300), "INFO"))).isFalse();
+        assertThat(tooLarge.offer(context, createTestEntry(repeat("x", 300), "INFO"))).isTrue();
 
-        GlobalBufferMemoryManager memoryManager = new GlobalBufferMemoryManager(0);
+        GlobalBufferMemoryManager memoryManager = new GlobalBufferMemoryManager(parseBytes("1MB"));
+        assertThat(memoryManager.forceAllocate(parseBytes("1100KB"))).isTrue();
         SingleModeBuffer globalRejected = new SingleModeBuffer(100, parseBytes("1MB"), memoryManager);
         assertThat(globalRejected.offer(context, createTestEntry("info", "INFO"))).isFalse();
         assertThat(globalRejected.offer(context, createTestEntry("warn", "WARN"))).isTrue();
@@ -208,6 +212,107 @@ class SingleModeBufferBranchTest extends CoreUnitTestBase {
         assertThat(buffer.offer(context, createTestEntry("first", "INFO"))).isTrue();
         assertThat(buffer.offer(context, createTestEntry("second", "INFO"))).isTrue();
         verify(handler, atLeastOnce()).appendLog(eq(context), any(LogEntry.class));
+    }
+
+    @Test
+    void offerBranches_coverOversizedDirectFlushAndHardCeilingPaths() {
+        LogCollectConfig config = baseConfig();
+        LogCollectHandler handler = mock(LogCollectHandler.class);
+        LogCollectContext context = createTestContext(config, handler, CollectMode.SINGLE, null, null);
+
+        SingleModeBuffer nullContextBuffer = new SingleModeBuffer(10, 64, null);
+        assertThat(nullContextBuffer.offer(null, createTestEntry(repeat("n", 512), "INFO"))).isTrue();
+
+        GlobalBufferMemoryManager exhausted = new GlobalBufferMemoryManager(
+                parseBytes("1MB"),
+                GlobalBufferMemoryManager.CounterMode.EXACT_CAS,
+                parseBytes("1MB"));
+        assertThat(exhausted.forceAllocate(parseBytes("1MB"))).isTrue();
+        SingleModeBuffer exhaustedBuffer = new SingleModeBuffer(10, 64, exhausted);
+        assertThat(exhaustedBuffer.offer(context, createTestEntry(repeat("q", 512), "WARN"))).isFalse();
+
+        GlobalBufferMemoryManager elastic = new GlobalBufferMemoryManager(
+                parseBytes("1MB"),
+                GlobalBufferMemoryManager.CounterMode.EXACT_CAS,
+                parseBytes("2MB"));
+        assertThat(elastic.forceAllocate(parseBytes("1MB"))).isTrue();
+        SingleModeBuffer directFlushBuffer = new SingleModeBuffer(10, 64, elastic);
+        assertThat(directFlushBuffer.offer(context, createTestEntry(repeat("e", 512), "ERROR"))).isTrue();
+        assertThat(elastic.getTotalUsed()).isEqualTo(parseBytes("1MB"));
+        verify(handler, atLeastOnce()).appendLog(eq(context), any(LogEntry.class));
+
+        SingleModeBuffer normalPath = new SingleModeBuffer(10, parseBytes("1MB"), exhausted);
+        assertThat(normalPath.offer(context, createTestEntry("small-warn", "WARN"))).isFalse();
+    }
+
+    @Test
+    void offerBranches_coverCircuitOpenAsyncAndCustomRejectPolicy() throws Exception {
+        LogCollectConfig asyncConfig = baseConfig();
+        asyncConfig.setAsync(true);
+        LogCollectHandler asyncHandler = mock(LogCollectHandler.class);
+        LogCollectContext asyncContext = createTestContext(asyncConfig, asyncHandler, CollectMode.SINGLE, null, null);
+        SingleModeBuffer asyncBuffer = new SingleModeBuffer(10, parseBytes("1MB"), null);
+        asyncBuffer.offer(asyncContext, createTestEntry("async-entry", "WARN"));
+        asyncBuffer.triggerFlush(asyncContext, false);
+        asyncBuffer.triggerFlush(asyncContext, true);
+
+        LogCollectConfig config = baseConfig();
+        LogCollectHandler handler = mock(LogCollectHandler.class);
+        LogCollectCircuitBreaker breaker = new LogCollectCircuitBreaker(() -> config);
+        breaker.forceOpen();
+        LogCollectContext openContext = createTestContext(config, handler, CollectMode.SINGLE, null, breaker);
+        SingleModeBuffer openBuffer = new SingleModeBuffer(10, 64, null);
+        assertThat(openBuffer.offer(openContext, createTestEntry(repeat("b", 256), "INFO"))).isFalse();
+
+        GlobalBufferMemoryManager manager = new GlobalBufferMemoryManager(parseBytes("2MB"));
+        BoundedBufferPolicy rejectPolicy = new BoundedBufferPolicy(
+                parseBytes("1MB"),
+                100,
+                BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY) {
+            @Override
+            public RejectReason beforeAdd(long entryBytes, Runnable earlyFlush) {
+                return RejectReason.BUFFER_FULL;
+            }
+        };
+        SingleModeBuffer rejectBuffer = new SingleModeBuffer(10, parseBytes("1MB"), manager, rejectPolicy);
+        long before = manager.getTotalUsed();
+        assertThat(rejectBuffer.offer(openContext, createTestEntry("reject", "INFO"))).isFalse();
+        assertThat(manager.getTotalUsed()).isEqualTo(before);
+
+        Field flushingField = SingleModeBuffer.class.getDeclaredField("flushing");
+        flushingField.setAccessible(true);
+        AtomicBoolean flushing = (AtomicBoolean) flushingField.get(rejectBuffer);
+        flushing.set(true);
+        Method doTriggerFlush = SingleModeBuffer.class
+                .getDeclaredMethod("doTriggerFlush", LogCollectContext.class, boolean.class, boolean.class);
+        doTriggerFlush.setAccessible(true);
+        doTriggerFlush.invoke(rejectBuffer, openContext, false, false);
+        flushing.set(false);
+    }
+
+    @Test
+    void helperBranches_coverNullCollectionsAndNotifyExceptions() throws Exception {
+        LogCollectConfig config = baseConfig();
+        LogCollectHandler handler = mock(LogCollectHandler.class);
+        doThrow(new RuntimeException("degrade-callback"))
+                .when(handler).onDegrade(any(LogCollectContext.class), any());
+
+        LogCollectContext context = createTestContext(config, handler, CollectMode.SINGLE, null, null);
+        SingleModeBuffer buffer = new SingleModeBuffer(10, parseBytes("1MB"), null);
+
+        assertThat(call(buffer, "retainWarnOrAbove", new Class[]{List.class}, new Object[]{null})).isNull();
+        @SuppressWarnings("unchecked")
+        List<String> lines = (List<String>) call(buffer, "toLines", new Class[]{List.class}, new Object[]{null});
+        assertThat(lines).isEmpty();
+
+        List<LogEntry> withNull = new ArrayList<LogEntry>();
+        withNull.add(null);
+        assertThat(call(buffer, "maxLevel", new Class[]{List.class}, withNull)).isEqualTo("TRACE");
+        assertThat(call(buffer, "joinContents", new Class[]{List.class}, new ArrayList<LogEntry>())).isEqualTo("");
+
+        assertThat((Boolean) call(buffer, "isHighLevel", new Class[]{String.class}, new Object[]{null})).isFalse();
+        call(buffer, "notifyDegrade", new Class[]{LogCollectContext.class, String.class}, context, "unit_reason");
+        call(buffer, "notifyDegrade", new Class[]{LogCollectContext.class, String.class}, null, "unit_reason");
     }
 
     private LogCollectConfig baseConfig() {

@@ -12,6 +12,12 @@ import java.util.Map;
  */
 public final class LogEntry {
 
+    private static final long ENTRY_OBJECT_OVERHEAD = 112L;
+    public static final long STRING_OBJECT_OVERHEAD = 56L;
+    private static final long MAP_NODE_OVERHEAD = 48L;
+    private static final long MAP_SHELL_OVERHEAD = 208L;
+    private static volatile double estimationFactor = 1.0d;
+
     private final String traceId;
     private final String content;
     private final String level;
@@ -101,22 +107,32 @@ public final class LogEntry {
     }
 
     private long computeEstimateBytes() {
-        long size = 112;
-        size += estimateString(traceId);
-        size += estimateString(content);
-        size += estimateString(level);
-        size += estimateString(threadName);
-        size += estimateString(loggerName);
-        size += estimateString(throwableString);
-        if (!mdcContext.isEmpty()) {
-            size += 64;
-            for (Map.Entry<String, String> entry : mdcContext.entrySet()) {
-                size += 32;
-                size += estimateString(entry.getKey());
-                size += estimateString(entry.getValue());
-            }
+        long size = ENTRY_OBJECT_OVERHEAD;
+        size += estimateStringBytes(traceId);
+        size += estimateStringBytes(content);
+        size += estimateStringBytes(level);
+        size += estimateStringBytes(threadName);
+        size += estimateStringBytes(loggerName);
+        size += estimateStringBytes(throwableString);
+        size += estimateMdcBytes(mdcContext);
+        double factor = estimationFactor;
+        if (factor != 1.0d) {
+            size = (long) (size * factor);
         }
         return size;
+    }
+
+    private static long estimateMdcBytes(Map<String, String> mdc) {
+        if (mdc == null || mdc.isEmpty()) {
+            return 0L;
+        }
+        long total = MAP_SHELL_OVERHEAD;
+        for (Map.Entry<String, String> entry : mdc.entrySet()) {
+            total += MAP_NODE_OVERHEAD;
+            total += estimateStringBytes(entry.getKey());
+            total += estimateStringBytes(entry.getValue());
+        }
+        return total;
     }
 
     private static boolean isUnmodifiableMap(Map<?, ?> map) {
@@ -130,11 +146,27 @@ public final class LogEntry {
         return className.contains("Unmodifiable") || className.contains("ImmutableMap");
     }
 
-    private static long estimateString(String value) {
+    public static long estimateStringBytes(String value) {
         if (value == null) {
-            return 0;
+            return 0L;
         }
-        return 48L + ((long) value.length() << 1);
+        long dataBytes = alignTo8((long) value.length() * 2L);
+        return STRING_OBJECT_OVERHEAD + dataBytes;
+    }
+
+    public static long alignTo8(long bytes) {
+        return (bytes + 7L) & ~7L;
+    }
+
+    public static void setEstimationFactor(double factor) {
+        if (factor <= 0.0d) {
+            throw new IllegalArgumentException("factor must be > 0, got: " + factor);
+        }
+        estimationFactor = factor;
+    }
+
+    public static double getEstimationFactor() {
+        return estimationFactor;
     }
 
     public static Builder builder() {

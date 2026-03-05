@@ -8,6 +8,8 @@ import com.logcollect.api.format.LogLineDefaults;
 import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.api.metrics.NoopLogCollectMetrics;
 import com.logcollect.api.model.LogCollectConfig;
+import com.logcollect.api.model.LogEntry;
+import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.format.PatternCleaner;
 import com.logcollect.core.format.PatternValidator;
 import com.logcollect.core.internal.LogCollectInternalLogger;
@@ -33,6 +35,9 @@ public class LogCollectConfigResolver {
             new LinkedHashSet<String>(Arrays.asList(
                     "degrade.file.",
                     "buffer.total-max-bytes",
+                    "buffer.hard-ceiling-bytes",
+                    "buffer.counter-mode",
+                    "buffer.estimation-factor",
                     "metrics.prefix",
                     "guard.max-content-length",
                     "guard.max-throwable-length"
@@ -44,6 +49,7 @@ public class LogCollectConfigResolver {
     private final LogCollectLocalConfigCache cache;
     private final LogCollectGlobalSwitch globalSwitch;
     private final LogCollectMetrics metrics;
+    private final GlobalBufferMemoryManager globalBufferMemoryManager;
 
     private final ConcurrentHashMap<String, LogCollectConfig> resolvedCache =
             new ConcurrentHashMap<String, LogCollectConfig>();
@@ -58,7 +64,7 @@ public class LogCollectConfigResolver {
      * @param cache   本地缓存，可为 null
      */
     public LogCollectConfigResolver(List<LogCollectConfigSource> sources, LogCollectLocalConfigCache cache) {
-        this(sources, cache, null, null);
+        this(sources, cache, null, null, null);
     }
 
     /**
@@ -73,6 +79,14 @@ public class LogCollectConfigResolver {
                                     LogCollectLocalConfigCache cache,
                                     LogCollectGlobalSwitch globalSwitch,
                                     LogCollectMetrics metrics) {
+        this(sources, cache, globalSwitch, metrics, null);
+    }
+
+    public LogCollectConfigResolver(List<LogCollectConfigSource> sources,
+                                    LogCollectLocalConfigCache cache,
+                                    LogCollectGlobalSwitch globalSwitch,
+                                    LogCollectMetrics metrics,
+                                    GlobalBufferMemoryManager globalBufferMemoryManager) {
         List<LogCollectConfigSource> sorted = new ArrayList<LogCollectConfigSource>();
         if (sources != null) {
             sorted.addAll(sources);
@@ -82,9 +96,11 @@ public class LogCollectConfigResolver {
         this.cache = cache;
         this.globalSwitch = globalSwitch;
         this.metrics = metrics == null ? NoopLogCollectMetrics.INSTANCE : metrics;
+        this.globalBufferMemoryManager = globalBufferMemoryManager;
         syncGlobalEnabledFromSources();
         syncGlobalLogLinePatternFromSources();
         refreshStartupOnlySnapshot();
+        syncGlobalBufferRuntime(Collections.<String, String>emptyMap(), "startup");
     }
 
     /**
@@ -125,7 +141,7 @@ public class LogCollectConfigResolver {
      * 处理配置变更，默认来源标记为 {@code unknown}。
      */
     public void onConfigChange() {
-        onConfigChange("unknown");
+        onConfigChange("unknown", Collections.<String, String>emptyMap());
     }
 
     /**
@@ -134,10 +150,15 @@ public class LogCollectConfigResolver {
      * @param source 变更来源标识，可为 null
      */
     public void onConfigChange(String source) {
+        onConfigChange(source, Collections.<String, String>emptyMap());
+    }
+
+    public void onConfigChange(String source, Map<String, String> changedProperties) {
         Map<String, String> before = startupOnlySnapshot;
         clearCache();
         syncGlobalEnabledFromSources();
         syncGlobalLogLinePatternFromSources();
+        syncGlobalBufferRuntime(changedProperties, source);
         logStartupOnlyRuntimeChanges(before, source);
         metrics.incrementConfigRefresh(source == null ? "unknown" : source);
         LogCollectInternalLogger.info("Config cache cleared due to config change from: {}",
@@ -536,6 +557,8 @@ public class LogCollectConfigResolver {
         applyDataSize(props, "buffer.max-bytes", config::setMaxBufferBytes);
         applyString(props, "buffer.overflow-strategy", config::setBufferOverflowStrategy);
         applyDataSize(props, "buffer.total-max-bytes", config::setGlobalBufferTotalMaxBytes);
+        applyDataSize(props, "buffer.hard-ceiling-bytes", config::setGlobalBufferHardCeilingBytes);
+        applyDouble(props, "buffer.estimation-factor", config::setGlobalBufferEstimationFactor);
 
         applyBoolean(props, "degrade.enabled", config::setEnableDegrade);
         applyInt(props, "degrade.fail-threshold", config::setDegradeFailThreshold);
@@ -641,6 +664,132 @@ public class LogCollectConfigResolver {
             }
         }
         return snapshot;
+    }
+
+    private void syncGlobalBufferRuntime(Map<String, String> changedProperties, String source) {
+        Map<String, String> globals = loadGlobalProperties();
+        syncDeprecatedGuardNotice(globals, changedProperties, source);
+        syncEstimationFactor(globals, changedProperties, source);
+        syncGlobalBufferLimits(globals, changedProperties, source);
+        syncCounterModeWarning(globals, changedProperties, source);
+    }
+
+    private void syncDeprecatedGuardNotice(Map<String, String> globals,
+                                           Map<String, String> changedProperties,
+                                           String source) {
+        boolean contentConfigured = hasChangedOrConfigured(globals, changedProperties, "guard.max-content-length");
+        boolean throwableConfigured = hasChangedOrConfigured(globals, changedProperties, "guard.max-throwable-length");
+        if (!contentConfigured && !throwableConfigured) {
+            return;
+        }
+        LogCollectInternalLogger.info(
+                "Detected deprecated guard config (source={}): max-content-length/max-throwable-length are ignored since v1.2.0.",
+                source == null ? "unknown" : source);
+    }
+
+    private void syncEstimationFactor(Map<String, String> globals,
+                                      Map<String, String> changedProperties,
+                                      String source) {
+        if (!hasChangedOrConfigured(globals, changedProperties, "buffer.estimation-factor")) {
+            return;
+        }
+        String value = globals.get("buffer.estimation-factor");
+        if (value == null || value.trim().isEmpty()) {
+            return;
+        }
+        try {
+            double factor = Double.parseDouble(value.trim());
+            double old = LogEntry.getEstimationFactor();
+            if (Double.compare(old, factor) == 0) {
+                return;
+            }
+            LogEntry.setEstimationFactor(factor);
+            LogCollectInternalLogger.info("Updated buffer estimation-factor: {} -> {} (source={})",
+                    old, factor, source == null ? "unknown" : source);
+        } catch (Exception ignored) {
+            LogCollectInternalLogger.warn("Ignored invalid estimation-factor value: {}", value);
+        }
+    }
+
+    private void syncGlobalBufferLimits(Map<String, String> globals,
+                                        Map<String, String> changedProperties,
+                                        String source) {
+        if (globalBufferMemoryManager == null) {
+            return;
+        }
+
+        boolean softInterested = hasChangedOrConfigured(globals, changedProperties, "buffer.total-max-bytes");
+        boolean hardInterested = hasChangedOrConfigured(globals, changedProperties, "buffer.hard-ceiling-bytes");
+        if (!softInterested && !hardInterested && changedProperties != null && !changedProperties.isEmpty()) {
+            return;
+        }
+
+        long currentSoft = globalBufferMemoryManager.getMaxTotalBytes();
+        long currentHard = globalBufferMemoryManager.getHardCeilingBytes();
+        long newSoft = currentSoft;
+        long newHard = currentHard;
+        if (globals.containsKey("buffer.total-max-bytes")) {
+            try {
+                newSoft = DataSizeParser.parseToBytes(globals.get("buffer.total-max-bytes"));
+            } catch (Exception ignored) {
+                LogCollectInternalLogger.warn("Ignored invalid buffer.total-max-bytes: {}",
+                        globals.get("buffer.total-max-bytes"));
+            }
+        }
+        if (globals.containsKey("buffer.hard-ceiling-bytes")) {
+            try {
+                newHard = DataSizeParser.parseToBytes(globals.get("buffer.hard-ceiling-bytes"));
+            } catch (Exception ignored) {
+                LogCollectInternalLogger.warn("Ignored invalid buffer.hard-ceiling-bytes: {}",
+                        globals.get("buffer.hard-ceiling-bytes"));
+            }
+        }
+
+        if (newHard > 0 && newSoft > 0 && newHard < newSoft) {
+            LogCollectInternalLogger.warn(
+                    "Config change rejected (source={}): hard-ceiling-bytes({}) < total-max-bytes({}).",
+                    source == null ? "unknown" : source,
+                    newHard, newSoft);
+            return;
+        }
+        if (newSoft == currentSoft && newHard == currentHard) {
+            return;
+        }
+        globalBufferMemoryManager.updateLimits(newSoft, newHard);
+        metrics.incrementConfigRefresh("buffer_limits");
+    }
+
+    private void syncCounterModeWarning(Map<String, String> globals,
+                                        Map<String, String> changedProperties,
+                                        String source) {
+        if (!hasChangedOrConfigured(globals, changedProperties, "buffer.counter-mode")) {
+            return;
+        }
+        String requested = globals.get("buffer.counter-mode");
+        if (requested == null || requested.trim().isEmpty()) {
+            return;
+        }
+        String current = globalBufferMemoryManager == null
+                ? "UNKNOWN"
+                : globalBufferMemoryManager.getCounterMode().name();
+        if (!requested.trim().equalsIgnoreCase(current)) {
+            LogCollectInternalLogger.warn(
+                    "counter-mode change detected (source={}): current={}, requested={}. Requires restart, ignored at runtime.",
+                    source == null ? "unknown" : source, current, requested);
+        }
+    }
+
+    private boolean hasChangedOrConfigured(Map<String, String> globals,
+                                           Map<String, String> changedProperties,
+                                           String relativeKey) {
+        if (globals != null && globals.containsKey(relativeKey)) {
+            return true;
+        }
+        if (changedProperties == null || changedProperties.isEmpty()) {
+            return false;
+        }
+        return changedProperties.containsKey(relativeKey)
+                || changedProperties.containsKey("logcollect.global." + relativeKey);
     }
 
     private interface BooleanConsumer {

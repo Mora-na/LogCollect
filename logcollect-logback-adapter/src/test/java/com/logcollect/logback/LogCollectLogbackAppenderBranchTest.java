@@ -281,15 +281,15 @@ class LogCollectLogbackAppenderBranchTest {
                 new Class[]{LogCollectContext.class, String.class, double.class},
                 ctx, "INFO", 0.5d)).isEqualTo(true);
 
-        GlobalBufferMemoryManager mid = new GlobalBufferMemoryManager(100L);
-        mid.forceAllocate(60L);
+        GlobalBufferMemoryManager mid = new GlobalBufferMemoryManager(1024L * 1024L);
+        mid.forceAllocate(600L * 1024L);
         ctx.setAttribute("__globalBufferManager", mid);
         assertThat(invoke(appender, "shouldSampleAdaptive",
                 new Class[]{LogCollectContext.class, String.class, double.class},
                 ctx, "INFO", 1.0d)).isEqualTo(true);
 
-        GlobalBufferMemoryManager high = new GlobalBufferMemoryManager(100L);
-        high.forceAllocate(90L);
+        GlobalBufferMemoryManager high = new GlobalBufferMemoryManager(1024L * 1024L);
+        high.forceAllocate(900L * 1024L);
         ctx.setAttribute("__globalBufferManager", high);
         assertThat(invoke(appender, "shouldSampleAdaptive",
                 new Class[]{LogCollectContext.class, String.class, double.class},

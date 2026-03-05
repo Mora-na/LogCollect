@@ -4,6 +4,7 @@ import com.logcollect.api.config.LogCollectConfigSource;
 import com.logcollect.api.enums.LogFramework;
 import com.logcollect.api.format.LogLineDefaults;
 import com.logcollect.api.masker.LogMasker;
+import com.logcollect.api.model.LogEntry;
 import com.logcollect.api.sanitizer.LogSanitizer;
 import com.logcollect.autoconfigure.circuitbreaker.CircuitBreakerRegistry;
 import com.logcollect.autoconfigure.config.LocalPropertiesLogCollectConfigSource;
@@ -61,14 +62,17 @@ public class LogCollectAutoConfiguration {
             ObjectProvider<List<LogCollectConfigSource>> sourcesProvider,
             LogCollectLocalConfigCache cache,
             LogCollectGlobalSwitch globalSwitch,
+            ObjectProvider<GlobalBufferMemoryManager> globalBufferMemoryManagerProvider,
             ObjectProvider<LogCollectMetrics> metricsProvider) {
         List<LogCollectConfigSource> sources = sourcesProvider.getIfAvailable(ArrayList::new);
         sources.sort(Comparator.comparingInt(LogCollectConfigSource::getOrder));
         LogCollectConfigResolver resolver = new LogCollectConfigResolver(
-                sources, cache, globalSwitch, metricsProvider.getIfAvailable());
+                sources, cache, globalSwitch, metricsProvider.getIfAvailable(),
+                globalBufferMemoryManagerProvider.getIfAvailable());
         for (LogCollectConfigSource source : sources) {
             try {
-                source.addChangeListener(sourceName -> resolver.onConfigChange(sourceName));
+                source.addChangeListener((sourceName, changedProperties) ->
+                        resolver.onConfigChange(sourceName, changedProperties));
             } catch (Throwable t) {
                 LogCollectInternalLogger.warn("Register config change listener failed: {}", source.getType(), t);
             }
@@ -98,7 +102,8 @@ public class LogCollectAutoConfiguration {
                 GlobalBufferMemoryManager.CounterMode.from(buffer.getCounterMode());
         GlobalBufferMemoryManager manager = new GlobalBufferMemoryManager(
                 buffer.getTotalMaxBytesValue(),
-                counterMode);
+                counterMode,
+                buffer.getHardCeilingBytesValue());
         com.logcollect.api.metrics.LogCollectMetrics metrics = metricsProvider.getIfAvailable();
         if (metrics != null) {
             manager.setMetrics(metrics);
@@ -124,6 +129,17 @@ public class LogCollectAutoConfiguration {
                                                    LogCollectGlobalSwitch globalSwitch,
                                                    ObjectProvider<LogCollectMetrics> metricsProvider) {
         return new LogCollectLifecycle(registry, globalSwitch, metricsProvider.getIfAvailable(), 15_000L);
+    }
+
+    @Bean
+    public org.springframework.beans.factory.InitializingBean logCollectEstimationFactorInitializer(LogCollectProperties props) {
+        return () -> {
+            if (props == null || props.getGlobal() == null || props.getGlobal().getBuffer() == null) {
+                return;
+            }
+            double factor = props.getGlobal().getBuffer().getEstimationFactor();
+            LogEntry.setEstimationFactor(factor);
+        };
     }
 
     @Bean
@@ -179,6 +195,13 @@ public class LogCollectAutoConfiguration {
                     flush.getMaxThreads(),
                     flush.getQueueCapacity());
         };
+    }
+
+    @Bean
+    public LogCollectConfigValidator logCollectConfigValidator(
+            LogCollectConfigResolver resolver,
+            ObjectProvider<GlobalBufferMemoryManager> globalBufferManagerProvider) {
+        return new LogCollectConfigValidator(resolver, globalBufferManagerProvider.getIfAvailable());
     }
 
     @Bean

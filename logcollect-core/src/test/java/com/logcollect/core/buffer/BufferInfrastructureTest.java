@@ -40,7 +40,7 @@ class BufferInfrastructureTest extends CoreUnitTestBase {
         GlobalBufferMemoryManager manager = new GlobalBufferMemoryManager(0);
         LogBuffer buffer = new LogBuffer(10, parseBytes("1MB"), manager);
         assertThat(buffer.offer(null)).isFalse();
-        assertThat(buffer.offer(createTestEntry("payload", "INFO"))).isFalse();
+        assertThat(buffer.offer(createTestEntry("payload", "INFO"))).isTrue();
     }
 
     @Test
@@ -69,18 +69,18 @@ class BufferInfrastructureTest extends CoreUnitTestBase {
 
     @Test
     void globalBufferMemoryManager_additionalBranchesCovered() {
-        GlobalBufferMemoryManager manager = new GlobalBufferMemoryManager(100);
+        GlobalBufferMemoryManager manager = new GlobalBufferMemoryManager(parseBytes("1MB"));
         MetricsStub metrics = new MetricsStub();
         manager.setMetrics(metrics);
 
         assertThat(manager.tryAllocate(0)).isTrue();
-        manager.forceAllocate(150);
-        assertThat(manager.getTotalUsed()).isEqualTo(150L);
+        assertThat(manager.forceAllocate(parseBytes("1200KB"))).isTrue();
+        assertThat(manager.getTotalUsed()).isEqualTo(parseBytes("1200KB"));
         assertThat(manager.utilization()).isGreaterThan(1.0d);
-        assertThat(metrics.lastUtilization).isEqualTo(1.0d);
-        assertThat(manager.getMaxTotalBytes()).isEqualTo(100L);
+        assertThat(metrics.lastUtilization).isGreaterThan(1.0d);
+        assertThat(manager.getMaxTotalBytes()).isEqualTo(parseBytes("1MB"));
 
-        manager.release(999);
+        manager.release(parseBytes("2MB"));
         assertThat(manager.getTotalUsed()).isZero();
         manager.release(0);
         assertThat(manager.getTotalUsed()).isZero();

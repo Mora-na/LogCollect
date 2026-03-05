@@ -33,6 +33,7 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
 
     private final AtomicInteger activeCollections = new AtomicInteger(0);
     private final AtomicReference<Double> globalBufferUtilization = new AtomicReference<Double>(0.0d);
+    private final AtomicReference<Double> globalHardCeilingUtilization = new AtomicReference<Double>(0.0d);
     private final ConcurrentHashMap<String, AtomicReference<Double>> bufferUtilizations =
             new ConcurrentHashMap<String, AtomicReference<Double>>();
 
@@ -71,6 +72,9 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
 
         Gauge.builder(prefix + ".buffer.global.utilization", globalBufferUtilization, AtomicReference::get)
                 .description("Global buffer utilization (0.0~1.0)")
+                .register(registry);
+        Gauge.builder(prefix + ".memory.hard_ceiling.utilization", globalHardCeilingUtilization, AtomicReference::get)
+                .description("Global hard ceiling utilization")
                 .register(registry);
     }
 
@@ -144,6 +148,23 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
     }
 
     @Override
+    public void incrementDirectFlush(String method, String outcome) {
+        String outcomeTag = safeValue(outcome, "unknown");
+        methodMeters(method).directFlush(outcomeTag).increment();
+    }
+
+    @Override
+    public void incrementOverflowDegraded(String method, String strategy) {
+        String strategyTag = safeValue(strategy, "unknown");
+        methodMeters(method).overflowDegraded(strategyTag).increment();
+    }
+
+    @Override
+    public void incrementForceAllocateRejected(String method) {
+        methodMeters(method).forceAllocateRejected().increment();
+    }
+
+    @Override
     public void incrementCircuitRecovered(String method) {
         methodMeters(method).circuitRecoveredCounter.increment();
     }
@@ -195,6 +216,11 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
     @Override
     public void updateGlobalBufferUtilization(double utilization) {
         globalBufferUtilization.set(utilization);
+    }
+
+    @Override
+    public void updateGlobalHardCeilingUtilization(double utilization) {
+        globalHardCeilingUtilization.set(utilization);
     }
 
     public void registerCircuitBreakerGauge(String method, LogCollectCircuitBreaker cb) {
@@ -399,8 +425,13 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
                 new ConcurrentHashMap<String, Counter>();
         private final ConcurrentHashMap<String, Counter> overflowCounters =
                 new ConcurrentHashMap<String, Counter>();
+        private final ConcurrentHashMap<String, Counter> directFlushCounters =
+                new ConcurrentHashMap<String, Counter>();
+        private final ConcurrentHashMap<String, Counter> overflowDegradedCounters =
+                new ConcurrentHashMap<String, Counter>();
         private final ConcurrentHashMap<String, Counter> degradeCounters =
                 new ConcurrentHashMap<String, Counter>();
+        private final AtomicReference<Counter> forceAllocateRejectedCounter = new AtomicReference<Counter>();
 
         private MethodMeters(String methodTag) {
             this.methodTag = methodTag;
@@ -461,6 +492,34 @@ public class LogCollectMetrics implements com.logcollect.api.metrics.LogCollectM
                     .tag("method", methodTag)
                     .tag("overflowPolicy", overflowTag)
                     .register(registry));
+        }
+
+        private Counter directFlush(String outcomeTag) {
+            return directFlushCounters.computeIfAbsent(outcomeTag, k -> Counter.builder(prefix + ".direct_flush.total")
+                    .tag("method", methodTag)
+                    .tag("outcome", outcomeTag)
+                    .register(registry));
+        }
+
+        private Counter overflowDegraded(String strategyTag) {
+            return overflowDegradedCounters.computeIfAbsent(strategyTag, k -> Counter.builder(prefix + ".overflow.degraded.total")
+                    .tag("method", methodTag)
+                    .tag("strategy", strategyTag)
+                    .register(registry));
+        }
+
+        private Counter forceAllocateRejected() {
+            Counter existing = forceAllocateRejectedCounter.get();
+            if (existing != null) {
+                return existing;
+            }
+            Counter created = Counter.builder(prefix + ".memory.force_allocate.rejected.total")
+                    .tag("method", methodTag)
+                    .register(registry);
+            if (forceAllocateRejectedCounter.compareAndSet(null, created)) {
+                return created;
+            }
+            return forceAllocateRejectedCounter.get();
         }
 
         private Counter degrade(String typeTag) {

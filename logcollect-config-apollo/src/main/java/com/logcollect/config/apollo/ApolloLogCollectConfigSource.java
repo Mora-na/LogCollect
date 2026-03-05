@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 public class ApolloLogCollectConfigSource implements LogCollectConfigSource, InitializingBean {
@@ -25,6 +26,8 @@ public class ApolloLogCollectConfigSource implements LogCollectConfigSource, Ini
 
     private volatile Properties cachedProperties = new Properties();
     private final CopyOnWriteArrayList<Consumer<String>> listeners = new CopyOnWriteArrayList<Consumer<String>>();
+    private final CopyOnWriteArrayList<BiConsumer<String, Map<String, String>>> diffListeners =
+            new CopyOnWriteArrayList<BiConsumer<String, Map<String, String>>>();
 
     @Override
     public void afterPropertiesSet() {
@@ -64,6 +67,13 @@ public class ApolloLogCollectConfigSource implements LogCollectConfigSource, Ini
     public void addChangeListener(Consumer<String> listener) {
         if (listener != null) {
             listeners.add(listener);
+        }
+    }
+
+    @Override
+    public void addChangeListener(BiConsumer<String, Map<String, String>> listener) {
+        if (listener != null) {
+            diffListeners.add(listener);
         }
     }
 
@@ -108,8 +118,9 @@ public class ApolloLogCollectConfigSource implements LogCollectConfigSource, Ini
                     }
                 }
             }
+            Map<String, String> changed = diff(this.cachedProperties, properties);
             this.cachedProperties = properties;
-            notifyListeners();
+            notifyListeners(changed);
             LogCollectInternalLogger.info("Apollo config refreshed, {} keys", properties.size());
         } catch (Exception t) {
             LogCollectInternalLogger.warn("Refresh Apollo config failed", t);
@@ -166,7 +177,7 @@ public class ApolloLogCollectConfigSource implements LogCollectConfigSource, Ini
         return result;
     }
 
-    private void notifyListeners() {
+    private void notifyListeners(Map<String, String> changed) {
         for (Consumer<String> listener : listeners) {
             try {
                 listener.accept("apollo");
@@ -175,5 +186,39 @@ public class ApolloLogCollectConfigSource implements LogCollectConfigSource, Ini
                 throw e;
             }
         }
+        Map<String, String> snapshot = changed == null ? Collections.<String, String>emptyMap() : changed;
+        for (BiConsumer<String, Map<String, String>> listener : diffListeners) {
+            try {
+                listener.accept("apollo", snapshot);
+            } catch (Exception ignored) {
+            } catch (Error e) {
+                throw e;
+            }
+        }
+    }
+
+    private Map<String, String> diff(Properties before, Properties after) {
+        Map<String, String> changed = new LinkedHashMap<String, String>();
+        Properties oldProps = before == null ? new Properties() : before;
+        Properties newProps = after == null ? new Properties() : after;
+        for (String key : newProps.stringPropertyNames()) {
+            if (!key.startsWith("logcollect.")) {
+                continue;
+            }
+            String oldVal = oldProps.getProperty(key);
+            String newVal = newProps.getProperty(key);
+            if (!String.valueOf(oldVal).equals(String.valueOf(newVal))) {
+                changed.put(key, newVal);
+            }
+        }
+        for (String key : oldProps.stringPropertyNames()) {
+            if (!key.startsWith("logcollect.")) {
+                continue;
+            }
+            if (!newProps.containsKey(key)) {
+                changed.put(key, null);
+            }
+        }
+        return changed;
     }
 }

@@ -3,6 +3,7 @@ package com.logcollect.api.config;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 public interface LogCollectConfigSource {
@@ -49,6 +50,18 @@ public interface LogCollectConfigSource {
      */
     default void addChangeListener(Consumer<String> listener) {
         // no-op
+    }
+
+    /**
+     * 注册配置变更监听器（可携带变更键值）。
+     *
+     * <p>默认回退到仅透传 source，不提供 diff 详情。
+     */
+    default void addChangeListener(BiConsumer<String, Map<String, String>> listener) {
+        if (listener == null) {
+            return;
+        }
+        addChangeListener(source -> listener.accept(source, Collections.<String, String>emptyMap()));
     }
 
     default String getType() {

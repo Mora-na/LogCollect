@@ -1,5 +1,11 @@
 package com.logcollect.core.security;
 
+/**
+ * @deprecated 自 v1.2.0 起框架内部不再调用该类。
+ * 日志内容不再截断，超大日志由 Direct Flush + 降级通道处理。
+ * 该类仅保留给直接依赖它的用户代码做兼容。
+ */
+@Deprecated
 public final class StringLengthGuard {
 
     private static final int DEFAULT_MAX_CONTENT_LENGTH = 32 * 1024;

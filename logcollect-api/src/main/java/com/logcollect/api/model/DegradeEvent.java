@@ -1,5 +1,6 @@
 package com.logcollect.api.model;
 
+import com.logcollect.api.enums.DegradeReason;
 import com.logcollect.api.enums.DegradeStorage;
 
 import java.time.LocalDateTime;
@@ -33,4 +34,13 @@ public class DegradeEvent {
     public String getReason() { return reason; }
     public DegradeStorage getStorage() { return storage; }
     public LocalDateTime getTime() { return time; }
+
+    public static DegradeEvent of(String traceId,
+                                  String methodSignature,
+                                  DegradeReason reason,
+                                  DegradeStorage storage,
+                                  LocalDateTime time) {
+        return new DegradeEvent(traceId, methodSignature,
+                reason == null ? "unknown" : reason.code(), storage, time);
+    }
 }

@@ -1,5 +1,6 @@
 package com.logcollect.core.buffer;
 
+import com.logcollect.api.enums.DegradeReason;
 import com.logcollect.api.handler.LogCollectHandler;
 import com.logcollect.api.metrics.LogCollectMetrics;
 import com.logcollect.api.metrics.NoopLogCollectMetrics;
@@ -15,6 +16,7 @@ import com.logcollect.core.internal.LogCollectInternalLogger;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -73,28 +75,14 @@ public class SingleModeBuffer implements LogCollectBuffer {
 
         long entryBytes = entry.estimateBytes();
         if (maxBytes > 0 && entryBytes > maxBytes) {
-            if (context != null) {
-                context.incrementDiscardedCount();
-                resolveMetrics(context).incrementDiscarded(context.getMethodSignature(), "buffer_entry_too_large");
-            }
-            notifyDegrade(context, "buffer_entry_too_large");
+            return handleOversizedEntry(context, entry, entryBytes);
+        }
+
+        if (!tryGlobalAllocate(context, entry, entryBytes)) {
             return false;
         }
 
-        if (globalManager != null && !globalManager.tryAllocate(entryBytes)) {
-            if (isHighLevel(entry.getLevel())) {
-                globalManager.forceAllocate(entryBytes);
-            } else {
-                if (context != null) {
-                    context.incrementDiscardedCount();
-                    resolveMetrics(context).incrementDiscarded(context.getMethodSignature(), "global_memory_limit");
-                }
-                notifyDegrade(context, "global_memory_limit");
-                return false;
-            }
-        }
-
-        if (policy.getStrategy() == BoundedBufferPolicy.OverflowStrategy.DROP_OLDEST) {
+        if (policy.getStrategy() == BoundedBufferPolicy.OverflowStrategy.DROP_OLDEST && policy.isOverflow(entryBytes)) {
             evictOldestUntilFit(context, entryBytes);
         }
 
@@ -103,14 +91,21 @@ public class SingleModeBuffer implements LogCollectBuffer {
             if (globalManager != null) {
                 globalManager.release(entryBytes);
             }
-            if (context != null) {
-                context.incrementDiscardedCount();
+            if (policy.getStrategy() == BoundedBufferPolicy.OverflowStrategy.DROP_NEWEST) {
+                routeToDegradation(context, Collections.singletonList(entry), DegradeReason.BUFFER_OVERFLOW_REJECTED);
                 LogCollectMetrics metrics = resolveMetrics(context);
-                metrics.incrementDiscarded(context.getMethodSignature(), toDiscardReason(rejectReason));
-                metrics.incrementBufferOverflow(context.getMethodSignature(), policy.getStrategy().name());
+                metrics.incrementBufferOverflow(methodKey(context), policy.getStrategy().name());
+                metrics.incrementOverflowDegraded(methodKey(context), "drop_newest");
+            } else {
+                if (context != null) {
+                    context.incrementDiscardedCount();
+                    LogCollectMetrics metrics = resolveMetrics(context);
+                    metrics.incrementDiscarded(context.getMethodSignature(), "buffer_full");
+                    metrics.incrementBufferOverflow(context.getMethodSignature(), policy.getStrategy().name());
+                }
+                notifyDegrade(context, "buffer_overflow");
             }
-            notifyDegrade(context, "buffer_overflow_drop_newest");
-            LogCollectDiag.debug("Single buffer drop newest");
+            LogCollectDiag.debug("Single buffer rejected due to overflow");
             return false;
         }
 
@@ -194,7 +189,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
                     }
                 }
                 if (!batch.isEmpty()) {
-                    String methodKey = context == null ? "unknown" : context.getMethodSignature();
+                    String methodKey = methodKey(context);
                     resolveMetrics(context).incrementFlush(
                             methodKey, "SINGLE", warnOnly ? "degraded" : (isFinal ? "final" : "threshold"));
                     flushBatch(context, batch, isFinal || warnOnly);
@@ -204,7 +199,6 @@ public class SingleModeBuffer implements LogCollectBuffer {
                     LogCollectDiag.debug("Flush triggered: segments=%d", batch.size());
                 }
                 updateUtilization(context);
-                // 处理 flush 期间新增并再次达到阈值的日志，避免等待下一次入队触发。
                 continueFlush = shouldFlush() && !queue.isEmpty();
             } while (continueFlush);
         } finally {
@@ -234,17 +228,17 @@ public class SingleModeBuffer implements LogCollectBuffer {
 
     private void flushBatch(LogCollectContext context, List<LogEntry> batch, boolean isFinal) {
         LogCollectHandler handler = context == null ? null : context.getHandler();
-        String methodKey = context == null ? "unknown" : context.getMethodSignature();
+        String methodKey = methodKey(context);
         LogCollectMetrics metrics = resolveMetrics(context);
         LogCollectCircuitBreaker breaker = getBreaker(context);
         if (breaker != null && !breaker.allowWrite()) {
             if (context != null) {
                 context.incrementDiscardedCount(batch.size());
             }
-            notifyDegrade(context, "circuit_open");
-            metrics.incrementDegradeTriggered("circuit_open", methodKey);
+            notifyDegrade(context, DegradeReason.CIRCUIT_OPEN.code());
+            metrics.incrementDegradeTriggered(DegradeReason.CIRCUIT_OPEN.code(), methodKey);
             if (context != null) {
-                DegradeFallbackHandler.handleDegraded(context, "circuit_open", toLines(batch), maxLevel(batch));
+                DegradeFallbackHandler.handleDegraded(context, batch, DegradeReason.CIRCUIT_OPEN);
             }
             return;
         }
@@ -273,48 +267,146 @@ public class SingleModeBuffer implements LogCollectBuffer {
             if (context != null) {
                 context.incrementDiscardedCount(batch.size());
             }
-            notifyDegrade(context, "persist_exhausted");
+            notifyDegrade(context, DegradeReason.PERSIST_FAILED.code());
             metrics.incrementPersistFailed(methodKey);
-            metrics.incrementDegradeTriggered("persist_exhausted", methodKey);
+            metrics.incrementDegradeTriggered(DegradeReason.PERSIST_FAILED.code(), methodKey);
             if (context != null) {
-                DegradeFallbackHandler.handleDegraded(context, "persist_exhausted", toLines(batch), maxLevel(batch));
+                DegradeFallbackHandler.handleDegraded(context, batch, DegradeReason.PERSIST_FAILED);
             }
         };
         resilientFlusher.flushBatch(writeAction, onSuccess, onExhausted, () -> joinContents(batch), isFinal);
     }
 
+    private boolean handleOversizedEntry(LogCollectContext context, LogEntry entry, long entryBytes) {
+        boolean allocated = false;
+        if (globalManager != null) {
+            allocated = globalManager.tryAllocate(entryBytes);
+            if (!allocated && isHighLevel(entry.getLevel())) {
+                allocated = globalManager.forceAllocate(entryBytes);
+                if (!allocated) {
+                    resolveMetrics(context).incrementForceAllocateRejected(methodKey(context));
+                }
+            }
+            if (!allocated) {
+                routeToDegradation(context, Collections.singletonList(entry),
+                        DegradeReason.OVERSIZED_GLOBAL_QUOTA_EXHAUSTED);
+                resolveMetrics(context).incrementDirectFlush(methodKey(context), "degraded");
+                return false;
+            }
+        }
+
+        try {
+            boolean flushed = directFlushEntry(context, entry);
+            if (flushed) {
+                if (context != null) {
+                    context.incrementCollectedCount();
+                    context.addCollectedBytes(entryBytes);
+                }
+                resolveMetrics(context).incrementDirectFlush(methodKey(context), "success");
+                return true;
+            }
+            routeToDegradation(context, Collections.singletonList(entry), DegradeReason.OVERSIZED_FLUSH_FAILED);
+            resolveMetrics(context).incrementDirectFlush(methodKey(context), "degraded");
+            return false;
+        } finally {
+            if (allocated && globalManager != null) {
+                globalManager.release(entryBytes);
+            }
+        }
+    }
+
+    private boolean directFlushEntry(LogCollectContext context, LogEntry entry) {
+        LogCollectHandler handler = context == null ? null : context.getHandler();
+        String methodKey = methodKey(context);
+        LogCollectMetrics metrics = resolveMetrics(context);
+        LogCollectCircuitBreaker breaker = getBreaker(context);
+        if (breaker != null && !breaker.allowWrite()) {
+            return false;
+        }
+        Runnable writeAction = () -> {
+            if (handler == null) {
+                return;
+            }
+            TransactionExecutor txExecutor = resolveTransactionExecutor(context);
+            txExecutor.executeInNewTransaction(() -> handler.appendLog(context, entry));
+        };
+        boolean success = resilientFlusher.flush(writeAction, entry::getContent);
+        if (success) {
+            if (breaker != null) {
+                breaker.recordSuccess();
+            }
+            metrics.incrementPersisted(methodKey, "SINGLE");
+        } else {
+            if (breaker != null) {
+                breaker.recordFailure();
+            }
+            metrics.incrementPersistFailed(methodKey);
+        }
+        return success;
+    }
+
+    private boolean tryGlobalAllocate(LogCollectContext context, LogEntry entry, long entryBytes) {
+        if (globalManager == null) {
+            return true;
+        }
+        if (globalManager.tryAllocate(entryBytes)) {
+            return true;
+        }
+        if (isHighLevel(entry.getLevel())) {
+            if (globalManager.forceAllocate(entryBytes)) {
+                return true;
+            }
+            resolveMetrics(context).incrementForceAllocateRejected(methodKey(context));
+            routeToDegradation(context, Collections.singletonList(entry), DegradeReason.GLOBAL_HARD_CEILING_REACHED);
+            return false;
+        }
+        routeToDegradation(context, Collections.singletonList(entry), DegradeReason.GLOBAL_QUOTA_EXHAUSTED);
+        return false;
+    }
+
     private void evictOldestUntilFit(LogCollectContext context, long incomingBytes) {
         while (policy.isOverflow(incomingBytes)) {
-            int toDrop = Math.max(1, (int) (currentCount() / 10L));
-            int actualDropped = 0;
-            long freedBytes = 0L;
-            for (int i = 0; i < toDrop; i++) {
-                LogEntry evicted = queue.poll();
-                if (evicted == null) {
-                    break;
-                }
-                freedBytes += evicted.estimateBytes();
-                actualDropped++;
-                if (!policy.isOverflow(incomingBytes)) {
-                    break;
-                }
-            }
-            if (actualDropped == 0) {
+            LogEntry evicted = queue.poll();
+            if (evicted == null) {
                 break;
             }
-            count.add(-actualDropped);
+            long freedBytes = evicted.estimateBytes();
+            count.add(-1L);
             bytes.add(-freedBytes);
             if (globalManager != null) {
                 globalManager.release(freedBytes);
             }
-            policy.afterDrain(freedBytes, actualDropped);
-            policy.recordDropped(actualDropped);
-            if (context != null) {
-                context.incrementDiscardedCount(actualDropped);
-                LogCollectMetrics metrics = resolveMetrics(context);
-                metrics.incrementDiscarded(context.getMethodSignature(), "buffer_full");
-                metrics.incrementBufferOverflow(context.getMethodSignature(), policy.getStrategy().name());
+            policy.afterDrain(freedBytes, 1);
+            policy.recordDropped();
+            routeToDegradation(context, Collections.singletonList(evicted), DegradeReason.BUFFER_OVERFLOW_EVICTED);
+            LogCollectMetrics metrics = resolveMetrics(context);
+            metrics.incrementBufferOverflow(methodKey(context), policy.getStrategy().name());
+            metrics.incrementOverflowDegraded(methodKey(context), "drop_oldest");
+            if (!policy.isOverflow(incomingBytes)) {
+                break;
             }
+        }
+    }
+
+    private void routeToDegradation(LogCollectContext context,
+                                    List<LogEntry> entries,
+                                    DegradeReason reason) {
+        boolean degraded = false;
+        try {
+            degraded = DegradeFallbackHandler.handleDegraded(context, entries, reason);
+        } catch (Exception e) {
+            LogCollectInternalLogger.warn("Degradation failed: method={}, reason={}",
+                    methodKey(context), reason == null ? "unknown" : reason.code(), e);
+        } catch (Error e) {
+            throw e;
+        } finally {
+            notifyDegrade(context, reason == null ? "unknown" : reason.code());
+            resolveMetrics(context).incrementDegradeTriggered(
+                    reason == null ? "unknown" : reason.code(), methodKey(context));
+        }
+        if (!degraded && context != null) {
+            context.incrementDiscardedCount(entries == null ? 1 : Math.max(1, entries.size()));
+            resolveMetrics(context).incrementDiscarded(methodKey(context), "degradation_exhausted");
         }
     }
 
@@ -329,6 +421,57 @@ public class SingleModeBuffer implements LogCollectBuffer {
             }
         }
         return kept;
+    }
+
+    private List<String> toLines(List<LogEntry> entries) {
+        List<String> lines = new ArrayList<String>(entries == null ? 0 : entries.size());
+        if (entries == null) {
+            return lines;
+        }
+        for (LogEntry entry : entries) {
+            if (entry != null) {
+                lines.add(entry.getContent());
+            }
+        }
+        return lines;
+    }
+
+    private String maxLevel(List<LogEntry> entries) {
+        if (entries == null || entries.isEmpty()) {
+            return "TRACE";
+        }
+        String max = "TRACE";
+        for (LogEntry entry : entries) {
+            if (entry == null) {
+                continue;
+            }
+            max = higherLevel(max, entry.getLevel());
+        }
+        return max;
+    }
+
+    private String higherLevel(String left, String right) {
+        return levelRank(right) > levelRank(left) ? right : left;
+    }
+
+    private int levelRank(String level) {
+        if (level == null) {
+            return 0;
+        }
+        String v = level.toUpperCase();
+        if ("FATAL".equals(v)) return 5;
+        if ("ERROR".equals(v)) return 4;
+        if ("WARN".equals(v)) return 3;
+        if ("INFO".equals(v)) return 2;
+        if ("DEBUG".equals(v)) return 1;
+        return 0;
+    }
+
+    private String toDiscardReason(BoundedBufferPolicy.RejectReason reason) {
+        if (reason == BoundedBufferPolicy.RejectReason.GLOBAL_MEMORY_LIMIT) {
+            return "global_memory_limit";
+        }
+        return "buffer_full";
     }
 
     private LogCollectCircuitBreaker getBreaker(LogCollectContext context) {
@@ -368,39 +511,6 @@ public class SingleModeBuffer implements LogCollectBuffer {
         } catch (Error e) {
             throw e;
         }
-    }
-
-    private List<String> toLines(List<LogEntry> entries) {
-        List<String> lines = new ArrayList<String>(entries.size());
-        for (LogEntry entry : entries) {
-            lines.add(entry.getContent());
-        }
-        return lines;
-    }
-
-    private String maxLevel(List<LogEntry> entries) {
-        String max = "TRACE";
-        for (LogEntry entry : entries) {
-            max = higherLevel(max, entry.getLevel());
-        }
-        return max;
-    }
-
-    private String higherLevel(String left, String right) {
-        return levelRank(right) > levelRank(left) ? right : left;
-    }
-
-    private int levelRank(String level) {
-        if (level == null) {
-            return 0;
-        }
-        String v = level.toUpperCase();
-        if ("FATAL".equals(v)) return 5;
-        if ("ERROR".equals(v)) return 4;
-        if ("WARN".equals(v)) return 3;
-        if ("INFO".equals(v)) return 2;
-        if ("DEBUG".equals(v)) return 1;
-        return 0;
     }
 
     private LogCollectMetrics resolveMetrics(LogCollectContext context) {
@@ -451,17 +561,8 @@ public class SingleModeBuffer implements LogCollectBuffer {
         double utilization = Math.max(countRatio, bytesRatio);
         if (utilization < 0.0d) {
             utilization = 0.0d;
-        } else if (utilization > 1.0d) {
-            utilization = 1.0d;
         }
         resolveMetrics(context).updateBufferUtilization(context.getMethodSignature(), utilization);
-    }
-
-    private String toDiscardReason(BoundedBufferPolicy.RejectReason reason) {
-        if (reason == BoundedBufferPolicy.RejectReason.GLOBAL_MEMORY_LIMIT) {
-            return "global_memory_limit";
-        }
-        return "buffer_full";
     }
 
     private long currentCount() {
@@ -472,6 +573,10 @@ public class SingleModeBuffer implements LogCollectBuffer {
     private long currentBytes() {
         long value = bytes.sum();
         return value < 0 ? 0 : value;
+    }
+
+    private String methodKey(LogCollectContext context) {
+        return context == null ? "unknown" : context.getMethodSignature();
     }
 
     private final class AsyncBufferFlushTask implements AsyncFlushExecutor.RejectedAwareTask {

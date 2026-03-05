@@ -25,6 +25,15 @@ public interface LogCollectMetrics {
 
     void incrementDegradeTriggered(String type, String methodKey);
 
+    default void incrementDirectFlush(String methodKey, String outcome) {
+    }
+
+    default void incrementOverflowDegraded(String methodKey, String strategy) {
+    }
+
+    default void incrementForceAllocateRejected(String methodKey) {
+    }
+
     void incrementCircuitRecovered(String methodKey);
 
     void incrementSanitizeHits(String methodKey);
@@ -42,6 +51,9 @@ public interface LogCollectMetrics {
     void updateBufferUtilization(String methodKey, double utilization);
 
     void updateGlobalBufferUtilization(double utilization);
+
+    default void updateGlobalHardCeilingUtilization(double utilization) {
+    }
 
     Object startSecurityTimer();
 

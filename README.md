@@ -268,26 +268,24 @@ public class ReconcileService {
 │ 3. 收集过滤                                                   │
 │    级别/Logger 过滤 → handler.shouldCollect() 自定义过滤       │
 │    ↓ 通过                                                     │
-│ 4. 长度守卫                                                    │
-│    content / throwable 分别限长，防止超长消息撑爆缓冲区          │
-│    ↓                                                          │
-│ 5. 安全流水线（唯一入口）                                       │
+│ 4. 安全流水线（唯一入口）                                       │
 │    SecurityPipeline: sanitize + mask                          │
 │    FastPathDetector 位掩码预扫描，干净文本直接透传              │
 │    ↓                                                          │
-│ 6. 模式分发                                                    │
+│ 5. 模式分发                                                    │
 │    ├─ SINGLE:    构建 LogEntry → SingleModeBuffer              │
 │    └─ AGGREGATE: formatRaw → LogSegment → AggregateModeBuffer  │
 │    ↓                                                          │
-│ 7. 缓冲层（双阈值：条数 + 内存 + 溢出策略）                     │
+│ 6. 缓冲层（双阈值：条数 + 内存 + 溢出策略）                     │
+│    单条超限（> maxBufferBytes）走 Direct Flush                │
 │    ↓ 达到阈值或方法结束                                        │
-│ 8. 熔断层（CLOSED → OPEN → HALF_OPEN）                        │
+│ 7. 熔断层（CLOSED → OPEN → HALF_OPEN）                        │
 │    ↓ 允许写入                                                 │
-│ 9. Handler 调用                                                │
+│ 8. Handler 调用                                                │
 │    ├─ SINGLE:    循环调用 handler.appendLog(ctx, entry)        │
 │    └─ AGGREGATE: 一次调用 handler.flushAggregatedLog(ctx, agg) │
 │    ↓ 失败                                                     │
-│10. 降级层（流量削峰 → 熔断 → 兜底存储 → 终极丢弃）              │
+│ 9. 降级层（流量削峰 → 熔断 → 兜底存储 → 终极丢弃）              │
 ├──────────────────────────────────────────────────────────────┤
 │11. AOP 后置（finally）                                        │
 │    设置 returnValue / error → flush 剩余缓冲                  │
@@ -627,20 +625,45 @@ handler.preferredMode() 返回值?
 
 失败处理：`ResilientFlusher` 提供批级重试（含抖动退避，异步 flush 使用非阻塞退避调度）+ 本地兜底。
 
-### 3.6 内存安全防护
+### 3.6 内存安全防护（v1.2.0）
 
-两种模式共享六层内存保护：
+升级后两种模式共享六层防护：
 
 ```
-第一层：级别/Logger 前置过滤     低于配置级别直接丢弃，零内存占用
-第二层：shouldCollect() 过滤      用户自定义业务过滤
-第三层：长度守卫                  content / throwable 分别限长（默认 32KB / 64KB）
-第四层：单缓冲区阈值（per-method） count / bytes 达阈值触发 flush 或溢出策略
-第五层：全局内存阈值（cross-method）GlobalBufferMemoryManager.tryAllocate() 失败 → 降级
-第六层：缓冲区关闭保护            方法结束后 closed=true，拒绝迟到日志
+第一层：级别/Logger 前置过滤       低于配置级别直接不收集，零内存占用
+第二层：shouldCollect() 过滤        用户自定义业务过滤
+第三层：缓冲区阈值（per-method）     count / bytes 达阈值触发 flush
+第四层：全局内存软限（cross-method）  tryAllocate() 失败 → 走降级通道
+第五层：全局内存硬顶（cross-method）  forceAllocate() 到顶 → 高等级也走降级
+第六层：缓冲区关闭保护              方法结束后 closed=true，拒绝迟到日志
 ```
 
-全局内存管控配置：`logcollect.global.buffer.total-max-bytes`（默认 100MB）+ `counter-mode`（`EXACT_CAS` / `STRIPED_LONG_ADDER`）。
+> 注意：`v1.2.0` 起移除框架内内容截断。日志内容全量传递，超大条目改为 `Direct Flush → 失败降级`，不再因超长而静默丢弃。
+
+**全局内存管控配置**
+
+| 参数 | 默认值 | 动态可更新 | 说明 |
+|------|--------|-----------|------|
+| `total-max-bytes` | `100MB` | ✅ | 软限：所有活跃方法共享的全局内存配额 |
+| `hard-ceiling-bytes` | `150MB` | ✅ | 硬顶：`forceAllocate` 的绝对上限，默认 `soft × 1.5` |
+| `counter-mode` | `EXACT_CAS` | ❌ 需重启 | 全局计数策略，运行时仅启用一种 |
+| `estimation-factor` | `1.0` | ✅ | 内存估算补偿系数，固定开销已内含，通常无需调整 |
+
+**counter-mode 选项（运行时二选一）**
+
+| 模式 | 实现 | 精度 | 适用场景 |
+|------|------|------|---------|
+| `EXACT_CAS` | `AtomicLong` CAS 循环 | 精确 | 默认推荐 |
+| `STRIPED_LONG_ADDER` | `LongAdder` 分段累加 | 最终一致（`sum()` 弱一致读） | 超高并发场景 |
+
+#### 3.6.1 升级缺陷修复清单（原设计 → 新设计）
+
+| 原设计缺陷 | 升级后实现 | 优化效果 |
+|-----------|-----------|---------|
+| 单条日志超过 `maxBufferBytes` 直接丢弃 | `Direct Flush` + 失败降级（FILE→MEMORY） | 超限日志不再被框架主动丢弃 |
+| `DROP_NEWEST` / `DROP_OLDEST` 直接丢弃 | 被拒/淘汰条目统一路由降级通道 | 溢出策略从“丢弃”变为“兜底保存” |
+| 高等级 `forceAllocate` 可无限突破上限 | 新增硬顶，达到硬顶后也降级 | 保留高等级优先同时避免 OOM 风险 |
+| Appender 层长度截断导致信息缺失 | 去除框架内截断，全量传递 | 日志完整性与可审计性提升 |
 
 ### 3.7 缓冲区线程安全
 
@@ -661,12 +684,15 @@ handler.preferredMode() 返回值?
 **SINGLE（maxBufferSize=3）**
 
 ```
-日志1 → 过滤✅ → 守卫 → SecurityPipeline → LogEntry → 入队  count=1
-日志2 → 过滤✅ → 守卫 → SecurityPipeline → LogEntry → 入队  count=2
-日志3 → 过滤✅ → 守卫 → SecurityPipeline → LogEntry → 入队  count=3 → 达到阈值!
+日志1 → 过滤✅ → SecurityPipeline → LogEntry → 入队  count=1
+日志2 → 过滤✅ → SecurityPipeline → LogEntry → 入队  count=2
+日志3 → 过滤✅ → SecurityPipeline → LogEntry → 入队  count=3 → 达到阈值!
   └─ flush: handler.appendLog(ctx, entry1/2/3)
 日志4 → 入队  count=1
 方法结束 → final flush: handler.appendLog(ctx, entry4)
+
+超大日志（entryBytes > maxBufferBytes）：
+  └─ Direct Flush（绕过缓冲区）→ handler 成功 / 失败后降级
 ```
 
 **AGGREGATE（maxBufferSize=3）**
@@ -824,7 +850,7 @@ handler.before(context)                   ← 初始化
 ┌─ 业务方法执行 ──────────────────────────────────────────────┐
 │  每条日志:                                                   │
 │    ① 级别/Logger 过滤 → ② shouldCollect()                   │
-│    ③ 长度守卫 → ④ SecurityPipeline                          │
+│    ③ SecurityPipeline（全量传递，不截断）                    │
 │    ⑤ 入缓冲区                                               │
 │    达到阈值 → flush → handler.appendLog / flushAggregatedLog│
 │    失败 → 熔断降级 → onDegrade() → onError()                │
@@ -880,7 +906,7 @@ public class SimpleLogHandler implements LogCollectHandler {
 |------|------|--------|------|
 | `useBuffer` | `boolean` | `true` | 是否启用双阈值缓冲区 |
 | `maxBufferSize` | `int` | `100` | 单批次最大日志条数 |
-| `maxBufferBytes` | `String` | `"1MB"` | 单次调用缓冲区最大内存 |
+| `maxBufferBytes` | `String` | `"1MB"` | 单条日志超过该值时绕过缓冲区走 Direct Flush（Handler + 失败降级），不再直接丢弃 |
 
 **熔断降级配置**
 
@@ -1174,7 +1200,7 @@ public void riskCheck(OrderRequest req) {
 ```
 威胁                    防护层                     状态
 ──────────────────────────────────────────────────────
-① 超长日志/堆栈     →  StringLengthGuard         → 默认开启
+① 超大日志条目       →  Direct Flush + 降级链路    → 默认开启
 ② 日志注入攻击     →  SecurityPipeline           → 默认开启
 ③ 敏感数据泄露     →  LogMasker                 → 默认开启
 ④ SQL 注入         →  安全基类                   → 可选继承
@@ -1205,7 +1231,7 @@ log.info("用户登录: {}", username);
 | 堆栈 `sanitizeThrowable(raw)` | 保留换行与缩进，仅清理危险控制字符和 HTML/ANSI |
 | 堆栈注入防御 | 非标准堆栈行标记为 `\t[ex-msg] ...` |
 
-长度守卫默认值：content `32KB` / throwable `64KB`。
+`v1.2.0` 起框架不再使用长度守卫；`guard.max-content-length` / `guard.max-throwable-length` 保留为兼容项但不生效。
 
 **自定义扩展**
 
@@ -1425,7 +1451,9 @@ logcollect.global.buffer.max-size=100
 logcollect.global.buffer.max-bytes=1MB
 logcollect.global.buffer.overflow-strategy=FLUSH_EARLY
 logcollect.global.buffer.total-max-bytes=100MB
+logcollect.global.buffer.hard-ceiling-bytes=150MB
 logcollect.global.buffer.counter-mode=EXACT_CAS
+logcollect.global.buffer.estimation-factor=1.0
 logcollect.global.flush.core-threads=2
 logcollect.global.flush.max-threads=4
 logcollect.global.flush.queue-capacity=4096
@@ -1439,6 +1467,7 @@ logcollect.global.degrade.file.max-total-size=500MB
 logcollect.global.degrade.file.ttl-days=90
 logcollect.global.security.sanitize.enabled=true
 logcollect.global.security.mask.enabled=true
+# 已废弃（v1.2.0 起不生效，仅保留兼容）
 logcollect.global.guard.max-content-length=32768
 logcollect.global.guard.max-throwable-length=65536
 logcollect.global.handler-timeout-ms=5000
@@ -1994,6 +2023,8 @@ logcollect:
       max-size: 50
       max-bytes: 512KB
       total-max-bytes: 50MB
+      hard-ceiling-bytes: 75MB
+      estimation-factor: 1.0
     degrade:
       enabled: true
       fail-threshold: 10
@@ -2015,7 +2046,29 @@ logcollect:
 | `logcollect_circuit_state > 0` | 持续 1 min | 熔断器打开 |
 | `rate(logcollect_discarded_total[5m]) > 10` | 持续 2 min | 大量丢弃 |
 | `logcollect_buffer_global_utilization > 0.8` | 持续 3 min | 缓冲区将满 |
+| `logcollect_buffer_global_utilization > 1.0` | 持续 1 min | 进入弹性区（高等级突破软限） |
+| `logcollect_memory_hard_ceiling_utilization > 0.9` | 持续 30s | 接近硬顶，可能触发强制降级 |
 | `logcollect_degrade_file_disk_free_bytes < 1GB` | 持续 5 min | 磁盘空间不足 |
+
+**Prometheus 告警样例**
+
+```yaml
+- alert: LogCollectMemoryInElasticZone
+  expr: logcollect_buffer_global_utilization > 1.0
+  for: 1m
+  labels:
+    severity: warning
+  annotations:
+    summary: "LogCollect 缓冲区进入弹性区（高等级日志突破软限）"
+
+- alert: LogCollectHardCeilingApproaching
+  expr: logcollect_memory_hard_ceiling_utilization > 0.9
+  for: 30s
+  labels:
+    severity: critical
+  annotations:
+    summary: "LogCollect 接近全局内存硬顶"
+```
 
 ### 13.4 应急预案
 
@@ -2201,6 +2254,8 @@ logcollect:
 
 | 局限 | 说明 | 缓解方案 |
 |------|------|---------|
+| `counter-mode` 不可热切换 | 涉及内存计数器内部数据结构切换 | 修改后重启应用生效 |
+| 内存估算为对象模型推算 | 非 JVM 精确值，JDK 9+ 可能偏高 | 默认安全偏差；按需调节 `estimation-factor` |
 | 仅限单 JVM | 不支持跨服务分布式追踪 | 配合 SkyWalking 共享 traceId |
 | Spring AOP 盲区 | 自调用 / private / static 不生效 | 拆分到不同 Bean |
 | 存储能力有限 | 关系型 DB 无全文检索 | 业务表同步到 ES |
@@ -2225,7 +2280,7 @@ logcollect-parent/
 │
 ├── logcollect-core/                           核心逻辑
 │   ├── context/                               栈式上下文 + 工具类
-│   ├── security/                              DefaultLogSanitizer / StringLengthGuard
+│   ├── security/                              DefaultLogSanitizer / StringLengthGuard(Deprecated)
 │   ├── pipeline/                              SecurityPipeline / FastPathDetector
 │   ├── buffer/                                双模式缓冲区 + BoundedBufferPolicy
 │   ├── circuitbreaker/                        三状态熔断器

@@ -24,7 +24,10 @@ import com.logcollect.core.degrade.DegradeFallbackHandler;
 import com.logcollect.core.diagnostics.LogCollectDiag;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.pipeline.SecurityPipeline;
-import com.logcollect.core.security.*;
+import com.logcollect.core.security.DefaultLogMasker;
+import com.logcollect.core.security.DefaultLogSanitizer;
+import com.logcollect.core.security.QuickSanitizer;
+import com.logcollect.core.security.SecurityComponentRegistry;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.Appender;
 import org.apache.logging.log4j.core.Core;
@@ -133,8 +136,8 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             }
 
             long eventTimestamp = event.getTimeMillis();
-            String content = StringLengthGuard.guardContent(rawMessage, config.getGuardMaxContentLength());
-            String throwable = StringLengthGuard.guardThrowable(extractThrowableString(event), config.getGuardMaxThrowableLength());
+            String content = rawMessage;
+            String throwable = extractThrowableString(event);
             String threadName = safeIntern(event.getThreadName());
 
             Map<String, String> mdc = new HashMap<String, String>(event.getContextData().toMap());

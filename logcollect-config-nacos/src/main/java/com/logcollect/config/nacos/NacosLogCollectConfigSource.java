@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 public class NacosLogCollectConfigSource implements LogCollectConfigSource, InitializingBean, DisposableBean {
@@ -40,6 +41,8 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
     private volatile ConfigService configService;
 
     private final CopyOnWriteArrayList<Consumer<String>> listeners = new CopyOnWriteArrayList<Consumer<String>>();
+    private final CopyOnWriteArrayList<BiConsumer<String, Map<String, String>>> diffListeners =
+            new CopyOnWriteArrayList<BiConsumer<String, Map<String, String>>>();
 
     @Override
     public void afterPropertiesSet() {
@@ -99,6 +102,13 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
     }
 
     @Override
+    public void addChangeListener(BiConsumer<String, Map<String, String>> listener) {
+        if (listener != null) {
+            diffListeners.add(listener);
+        }
+    }
+
+    @Override
     public String getType() {
         return "nacos";
     }
@@ -127,9 +137,10 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
             }
             Properties properties = new Properties();
             properties.load(new StringReader(content));
+            Map<String, String> changed = diff(cachedProperties, properties);
             cachedProperties = properties;
             saveToLocalCache(properties);
-            notifyListeners();
+            notifyListeners(changed);
         } catch (NacosException e) {
             LogCollectInternalLogger.warn("Fetch Nacos config failed, fallback to local cache", e);
             loadFromLocalCache();
@@ -157,9 +168,10 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
         try {
             Properties properties = new Properties();
             properties.load(new StringReader(configInfo));
+            Map<String, String> changed = diff(cachedProperties, properties);
             cachedProperties = properties;
             saveToLocalCache(properties);
-            notifyListeners();
+            notifyListeners(changed);
             LogCollectInternalLogger.info("Nacos config changed, {} keys refreshed", properties.size());
         } catch (Exception t) {
             LogCollectInternalLogger.warn("Process Nacos config change failed", t);
@@ -182,7 +194,7 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
         return result;
     }
 
-    private void notifyListeners() {
+    private void notifyListeners(Map<String, String> changed) {
         for (Consumer<String> listener : listeners) {
             try {
                 listener.accept("nacos");
@@ -191,6 +203,40 @@ public class NacosLogCollectConfigSource implements LogCollectConfigSource, Init
                 throw e;
             }
         }
+        Map<String, String> snapshot = changed == null ? Collections.<String, String>emptyMap() : changed;
+        for (BiConsumer<String, Map<String, String>> listener : diffListeners) {
+            try {
+                listener.accept("nacos", snapshot);
+            } catch (Exception ignored) {
+            } catch (Error e) {
+                throw e;
+            }
+        }
+    }
+
+    private Map<String, String> diff(Properties before, Properties after) {
+        Map<String, String> changed = new LinkedHashMap<String, String>();
+        Properties oldProps = before == null ? new Properties() : before;
+        Properties newProps = after == null ? new Properties() : after;
+        for (String key : newProps.stringPropertyNames()) {
+            if (!key.startsWith("logcollect.")) {
+                continue;
+            }
+            String oldVal = oldProps.getProperty(key);
+            String newVal = newProps.getProperty(key);
+            if (!String.valueOf(oldVal).equals(String.valueOf(newVal))) {
+                changed.put(key, newVal);
+            }
+        }
+        for (String key : oldProps.stringPropertyNames()) {
+            if (!key.startsWith("logcollect.")) {
+                continue;
+            }
+            if (!newProps.containsKey(key)) {
+                changed.put(key, null);
+            }
+        }
+        return changed;
     }
 
     private void saveToLocalCache(Properties properties) {

@@ -10,17 +10,22 @@ import com.logcollect.api.model.LogCollectContext;
 import com.logcollect.api.model.LogEntry;
 import com.logcollect.api.transaction.TransactionExecutor;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
+import com.logcollect.core.pipeline.SecurityPipeline;
 import com.logcollect.core.test.CoreUnitTestBase;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -61,7 +66,8 @@ class AggregateModeBufferBranchTest extends CoreUnitTestBase {
         AggregateModeBuffer emptyBuffer = new AggregateModeBuffer(10, parseBytes("1MB"), null, emptyHandler);
         assertThat(emptyBuffer.offer(emptyContext, createTestEntry("discard-me", "INFO"))).isFalse();
 
-        GlobalBufferMemoryManager memory = new GlobalBufferMemoryManager(0);
+        GlobalBufferMemoryManager memory = new GlobalBufferMemoryManager(parseBytes("1MB"));
+        assertThat(memory.forceAllocate(parseBytes("1100KB"))).isTrue();
         LogCollectHandler normalHandler = mock(LogCollectHandler.class);
         when(normalHandler.formatLogLine(any(LogEntry.class))).thenAnswer(inv -> ((LogEntry) inv.getArgument(0)).getContent());
         when(normalHandler.aggregatedLogSeparator()).thenReturn("\n");
@@ -208,6 +214,183 @@ class AggregateModeBufferBranchTest extends CoreUnitTestBase {
         verify(handler, atLeastOnce()).flushAggregatedLog(eq(context), any(AggregatedLog.class));
     }
 
+    @Test
+    void offerRawBranches_coverNullClosedHandlerNullAndFormatterFailures() {
+        LogCollectConfig config = baseConfig();
+        LogCollectHandler handler = mock(LogCollectHandler.class);
+        when(handler.formatLogLine(any(LogEntry.class))).thenReturn("formatted");
+        when(handler.aggregatedLogSeparator()).thenReturn("\n");
+
+        LogCollectContext context = createTestContext(config, handler, CollectMode.AGGREGATE, null, null);
+        AggregateModeBuffer buffer = new AggregateModeBuffer(10, parseBytes("1MB"), null, handler);
+        assertThat(buffer.offerRaw(context, null)).isFalse();
+
+        SecurityPipeline pipeline = new SecurityPipeline(null, null);
+        SecurityPipeline.ProcessedLogRecord record = pipeline.processRawRecord(
+                context.getTraceId(), "raw", "INFO", System.currentTimeMillis(),
+                "t", "c", null, null, SecurityPipeline.SecurityMetrics.NOOP);
+
+        buffer.closeAndFlush(context);
+        assertThat(buffer.offerRaw(context, record)).isFalse();
+
+        AggregateModeBuffer noHandlerBuffer = new AggregateModeBuffer(10, parseBytes("1MB"), null, null);
+        assertThat(noHandlerBuffer.offerRaw(context, record)).isTrue();
+    }
+
+    @Test
+    void offerRawBranches_coverFormatExceptionAndError() {
+        LogCollectConfig config = baseConfig();
+        SecurityPipeline pipeline = new SecurityPipeline(null, null);
+
+        LogCollectHandler runtimeHandler = mock(LogCollectHandler.class);
+        when(runtimeHandler.aggregatedLogSeparator()).thenReturn("\n");
+        when(runtimeHandler.formatLogLine(any(LogEntry.class))).thenThrow(new RuntimeException("format-fail"));
+        LogCollectContext runtimeContext = createTestContext(config, runtimeHandler, CollectMode.AGGREGATE, null, null);
+        AggregateModeBuffer runtimeBuffer = new AggregateModeBuffer(10, parseBytes("1MB"), null, runtimeHandler);
+        SecurityPipeline.ProcessedLogRecord record = pipeline.processRawRecord(
+                runtimeContext.getTraceId(), "raw-runtime", "WARN", System.currentTimeMillis(),
+                "t", "c", null, null, SecurityPipeline.SecurityMetrics.NOOP);
+        assertThat(runtimeBuffer.offerRaw(runtimeContext, record)).isTrue();
+        verify(runtimeHandler, atLeastOnce()).onError(eq(runtimeContext), any(Throwable.class), eq("formatLogLine"));
+
+        LogCollectHandler errorHandler = mock(LogCollectHandler.class);
+        when(errorHandler.aggregatedLogSeparator()).thenReturn("\n");
+        when(errorHandler.formatLogLine(any(LogEntry.class))).thenAnswer(inv -> {
+            throw new AssertionError("fatal-format");
+        });
+        LogCollectContext errorContext = createTestContext(config, errorHandler, CollectMode.AGGREGATE, null, null);
+        AggregateModeBuffer errorBuffer = new AggregateModeBuffer(10, parseBytes("1MB"), null, errorHandler);
+        SecurityPipeline.ProcessedLogRecord errorRecord = pipeline.processRawRecord(
+                errorContext.getTraceId(), "raw-error", "ERROR", System.currentTimeMillis(),
+                "t", "c", null, null, SecurityPipeline.SecurityMetrics.NOOP);
+        assertThatThrownBy(() -> errorBuffer.offerRaw(errorContext, errorRecord))
+                .isInstanceOf(AssertionError.class);
+    }
+
+    @Test
+    void offerBranches_coverOversizedDirectFlushAndHardCeilingPaths() {
+        LogCollectConfig config = baseConfig();
+        LogCollectHandler handler = mock(LogCollectHandler.class);
+        when(handler.formatLogLine(any(LogEntry.class))).thenAnswer(inv -> ((LogEntry) inv.getArgument(0)).getContent());
+        when(handler.aggregatedLogSeparator()).thenReturn("\n");
+        LogCollectContext context = createTestContext(config, handler, CollectMode.AGGREGATE, null, null);
+
+        GlobalBufferMemoryManager exhausted = new GlobalBufferMemoryManager(
+                parseBytes("1MB"),
+                GlobalBufferMemoryManager.CounterMode.EXACT_CAS,
+                parseBytes("1MB"));
+        assertThat(exhausted.forceAllocate(parseBytes("1MB"))).isTrue();
+
+        AggregateModeBuffer exhaustedBuffer = new AggregateModeBuffer(10, 64, exhausted, handler);
+        assertThat(exhaustedBuffer.offer(context, createTestEntry(repeat("q", 512), "WARN"))).isFalse();
+
+        GlobalBufferMemoryManager elastic = new GlobalBufferMemoryManager(
+                parseBytes("1MB"),
+                GlobalBufferMemoryManager.CounterMode.EXACT_CAS,
+                parseBytes("2MB"));
+        assertThat(elastic.forceAllocate(parseBytes("1MB"))).isTrue();
+        AggregateModeBuffer directFlushBuffer = new AggregateModeBuffer(10, 64, elastic, handler);
+        assertThat(directFlushBuffer.offer(context, createTestEntry(repeat("e", 512), "ERROR"))).isTrue();
+        assertThat(elastic.getTotalUsed()).isEqualTo(parseBytes("1MB"));
+
+        AggregateModeBuffer normalPath = new AggregateModeBuffer(10, parseBytes("1MB"), exhausted, handler);
+        assertThat(normalPath.offer(context, createTestEntry("small-warn", "WARN"))).isFalse();
+    }
+
+    @Test
+    void offerBranches_coverCircuitOpenCustomRejectAndReentrantFlush() throws Exception {
+        LogCollectConfig config = baseConfig();
+        LogCollectHandler handler = mock(LogCollectHandler.class);
+        when(handler.formatLogLine(any(LogEntry.class))).thenAnswer(inv -> ((LogEntry) inv.getArgument(0)).getContent());
+        when(handler.aggregatedLogSeparator()).thenReturn("\n");
+
+        LogCollectConfig asyncConfig = baseConfig();
+        asyncConfig.setAsync(true);
+        LogCollectContext asyncContext = createTestContext(asyncConfig, handler, CollectMode.AGGREGATE, null, null);
+        AggregateModeBuffer asyncBuffer = new AggregateModeBuffer(10, parseBytes("1MB"), null, handler);
+        asyncBuffer.offer(asyncContext, createTestEntry("async-agg", "WARN"));
+        asyncBuffer.triggerFlush(asyncContext, false);
+        asyncBuffer.triggerFlush(asyncContext, true);
+
+        LogCollectCircuitBreaker breaker = new LogCollectCircuitBreaker(() -> config);
+        breaker.forceOpen();
+        LogCollectContext openContext = createTestContext(config, handler, CollectMode.AGGREGATE, null, breaker);
+        AggregateModeBuffer openBuffer = new AggregateModeBuffer(10, 64, null, handler);
+        assertThat(openBuffer.offer(openContext, createTestEntry(repeat("b", 256), "INFO"))).isFalse();
+
+        GlobalBufferMemoryManager manager = new GlobalBufferMemoryManager(parseBytes("2MB"));
+        BoundedBufferPolicy rejectPolicy = new BoundedBufferPolicy(
+                parseBytes("1MB"),
+                100,
+                BoundedBufferPolicy.OverflowStrategy.FLUSH_EARLY) {
+            @Override
+            public RejectReason beforeAdd(long entryBytes, Runnable earlyFlush) {
+                return RejectReason.BUFFER_FULL;
+            }
+        };
+        AggregateModeBuffer rejectBuffer = new AggregateModeBuffer(10, parseBytes("1MB"), manager, handler, rejectPolicy);
+        long before = manager.getTotalUsed();
+        assertThat(rejectBuffer.offer(openContext, createTestEntry("reject", "INFO"))).isFalse();
+        assertThat(manager.getTotalUsed()).isEqualTo(before);
+
+        Field flushingField = AggregateModeBuffer.class.getDeclaredField("flushing");
+        flushingField.setAccessible(true);
+        AtomicBoolean flushing = (AtomicBoolean) flushingField.get(rejectBuffer);
+        flushing.set(true);
+        Method doTriggerFlush = AggregateModeBuffer.class
+                .getDeclaredMethod("doTriggerFlush", LogCollectContext.class, boolean.class, boolean.class);
+        doTriggerFlush.setAccessible(true);
+        doTriggerFlush.invoke(rejectBuffer, openContext, false, false);
+        flushing.set(false);
+    }
+
+    @Test
+    void helperBranches_coverNullCollectionsLargeBuilderAndNotifyCallbacks() throws Exception {
+        LogCollectConfig config = baseConfig();
+        config.setEnableDegrade(false);
+        LogCollectHandler handler = mock(LogCollectHandler.class);
+        doThrow(new RuntimeException("degrade-callback"))
+                .when(handler).onDegrade(any(LogCollectContext.class), any());
+        doThrow(new RuntimeException("error-callback"))
+                .when(handler).onError(any(LogCollectContext.class), any(Throwable.class), any(String.class));
+        doThrow(new RuntimeException("flush-fail"))
+                .when(handler).flushAggregatedLog(any(LogCollectContext.class), any(AggregatedLog.class));
+        when(handler.formatLogLine(any(LogEntry.class))).thenAnswer(inv -> ((LogEntry) inv.getArgument(0)).getContent());
+        when(handler.aggregatedLogSeparator()).thenReturn("\n");
+
+        LogCollectContext context = createTestContext(config, handler, CollectMode.AGGREGATE, null, null);
+        AggregateModeBuffer buffer = new AggregateModeBuffer(10, 64, null, handler);
+        assertThat(buffer.offer(context, createTestEntry(repeat("z", 512), "INFO"))).isFalse();
+        assertThat(context.getTotalDiscardedCount()).isGreaterThan(0);
+
+        assertThat(call(buffer, "splitByPatternVersion", new Class[]{List.class}, new Object[]{null}))
+                .isEqualTo(Collections.emptyList());
+        assertThat(call(buffer, "retainWarnOrAbove", new Class[]{List.class}, new Object[]{null})).isNull();
+        assertThat(call(buffer, "buildAggregatedLog", new Class[]{List.class, boolean.class},
+                Collections.emptyList(), false)).isNull();
+        assertThat((Integer) call(buffer, "levelRank", new Class[]{String.class}, new Object[]{null})).isZero();
+        assertThat((Boolean) call(buffer, "isHighLevel", new Class[]{String.class}, new Object[]{null})).isFalse();
+
+        @SuppressWarnings("unchecked")
+        ThreadLocal<StringBuilder> holder = (ThreadLocal<StringBuilder>) getStaticField(
+                AggregateModeBuffer.class, "SB_HOLDER");
+        holder.get().ensureCapacity(2 * 1024 * 1024);
+        Object segment = newSegment("large-builder", "WARN", System.currentTimeMillis(), 1);
+        List<Object> segments = new ArrayList<Object>();
+        segments.add(segment);
+        assertThat(call(buffer, "buildAggregatedLog", new Class[]{List.class, boolean.class}, segments, false))
+                .isNotNull();
+
+        call(buffer, "notifyDegrade", new Class[]{LogCollectContext.class, String.class}, context, "reason");
+        call(buffer, "notifyDegrade", new Class[]{LogCollectContext.class, String.class}, null, "reason");
+        call(buffer, "notifyError",
+                new Class[]{LogCollectContext.class, Throwable.class, String.class},
+                context, new RuntimeException("x"), "phase");
+        call(buffer, "notifyError",
+                new Class[]{LogCollectContext.class, Throwable.class, String.class},
+                null, new RuntimeException("x"), "phase");
+    }
+
     private LogCollectConfig baseConfig() {
         LogCollectConfig config = LogCollectConfig.frameworkDefaults();
         config.setAsync(false);
@@ -221,6 +404,27 @@ class AggregateModeBufferBranchTest extends CoreUnitTestBase {
         Method m = target.getClass().getDeclaredMethod(method, types);
         m.setAccessible(true);
         return m.invoke(target, args);
+    }
+
+    private Object getStaticField(Class<?> type, String name) throws Exception {
+        Field field = type.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(null);
+    }
+
+    private Object newSegment(String formattedLine, String level, long timestamp, int version) throws Exception {
+        Class<?> segClass = Class.forName("com.logcollect.core.buffer.AggregateModeBuffer$LogSegment");
+        Constructor<?> ctor = segClass.getDeclaredConstructor(String.class, String.class, long.class, int.class);
+        ctor.setAccessible(true);
+        return ctor.newInstance(formattedLine, level, timestamp, version);
+    }
+
+    private String repeat(String value, int count) {
+        StringBuilder sb = new StringBuilder(value.length() * count);
+        for (int i = 0; i < count; i++) {
+            sb.append(value);
+        }
+        return sb.toString();
     }
 
     @SuppressWarnings("unused")

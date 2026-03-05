@@ -27,6 +27,8 @@ public class LogCollectConfig {
     private long maxBufferBytes = 1024L * 1024;
     private String bufferOverflowStrategy = "FLUSH_EARLY";
     private long globalBufferTotalMaxBytes = 100L * 1024 * 1024;
+    private long globalBufferHardCeilingBytes = 150L * 1024 * 1024;
+    private double globalBufferEstimationFactor = 1.0d;
 
     // ===== 熔断降级配置 =====
     private boolean enableDegrade = true;
@@ -175,6 +177,22 @@ public class LogCollectConfig {
 
     public void setGlobalBufferTotalMaxBytes(long globalBufferTotalMaxBytes) {
         this.globalBufferTotalMaxBytes = globalBufferTotalMaxBytes;
+    }
+
+    public long getGlobalBufferHardCeilingBytes() {
+        return globalBufferHardCeilingBytes;
+    }
+
+    public void setGlobalBufferHardCeilingBytes(long globalBufferHardCeilingBytes) {
+        this.globalBufferHardCeilingBytes = globalBufferHardCeilingBytes;
+    }
+
+    public double getGlobalBufferEstimationFactor() {
+        return globalBufferEstimationFactor;
+    }
+
+    public void setGlobalBufferEstimationFactor(double globalBufferEstimationFactor) {
+        this.globalBufferEstimationFactor = globalBufferEstimationFactor;
     }
 
     public boolean isEnableDegrade() {

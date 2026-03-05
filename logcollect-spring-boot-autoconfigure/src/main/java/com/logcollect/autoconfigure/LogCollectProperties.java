@@ -214,7 +214,9 @@ public class LogCollectProperties {
         private String maxBytes = "1MB";
         private String overflowStrategy = "FLUSH_EARLY";
         private String totalMaxBytes = "100MB";
+        private String hardCeilingBytes = "150MB";
         private String counterMode = "EXACT_CAS";
+        private double estimationFactor = 1.0d;
 
         public boolean isEnabled() {
             return enabled;
@@ -264,12 +266,32 @@ public class LogCollectProperties {
             this.counterMode = counterMode;
         }
 
+        public String getHardCeilingBytes() {
+            return hardCeilingBytes;
+        }
+
+        public void setHardCeilingBytes(String hardCeilingBytes) {
+            this.hardCeilingBytes = hardCeilingBytes;
+        }
+
+        public double getEstimationFactor() {
+            return estimationFactor;
+        }
+
+        public void setEstimationFactor(double estimationFactor) {
+            this.estimationFactor = estimationFactor;
+        }
+
         public long getMaxBytesValue() {
             return DataSizeParser.parseToBytes(maxBytes);
         }
 
         public long getTotalMaxBytesValue() {
             return DataSizeParser.parseToBytes(totalMaxBytes);
+        }
+
+        public long getHardCeilingBytesValue() {
+            return DataSizeParser.parseToBytes(hardCeilingBytes);
         }
     }
 
