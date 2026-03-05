@@ -6,6 +6,7 @@ import ch.qos.logback.classic.spi.ThrowableProxy;
 import com.logcollect.api.backpressure.BackpressureAction;
 import com.logcollect.api.backpressure.BackpressureCallback;
 import com.logcollect.api.enums.CollectMode;
+import com.logcollect.api.enums.DegradeReason;
 import com.logcollect.api.enums.SamplingStrategy;
 import com.logcollect.api.enums.TotalLimitPolicy;
 import com.logcollect.api.exception.LogCollectDegradeException;
@@ -19,6 +20,7 @@ import com.logcollect.api.transaction.TransactionExecutor;
 import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.context.LogCollectContextManager;
 import com.logcollect.core.context.LogCollectIgnoreManager;
+import com.logcollect.core.pipeline.PipelineQueue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -29,9 +31,9 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.eq;
 
 class LogCollectLogbackAppenderBranchTest {
 
@@ -255,6 +257,84 @@ class LogCollectLogbackAppenderBranchTest {
         appender.doAppend(mockEvent("m3", "com.test.B", Level.DEBUG, mdc, null));
 
         verify(handler, never()).appendLog(any(), any());
+    }
+
+    @Test
+    void privateHelpers_coverPipelineBranches() throws Exception {
+        LogCollectLogbackAppender appender = new LogCollectLogbackAppender();
+        appender.setPipelineManager(null);
+        LogCollectMetrics metrics = mock(LogCollectMetrics.class);
+        LogCollectConfig config = LogCollectConfig.frameworkDefaults();
+
+        Class<?>[] appendToPipelineTypes = new Class[]{
+                ILoggingEvent.class,
+                LogCollectContext.class,
+                String.class,
+                String.class,
+                Map.class,
+                LogCollectMetrics.class
+        };
+
+        ILoggingEvent infoEvent = mockEvent(
+                "pipeline-info",
+                "com.test.Pipeline",
+                Level.INFO,
+                Collections.<String, String>emptyMap(),
+                null);
+        ILoggingEvent warnEvent = mockEvent(
+                "pipeline-warn",
+                "com.test.Pipeline",
+                Level.WARN,
+                Collections.<String, String>emptyMap(),
+                null);
+
+        LogCollectContext closedCtx = newContext("trace-pipe-closed", config, mock(LogCollectHandler.class));
+        closedCtx.setPipelineQueue(new PipelineQueue(2, 1.0d, 1.0d));
+        closedCtx.markClosed();
+        invoke(appender, "appendToPipeline", appendToPipelineTypes,
+                infoEvent, closedCtx, "INFO", "com.test.Pipeline", Collections.emptyMap(), metrics);
+        assertThat(closedCtx.getTotalDiscardedCount()).isEqualTo(1);
+        verify(metrics).incrementDiscarded(closedCtx.getMethodSignature(), "buffer_closed_late_arrival");
+
+        LogCollectContext nullQueueCtx = newContext("trace-pipe-null", config, mock(LogCollectHandler.class));
+        invoke(appender, "appendToPipeline", appendToPipelineTypes,
+                infoEvent, nullQueueCtx, "INFO", "com.test.Pipeline", Collections.emptyMap(), metrics);
+        assertThat(nullQueueCtx.getTotalDiscardedCount()).isZero();
+
+        LogCollectContext acceptedCtx = newContext("trace-pipe-accept", config, mock(LogCollectHandler.class));
+        PipelineQueue acceptedQueue = new PipelineQueue(4, 0.75d, 1.0d);
+        acceptedCtx.setPipelineQueue(acceptedQueue);
+        Map<String, String> mdc = new HashMap<String, String>();
+        mdc.put("key", "value");
+        invoke(appender, "appendToPipeline", appendToPipelineTypes,
+                infoEvent, acceptedCtx, "INFO", "com.test.Pipeline", mdc, metrics);
+        assertThat(acceptedQueue.size()).isEqualTo(1);
+
+        LogCollectContext fullCtx = newContext("trace-pipe-full", config, mock(LogCollectHandler.class));
+        PipelineQueue fullQueue = new PipelineQueue(1, 1.0d, 1.0d);
+        fullCtx.setPipelineQueue(fullQueue);
+        Map<String, String> nullMdc = null;
+        invoke(appender, "appendToPipeline", appendToPipelineTypes,
+                infoEvent, fullCtx, "INFO", "com.test.Pipeline", nullMdc, metrics);
+        invoke(appender, "appendToPipeline", appendToPipelineTypes,
+                warnEvent, fullCtx, "WARN", "com.test.Pipeline", Collections.emptyMap(), metrics);
+        assertThat(fullCtx.getTotalDiscardedCount()).isEqualTo(1);
+        verify(metrics).incrementDiscarded(fullCtx.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
+        verify(metrics).incrementPipelineBackpressure(fullCtx.getMethodSignature(), "WARN");
+
+        LogCollectContext backpressureCtx = newContext("trace-pipe-backpressure", config, mock(LogCollectHandler.class));
+        PipelineQueue backpressureQueue = new PipelineQueue(4, 0.25d, 0.25d);
+        backpressureCtx.setPipelineQueue(backpressureQueue);
+        invoke(appender, "appendToPipeline", appendToPipelineTypes,
+                warnEvent, backpressureCtx, "WARN", "com.test.Pipeline", Collections.emptyMap(), metrics);
+        int sizeBeforeReject = backpressureQueue.size();
+        invoke(appender, "appendToPipeline", appendToPipelineTypes,
+                infoEvent, backpressureCtx, "INFO", "com.test.Pipeline", Collections.emptyMap(), metrics);
+        assertThat(backpressureQueue.size()).isEqualTo(sizeBeforeReject);
+        assertThat(backpressureCtx.getTotalDiscardedCount()).isEqualTo(1);
+        verify(metrics).incrementDiscarded(backpressureCtx.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
+        verify(metrics).incrementPipelineBackpressure(backpressureCtx.getMethodSignature(), "INFO");
+        verify(metrics, atLeastOnce()).updatePipelineQueueUtilization(anyString(), anyDouble());
     }
 
     @Test

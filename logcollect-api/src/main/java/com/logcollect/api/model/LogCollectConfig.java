@@ -33,7 +33,7 @@ public class LogCollectConfig {
     private long maxBufferBytes = 1024L * 1024;
     private String bufferOverflowStrategy = "FLUSH_EARLY";
     private long globalBufferTotalMaxBytes = 100L * 1024 * 1024;
-    private long globalBufferHardCeilingBytes = 150L * 1024 * 1024;
+    private long globalBufferHardCeilingBytes = 0L;
     private double globalBufferEstimationFactor = 1.0d;
 
     // ===== 熔断降级配置 =====

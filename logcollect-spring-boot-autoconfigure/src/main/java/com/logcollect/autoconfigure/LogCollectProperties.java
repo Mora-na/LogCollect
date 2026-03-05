@@ -225,7 +225,7 @@ public class LogCollectProperties {
         private String maxBytes = "1MB";
         private String overflowStrategy = "FLUSH_EARLY";
         private String totalMaxBytes = "100MB";
-        private String hardCeilingBytes = "150MB";
+        private String hardCeilingBytes;
         private String counterMode = "EXACT_CAS";
         private double estimationFactor = 1.0d;
 
@@ -302,6 +302,9 @@ public class LogCollectProperties {
         }
 
         public long getHardCeilingBytesValue() {
+            if (hardCeilingBytes == null || hardCeilingBytes.trim().isEmpty()) {
+                return 0L;
+            }
             return DataSizeParser.parseToBytes(hardCeilingBytes);
         }
     }

@@ -695,7 +695,7 @@ handler.preferredMode() 返回值?
 | 参数 | 默认值 | 动态可更新 | 说明 |
 |------|--------|-----------|------|
 | `total-max-bytes` | `100MB` | ✅ | 软限：所有活跃方法共享的全局内存配额 |
-| `hard-ceiling-bytes` | `150MB` | ✅ | 硬顶：`forceAllocate` 的绝对上限，默认 `soft × 1.5` |
+| `hard-ceiling-bytes` | `soft × 1.5` | ✅ | 硬顶：`forceAllocate` 的绝对上限；未配置时自动按 `total-max-bytes × 1.5` 推导 |
 | `counter-mode` | `EXACT_CAS` | ❌ 需重启 | 全局计数策略，运行时仅启用一种 |
 | `estimation-factor` | `1.0` | ✅ | 内存估算补偿系数，固定开销已内含，通常无需调整 |
 
@@ -1503,7 +1503,8 @@ logcollect.global.buffer.max-size=100
 logcollect.global.buffer.max-bytes=1MB
 logcollect.global.buffer.overflow-strategy=FLUSH_EARLY
 logcollect.global.buffer.total-max-bytes=100MB
-logcollect.global.buffer.hard-ceiling-bytes=150MB
+# 可选：不配置时默认按 total-max-bytes * 1.5 推导
+# logcollect.global.buffer.hard-ceiling-bytes=150MB
 logcollect.global.buffer.counter-mode=EXACT_CAS
 logcollect.global.buffer.estimation-factor=1.0
 logcollect.global.pipeline.enabled=true
