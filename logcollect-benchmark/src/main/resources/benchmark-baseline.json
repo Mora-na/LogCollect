@@ -544,7 +544,7 @@
     "github-ubuntu-latest": {
       "jdk11": {
         "_meta": {
-          "updatedAt": "2026-03-04T11:03:26Z",
+          "updatedAt": "2026-03-05T08:48:41Z",
           "updatedBy": "Mora-na",
           "profile": "github-ubuntu-latest",
           "jdk": "11.0.30",
@@ -555,7 +555,19 @@
           "sampleRuns": 20,
           "sampleMinPerMetric": 5,
           "sampleTrimCountEachSide": 1,
-          "note": "CI stress baseline from 20 smoke runs (github-ubuntu-latest)"
+          "note": "CI stress baseline from 20 smoke runs (github-ubuntu-latest)",
+          "jvmOpts": "-Xms512m -Xmx512m -XX:+UseG1GC",
+          "springProfiles": "stress",
+          "maxThreadCap": 128,
+          "taskTimeoutSeconds": 60,
+          "runnerMemoryMb": 15990,
+          "githubRunId": 22709676715,
+          "githubRunNumber": 2,
+          "githubRunAttempt": 1,
+          "githubSha": "d10c9a0bc9a4427c4aca1422895792e7bbec6387",
+          "githubRefName": "main",
+          "githubWorkflow": "Refresh Stress CI Baseline",
+          "githubRepository": "Mora-na/LogCollect"
         },
         "stressGate": {
           "aggregation": {
@@ -569,24 +581,24 @@
           "gcAbsoluteMinPercent": 2.0,
           "gcAbsoluteMaxPercent": 5.0,
           "throughputBaselines": {
-            "isolated-1t-clean": 398062.8,
-            "isolated-8t-clean": 849286.8,
-            "isolated-8t-sensitive": 178973.6,
-            "e2e-1t-clean": 345180.4,
-            "e2e-8t-clean": 1030461.3,
-            "e2e-8t-sensitive": 237122.6
+            "isolated-1t-clean": 493111.9,
+            "isolated-8t-clean": 1104234.6,
+            "isolated-8t-sensitive": 828955.2,
+            "e2e-1t-clean": 705859.4,
+            "e2e-8t-clean": 958351.5,
+            "e2e-8t-sensitive": 920623.5
           },
           "ratioBaselines": {
-            "isolated-8t-clean/isolated-1t-clean": 2.14,
-            "e2e-8t-clean/e2e-1t-clean": 2.999
+            "isolated-8t-clean/isolated-1t-clean": 2.254,
+            "e2e-8t-clean/e2e-1t-clean": 1.376
           },
           "gcBaselines": {
-            "isolated-1t-clean": 1.97,
-            "isolated-8t-clean": 2.12,
-            "isolated-8t-sensitive": 0.58,
-            "e2e-1t-clean": 0.37,
-            "e2e-8t-clean": 0.49,
-            "e2e-8t-sensitive": 0.33
+            "isolated-1t-clean": 2.25,
+            "isolated-8t-clean": 2.02,
+            "isolated-8t-sensitive": 2.02,
+            "e2e-1t-clean": 0.89,
+            "e2e-8t-clean": 1.06,
+            "e2e-8t-sensitive": 0.89
           },
           "stats": {
             "throughput": {
@@ -594,61 +606,61 @@
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 374211.57,
-                "max": 424547.75,
-                "p50": 399514.78,
-                "p90": 413160.8,
-                "trimmedMean": 398062.84
+                "min": 442753.88,
+                "max": 598836.18,
+                "p50": 491862.52,
+                "p90": 542534.55,
+                "trimmedMean": 493111.89
               },
               "isolated-8t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 722198.64,
-                "max": 924115.56,
-                "p50": 861561.65,
-                "p90": 891224.79,
-                "trimmedMean": 849286.78
+                "min": 995003.38,
+                "max": 1351578.9,
+                "p50": 1093612.37,
+                "p90": 1192308.79,
+                "trimmedMean": 1104234.55
               },
               "isolated-8t-sensitive": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 151176.14,
-                "max": 199157.62,
-                "p50": 182346.02,
-                "p90": 188837.85,
-                "trimmedMean": 178973.58
+                "min": 721940.09,
+                "max": 936505.1,
+                "p50": 846381.4,
+                "p90": 890940.8,
+                "trimmedMean": 828955.21
               },
               "e2e-1t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 265583.55,
-                "max": 386680.63,
-                "p50": 358474.37,
-                "p90": 375618.16,
-                "trimmedMean": 345180.43
+                "min": 391233.45,
+                "max": 988228.71,
+                "p50": 689674.08,
+                "p90": 809546.82,
+                "trimmedMean": 705859.42
               },
               "e2e-8t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 871692.85,
-                "max": 1080315.53,
-                "p50": 1037791.52,
-                "p90": 1066638.82,
-                "trimmedMean": 1030461.28
+                "min": 845933.6,
+                "max": 1065722.8,
+                "p50": 944816.71,
+                "p90": 1042798.45,
+                "trimmedMean": 958351.48
               },
               "e2e-8t-sensitive": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 221821.12,
-                "max": 249690.65,
-                "p50": 236408.02,
-                "p90": 246973.8,
-                "trimmedMean": 237122.61
+                "min": 806323.82,
+                "max": 1036009.39,
+                "p50": 920657.89,
+                "p90": 982821.04,
+                "trimmedMean": 920623.45
               }
             },
             "ratio": {
@@ -656,21 +668,21 @@
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 1.7011,
-                "max": 2.3272,
-                "p50": 2.14,
-                "p90": 2.2742,
-                "trimmedMean": 2.1398
+                "min": 1.8504,
+                "max": 2.6545,
+                "p50": 2.22,
+                "p90": 2.5901,
+                "trimmedMean": 2.2536
               },
               "e2e-8t-clean/e2e-1t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 2.5518,
-                "max": 3.7372,
-                "p50": 2.9582,
-                "p90": 3.4109,
-                "trimmedMean": 2.999
+                "min": 0.9568,
+                "max": 2.3954,
+                "p50": 1.3788,
+                "p90": 1.6051,
+                "trimmedMean": 1.3758
               }
             },
             "gc": {
@@ -679,60 +691,60 @@
                 "kept": 18,
                 "trimCountEachSide": 1,
                 "min": 0.0,
-                "max": 4.6106,
-                "p50": 2.0484,
-                "p90": 2.5095,
-                "trimmedMean": 1.9748
+                "max": 5.0478,
+                "p50": 2.4956,
+                "p90": 3.7523,
+                "trimmedMean": 2.251
               },
               "isolated-8t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 1.063,
-                "max": 2.8892,
-                "p50": 2.0889,
-                "p90": 2.6577,
-                "trimmedMean": 2.1242
+                "min": 1.4064,
+                "max": 3.113,
+                "p50": 1.934,
+                "p90": 2.7026,
+                "trimmedMean": 2.0156
               },
               "isolated-8t-sensitive": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 0.3273,
-                "max": 0.8726,
-                "p50": 0.5585,
-                "p90": 0.7993,
-                "trimmedMean": 0.578
+                "min": 1.101,
+                "max": 2.9672,
+                "p50": 2.1077,
+                "p90": 2.7467,
+                "trimmedMean": 2.023
               },
               "e2e-1t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
                 "min": 0.0,
-                "max": 0.7373,
-                "p50": 0.3585,
-                "p90": 0.6607,
-                "trimmedMean": 0.371
+                "max": 3.9701,
+                "p50": 0.0,
+                "p90": 2.7578,
+                "trimmedMean": 0.8893
               },
               "e2e-8t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 0.2423,
-                "max": 0.7526,
-                "p50": 0.5164,
-                "p90": 0.6415,
-                "trimmedMean": 0.4898
+                "min": 0.5287,
+                "max": 1.6511,
+                "p50": 1.0377,
+                "p90": 1.4094,
+                "trimmedMean": 1.0588
               },
               "e2e-8t-sensitive": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 0.2299,
-                "max": 0.4991,
-                "p50": 0.3302,
-                "p90": 0.4035,
-                "trimmedMean": 0.3274
+                "min": 0.4687,
+                "max": 1.9104,
+                "p50": 0.9026,
+                "p90": 1.1952,
+                "trimmedMean": 0.8911
               }
             }
           }
@@ -740,7 +752,7 @@
       },
       "jdk17": {
         "_meta": {
-          "updatedAt": "2026-03-04T11:07:55Z",
+          "updatedAt": "2026-03-05T08:51:51Z",
           "updatedBy": "Mora-na",
           "profile": "github-ubuntu-latest",
           "jdk": "17.0.18",
@@ -751,7 +763,19 @@
           "sampleRuns": 20,
           "sampleMinPerMetric": 5,
           "sampleTrimCountEachSide": 1,
-          "note": "CI stress baseline from 20 smoke runs (github-ubuntu-latest)"
+          "note": "CI stress baseline from 20 smoke runs (github-ubuntu-latest)",
+          "jvmOpts": "-Xms512m -Xmx512m -XX:+UseG1GC",
+          "springProfiles": "stress",
+          "maxThreadCap": 128,
+          "taskTimeoutSeconds": 60,
+          "runnerMemoryMb": 15990,
+          "githubRunId": 22709676715,
+          "githubRunNumber": 2,
+          "githubRunAttempt": 1,
+          "githubSha": "d10c9a0bc9a4427c4aca1422895792e7bbec6387",
+          "githubRefName": "main",
+          "githubWorkflow": "Refresh Stress CI Baseline",
+          "githubRepository": "Mora-na/LogCollect"
         },
         "stressGate": {
           "aggregation": {
@@ -765,24 +789,24 @@
           "gcAbsoluteMinPercent": 2.0,
           "gcAbsoluteMaxPercent": 5.0,
           "throughputBaselines": {
-            "isolated-1t-clean": 448505.0,
-            "isolated-8t-clean": 879885.6,
-            "isolated-8t-sensitive": 184114.0,
-            "e2e-1t-clean": 384732.1,
-            "e2e-8t-clean": 1076547.9,
-            "e2e-8t-sensitive": 245495.1
+            "isolated-1t-clean": 450419.1,
+            "isolated-8t-clean": 1710216.2,
+            "isolated-8t-sensitive": 1542423.0,
+            "e2e-1t-clean": 1041473.1,
+            "e2e-8t-clean": 1623377.8,
+            "e2e-8t-sensitive": 1725686.4
           },
           "ratioBaselines": {
-            "isolated-8t-clean/isolated-1t-clean": 1.959,
-            "e2e-8t-clean/e2e-1t-clean": 2.814
+            "isolated-8t-clean/isolated-1t-clean": 3.816,
+            "e2e-8t-clean/e2e-1t-clean": 1.588
           },
           "gcBaselines": {
-            "isolated-1t-clean": 2.09,
-            "isolated-8t-clean": 2.28,
-            "isolated-8t-sensitive": 1.04,
-            "e2e-1t-clean": 0.34,
-            "e2e-8t-clean": 0.49,
-            "e2e-8t-sensitive": 0.31
+            "isolated-1t-clean": 2.46,
+            "isolated-8t-clean": 3.81,
+            "isolated-8t-sensitive": 3.67,
+            "e2e-1t-clean": 3.87,
+            "e2e-8t-clean": 1.93,
+            "e2e-8t-sensitive": 1.69
           },
           "stats": {
             "throughput": {
@@ -790,61 +814,61 @@
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 424663.6,
-                "max": 489678.78,
-                "p50": 451035.1,
-                "p90": 467688.04,
-                "trimmedMean": 448504.99
+                "min": 359869.53,
+                "max": 485423.32,
+                "p50": 450533.97,
+                "p90": 477539.51,
+                "trimmedMean": 450419.15
               },
               "isolated-8t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 772065.31,
-                "max": 996564.94,
-                "p50": 882804.05,
-                "p90": 973954.27,
-                "trimmedMean": 879885.59
+                "min": 1381961.21,
+                "max": 2104731.06,
+                "p50": 1677579.14,
+                "p90": 2044198.7,
+                "trimmedMean": 1710216.23
               },
               "isolated-8t-sensitive": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 168616.49,
-                "max": 196197.19,
-                "p50": 183243.53,
-                "p90": 193662.78,
-                "trimmedMean": 184114.03
+                "min": 1091063.87,
+                "max": 2009695.82,
+                "p50": 1535981.33,
+                "p90": 1893469.85,
+                "trimmedMean": 1542423.02
               },
               "e2e-1t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 265899.39,
-                "max": 428289.62,
-                "p50": 385450.83,
-                "p90": 417943.97,
-                "trimmedMean": 384732.08
+                "min": 658022.6,
+                "max": 1263517.35,
+                "p50": 1051335.25,
+                "p90": 1188173.18,
+                "trimmedMean": 1041473.13
               },
               "e2e-8t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 978257.32,
-                "max": 1134587.57,
-                "p50": 1081147.22,
-                "p90": 1122328.91,
-                "trimmedMean": 1076547.93
+                "min": 1413989.57,
+                "max": 1852506.37,
+                "p50": 1626577.12,
+                "p90": 1782152.27,
+                "trimmedMean": 1623377.85
               },
               "e2e-8t-sensitive": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 236348.27,
-                "max": 253258.96,
-                "p50": 245835.99,
-                "p90": 250722.64,
-                "trimmedMean": 245495.08
+                "min": 1334711.53,
+                "max": 2089054.5,
+                "p50": 1715932.34,
+                "p90": 1928810.91,
+                "trimmedMean": 1725686.39
               }
             },
             "ratio": {
@@ -852,21 +876,21 @@
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 1.6487,
-                "max": 2.3033,
-                "p50": 1.9274,
-                "p90": 2.1514,
-                "trimmedMean": 1.9589
+                "min": 2.9595,
+                "max": 5.3372,
+                "p50": 3.7671,
+                "p90": 4.6452,
+                "trimmedMean": 3.8163
               },
               "e2e-8t-clean/e2e-1t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 2.4834,
-                "max": 3.9208,
-                "p50": 2.7863,
-                "p90": 3.1465,
-                "trimmedMean": 2.8142
+                "min": 1.1966,
+                "max": 2.2979,
+                "p50": 1.568,
+                "p90": 1.8939,
+                "trimmedMean": 1.5882
               }
             },
             "gc": {
@@ -875,60 +899,60 @@
                 "kept": 18,
                 "trimCountEachSide": 1,
                 "min": 0.0,
-                "max": 2.7102,
-                "p50": 2.1438,
-                "p90": 2.3497,
-                "trimmedMean": 2.0898
+                "max": 3.9946,
+                "p50": 3.0604,
+                "p90": 3.7576,
+                "trimmedMean": 2.4567
               },
               "isolated-8t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 1.5645,
-                "max": 3.0695,
-                "p50": 2.2685,
-                "p90": 2.7112,
-                "trimmedMean": 2.2772
+                "min": 2.8811,
+                "max": 4.5595,
+                "p50": 3.861,
+                "p90": 4.4489,
+                "trimmedMean": 3.8058
               },
               "isolated-8t-sensitive": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 0.5072,
-                "max": 1.4934,
-                "p50": 1.0326,
-                "p90": 1.2992,
-                "trimmedMean": 1.044
+                "min": 1.3638,
+                "max": 5.9582,
+                "p50": 3.0064,
+                "p90": 5.7027,
+                "trimmedMean": 3.6653
               },
               "e2e-1t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
                 "min": 0.0,
-                "max": 0.8292,
-                "p50": 0.3776,
-                "p90": 0.457,
-                "trimmedMean": 0.3357
+                "max": 7.44,
+                "p50": 4.8037,
+                "p90": 6.1053,
+                "trimmedMean": 3.8744
               },
               "e2e-8t-clean": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 0.3861,
-                "max": 0.6716,
-                "p50": 0.5183,
-                "p90": 0.5757,
-                "trimmedMean": 0.4932
+                "min": 1.4913,
+                "max": 3.3409,
+                "p50": 1.8016,
+                "p90": 2.8512,
+                "trimmedMean": 1.9261
               },
               "e2e-8t-sensitive": {
                 "runs": 20,
                 "kept": 18,
                 "trimCountEachSide": 1,
-                "min": 0.2414,
-                "max": 0.3711,
-                "p50": 0.3103,
-                "p90": 0.3642,
-                "trimmedMean": 0.3135
+                "min": 0.6851,
+                "max": 3.0045,
+                "p50": 1.7377,
+                "p90": 2.6139,
+                "trimmedMean": 1.6882
               }
             }
           }
