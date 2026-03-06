@@ -5,7 +5,7 @@ import com.logcollect.core.util.SpinWaitHint;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * Three-level adaptive idle strategy: spin -> yield -> short park.
+ * Three-level adaptive idle strategy: spin, then yield, then short park.
  */
 public final class AdaptiveIdleStrategy {
 
@@ -14,6 +14,10 @@ public final class AdaptiveIdleStrategy {
     private int idleCount = 0;
 
     public void idle(int spinThreshold, int yieldThreshold) {
+        idle(spinThreshold, yieldThreshold, null);
+    }
+
+    public void idle(int spinThreshold, int yieldThreshold, Runnable parkAction) {
         idleCount++;
         int spin = Math.max(1, spinThreshold);
         int yield = Math.max(spin + 1, yieldThreshold);
@@ -25,7 +29,11 @@ public final class AdaptiveIdleStrategy {
             Thread.yield();
             return;
         }
-        LockSupport.parkNanos(PARK_NANOS);
+        if (parkAction != null) {
+            parkAction.run();
+        } else {
+            LockSupport.parkNanos(PARK_NANOS);
+        }
     }
 
     public void reset() {

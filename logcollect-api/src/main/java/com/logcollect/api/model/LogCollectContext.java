@@ -7,7 +7,6 @@ import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -79,9 +78,7 @@ public class LogCollectContext {
     /** 方法生命周期结束标记。 */
     private volatile boolean closed;
     /** Consumer 是否正在处理当前 context 的记录。 */
-    private final AtomicBoolean consumerProcessing = new AtomicBoolean(false);
-    /** 上下文是否已进入 Consumer 就绪队列（幂等入队标记）。 */
-    private final AtomicBoolean pipelineReady = new AtomicBoolean(false);
+    private volatile boolean consumerProcessing;
 
     /**
      * 业务侧主键/关联 ID。
@@ -342,24 +339,24 @@ public class LogCollectContext {
 
     public void markClosed() { this.closed = true; }
 
-    public boolean isConsumerProcessing() { return consumerProcessing.get(); }
+    public boolean isConsumerProcessing() { return consumerProcessing; }
 
-    public void setConsumerProcessing(boolean processing) { this.consumerProcessing.set(processing); }
+    public void setConsumerProcessing(boolean processing) { this.consumerProcessing = processing; }
 
     /**
-     * 标记当前上下文已进入就绪队列。
-     *
-     * @return true 首次标记成功（可入队），false 表示已在队列中
+     * @deprecated Internal ready-queue flag has been removed since v2.2.1 (Lazy Signal). Kept for binary compatibility.
      */
+    @Deprecated
     public boolean markPipelineReady() {
-        return pipelineReady.compareAndSet(false, true);
+        return true;
     }
 
     /**
-     * 清除就绪标记，允许后续再次入队。
+     * @deprecated Internal ready-queue flag has been removed since v2.2.1 (Lazy Signal). Kept for binary compatibility.
      */
+    @Deprecated
     public void clearPipelineReady() {
-        pipelineReady.set(false);
+        // no-op
     }
 
     /**

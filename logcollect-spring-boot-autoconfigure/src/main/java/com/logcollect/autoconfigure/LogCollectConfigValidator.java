@@ -109,5 +109,11 @@ public class LogCollectConfigValidator implements SmartInitializingSingleton {
                     "pipeline.ring-buffer-capacity={} is not a power of 2. RingBuffer will auto round up.",
                     ringCapacity);
         }
+        int advanceInterval = properties.getGlobal().getPipeline().getConsumerCursorAdvanceInterval();
+        if (advanceInterval < 1) {
+            LogCollectInternalLogger.warn(
+                    "pipeline.consumer-cursor-advance-interval={} invalid. Recommended range: 1~consumer-drain-batch.",
+                    advanceInterval);
+        }
     }
 }

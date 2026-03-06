@@ -596,6 +596,7 @@ public class LogCollectConfigResolver {
         applyInt(props, "pipeline.consumer-drain-batch", config::setPipelineConsumerDrainBatch);
         applyInt(props, "pipeline.consumer-spin-threshold", config::setPipelineConsumerSpinThreshold);
         applyInt(props, "pipeline.consumer-yield-threshold", config::setPipelineConsumerYieldThreshold);
+        applyInt(props, "pipeline.consumer-cursor-advance-interval", config::setPipelineConsumerCursorAdvanceInterval);
         applyDouble(props, "pipeline.backpressure-warning", config::setPipelineBackpressureWarning);
         applyDouble(props, "pipeline.backpressure-critical", config::setPipelineBackpressureCritical);
         applyInt(props, "pipeline.handoff-timeout-ms", config::setPipelineHandoffTimeoutMs);

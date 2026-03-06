@@ -216,7 +216,7 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                         extractThrowableString(event),
                         mdc);
                 ringBuffer.publish(sequence);
-                signalConsumer(context);
+                ringBuffer.signalIfWaiting();
                 metrics.updatePipelineQueueUtilization(context.getMethodSignature(), ringBuffer.utilization());
                 return;
             }
@@ -237,7 +237,7 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
                         context);
                 if (ringBuffer.offerOverflow(overflow)) {
                     metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
-                    signalConsumer(context);
+                    ringBuffer.signalIfWaiting();
                     return;
                 }
                 metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
@@ -255,16 +255,6 @@ public class LogCollectLogbackAppender extends UnsynchronizedAppenderBase<ILoggi
         context.incrementDiscardedCount();
         metrics.incrementPipelineBackpressure(context.getMethodSignature(), level);
         metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
-    }
-
-    private void signalConsumer(LogCollectContext context) {
-        if (context == null) {
-            return;
-        }
-        Object consumer = context.getPipelineConsumer();
-        if (consumer instanceof PipelineConsumer) {
-            ((PipelineConsumer) consumer).signal(context);
-        }
     }
 
     private SecurityPipeline.ProcessedLogRecord securityProcess(LogCollectContext context,

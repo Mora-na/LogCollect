@@ -350,6 +350,7 @@ public class LogCollectProperties {
         private int consumerDrainBatch = 64;
         private int consumerSpinThreshold = 100;
         private int consumerYieldThreshold = 200;
+        private int consumerCursorAdvanceInterval = 8;
         private int consumerThreads = 2;
         private double backpressureWarning = 0.7d;
         private double backpressureCritical = 0.9d;
@@ -427,6 +428,14 @@ public class LogCollectProperties {
 
         public void setConsumerYieldThreshold(int consumerYieldThreshold) {
             this.consumerYieldThreshold = consumerYieldThreshold;
+        }
+
+        public int getConsumerCursorAdvanceInterval() {
+            return consumerCursorAdvanceInterval;
+        }
+
+        public void setConsumerCursorAdvanceInterval(int consumerCursorAdvanceInterval) {
+            this.consumerCursorAdvanceInterval = consumerCursorAdvanceInterval;
         }
 
         public int getConsumerThreads() {

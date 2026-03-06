@@ -38,6 +38,9 @@ def parse_args():
     parser.add_argument("--github-ref-name", default=None)
     parser.add_argument("--github-workflow", default=None)
     parser.add_argument("--github-repository", default=None)
+    parser.add_argument("--framework-version", default=None)
+    parser.add_argument("--commit-hash", default=None)
+    parser.add_argument("--build-strategy", default="per-jdk")
 
     parser.add_argument("--sample-runs", type=int, default=10)
     parser.add_argument("--min-samples-per-metric", type=int, default=5)
@@ -349,7 +352,11 @@ def main():
     }
 
     now = iso_now_utc()
+    refresh_date = datetime.now(timezone.utc).date().isoformat()
     updated_by = args.updated_by or os.environ.get("GITHUB_ACTOR") or os.environ.get("USER") or "unknown"
+    framework_version = clean_optional(args.framework_version) or "unknown"
+    commit_hash = clean_optional(args.commit_hash) or clean_optional(args.github_sha) or "unknown"
+    build_strategy = clean_optional(args.build_strategy) or "per-jdk"
     meta = {
         "updatedAt": now,
         "updatedBy": updated_by,
@@ -363,6 +370,11 @@ def main():
         "sampleMinPerMetric": args.min_samples_per_metric,
         "sampleTrimCountEachSide": args.trim_count_each_side,
         "note": args.note,
+        "frameworkVersion": framework_version,
+        "commitHash": commit_hash,
+        "refreshDate": refresh_date,
+        "runs": len(samples),
+        "buildStrategy": build_strategy,
     }
 
     optional_meta = {
@@ -410,6 +422,19 @@ def main():
     profile_root = ci_root.get(args.profile, {})
     if not isinstance(profile_root, dict):
         profile_root = {}
+    profile_meta = profile_root.get("_meta", {})
+    if not isinstance(profile_meta, dict):
+        profile_meta = {}
+    profile_meta.update({
+        "frameworkVersion": framework_version,
+        "commitHash": commit_hash,
+        "refreshDate": refresh_date,
+        "runs": len(samples),
+        "buildStrategy": build_strategy,
+        "updatedAt": now,
+        "updatedBy": updated_by,
+    })
+    profile_root["_meta"] = profile_meta
     profile_root[jdk_key] = {
         "_meta": meta,
         "stressGate": stress_gate,

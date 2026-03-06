@@ -567,7 +567,12 @@
           "githubSha": "c0846b7711a2c4f860d7a316fb673159a7bd11ec",
           "githubRefName": "main",
           "githubWorkflow": "Refresh Stress CI Baseline",
-          "githubRepository": "Mora-na/LogCollect"
+          "githubRepository": "Mora-na/LogCollect",
+          "frameworkVersion": "2.2.0",
+          "commitHash": "c0846b7711a2c4f860d7a316fb673159a7bd11ec",
+          "refreshDate": "2026-03-06",
+          "runs": 20,
+          "buildStrategy": "per-jdk"
         },
         "stressGate": {
           "aggregation": {
@@ -775,7 +780,12 @@
           "githubSha": "c0846b7711a2c4f860d7a316fb673159a7bd11ec",
           "githubRefName": "main",
           "githubWorkflow": "Refresh Stress CI Baseline",
-          "githubRepository": "Mora-na/LogCollect"
+          "githubRepository": "Mora-na/LogCollect",
+          "frameworkVersion": "2.2.0",
+          "commitHash": "c0846b7711a2c4f860d7a316fb673159a7bd11ec",
+          "refreshDate": "2026-03-06",
+          "runs": 20,
+          "buildStrategy": "per-jdk"
         },
         "stressGate": {
           "aggregation": {
@@ -983,7 +993,12 @@
           "githubSha": "c0846b7711a2c4f860d7a316fb673159a7bd11ec",
           "githubRefName": "main",
           "githubWorkflow": "Refresh Stress CI Baseline",
-          "githubRepository": "Mora-na/LogCollect"
+          "githubRepository": "Mora-na/LogCollect",
+          "frameworkVersion": "2.2.0",
+          "commitHash": "c0846b7711a2c4f860d7a316fb673159a7bd11ec",
+          "refreshDate": "2026-03-06",
+          "runs": 20,
+          "buildStrategy": "per-jdk"
         },
         "stressGate": {
           "aggregation": {
@@ -1213,7 +1228,12 @@
           "githubSha": "c0846b7711a2c4f860d7a316fb673159a7bd11ec",
           "githubRefName": "main",
           "githubWorkflow": "Refresh Stress CI Baseline",
-          "githubRepository": "Mora-na/LogCollect"
+          "githubRepository": "Mora-na/LogCollect",
+          "frameworkVersion": "2.2.0",
+          "commitHash": "c0846b7711a2c4f860d7a316fb673159a7bd11ec",
+          "refreshDate": "2026-03-06",
+          "runs": 20,
+          "buildStrategy": "per-jdk"
         },
         "stressGate": {
           "aggregation": {
@@ -1417,6 +1437,13 @@
             }
           }
         }
+      },
+      "_meta": {
+        "frameworkVersion": "2.2.0",
+        "commitHash": "c0846b7711a2c4f860d7a316fb673159a7bd11ec",
+        "refreshDate": "2026-03-06",
+        "runs": 20,
+        "buildStrategy": "per-jdk"
       }
     }
   }

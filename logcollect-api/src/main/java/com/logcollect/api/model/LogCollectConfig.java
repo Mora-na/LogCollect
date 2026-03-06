@@ -35,6 +35,7 @@ public class LogCollectConfig {
     private int pipelineConsumerDrainBatch = 64;
     private int pipelineConsumerSpinThreshold = 100;
     private int pipelineConsumerYieldThreshold = 200;
+    private int pipelineConsumerCursorAdvanceInterval = 8;
     private int pipelineConsumerThreads = 2;
     private double pipelineBackpressureWarning = 0.7d;
     private double pipelineBackpressureCritical = 0.9d;
@@ -237,6 +238,14 @@ public class LogCollectConfig {
 
     public void setPipelineConsumerYieldThreshold(int pipelineConsumerYieldThreshold) {
         this.pipelineConsumerYieldThreshold = pipelineConsumerYieldThreshold;
+    }
+
+    public int getPipelineConsumerCursorAdvanceInterval() {
+        return pipelineConsumerCursorAdvanceInterval;
+    }
+
+    public void setPipelineConsumerCursorAdvanceInterval(int pipelineConsumerCursorAdvanceInterval) {
+        this.pipelineConsumerCursorAdvanceInterval = pipelineConsumerCursorAdvanceInterval;
     }
 
     public int getPipelineConsumerThreads() {

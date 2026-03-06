@@ -40,6 +40,13 @@ GITHUB_SHA_VAL="${GITHUB_SHA:-}"
 GITHUB_REF_NAME_VAL="${GITHUB_REF_NAME:-}"
 GITHUB_WORKFLOW_VAL="${GITHUB_WORKFLOW:-}"
 GITHUB_REPOSITORY_VAL="${GITHUB_REPOSITORY:-}"
+COMMIT_HASH_VAL="${COMMIT_HASH:-$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
+FRAMEWORK_VERSION_VAL="${FRAMEWORK_VERSION:-unknown}"
+BUILD_STRATEGY_VAL="${BUILD_STRATEGY:-per-jdk}"
+if [[ "$FRAMEWORK_VERSION_VAL" == "unknown" ]]; then
+  FRAMEWORK_VERSION_VAL="$(sed -n 's|.*<version>\(.*\)</version>.*|\1|p' "$ROOT_DIR/pom.xml" | head -n 1)"
+  FRAMEWORK_VERSION_VAL="${FRAMEWORK_VERSION_VAL:-unknown}"
+fi
 
 detect_runner_memory_mb() {
   if [[ -r /proc/meminfo ]]; then
@@ -105,6 +112,9 @@ github_sha=$GITHUB_SHA_VAL
 github_ref_name=$GITHUB_REF_NAME_VAL
 github_workflow=$GITHUB_WORKFLOW_VAL
 github_repository=$GITHUB_REPOSITORY_VAL
+framework_version=$FRAMEWORK_VERSION_VAL
+commit_hash=$COMMIT_HASH_VAL
+build_strategy=$BUILD_STRATEGY_VAL
 EOF
 
 cd "$ROOT_DIR"
@@ -176,6 +186,9 @@ python3 "$PY_UPDATE" \
   --github-ref-name "$GITHUB_REF_NAME_VAL" \
   --github-workflow "$GITHUB_WORKFLOW_VAL" \
   --github-repository "$GITHUB_REPOSITORY_VAL" \
+  --framework-version "$FRAMEWORK_VERSION_VAL" \
+  --commit-hash "$COMMIT_HASH_VAL" \
+  --build-strategy "$BUILD_STRATEGY_VAL" \
   --note "CI stress baseline from ${RUNS} smoke runs (${BASELINE_PROFILE})"
 
 echo "=== Done. Review and commit ==="

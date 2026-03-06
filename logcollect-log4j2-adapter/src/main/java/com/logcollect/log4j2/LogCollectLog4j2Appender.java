@@ -256,7 +256,7 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                         extractThrowableString(event),
                         relevantMdc);
                 ringBuffer.publish(sequence);
-                signalConsumer(context);
+                ringBuffer.signalIfWaiting();
                 metrics.updatePipelineQueueUtilization(context.getMethodSignature(), ringBuffer.utilization());
                 return;
             }
@@ -278,7 +278,7 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                         context);
                 if (ringBuffer.offerOverflow(overflow)) {
                     metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
-                    signalConsumer(context);
+                    ringBuffer.signalIfWaiting();
                     return;
                 }
                 metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
@@ -459,16 +459,6 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
 
     private String safeIntern(String value) {
         return cachedThreadName(value);
-    }
-
-    private void signalConsumer(LogCollectContext context) {
-        if (context == null) {
-            return;
-        }
-        Object consumer = context.getPipelineConsumer();
-        if (consumer instanceof PipelineConsumer) {
-            ((PipelineConsumer) consumer).signal(context);
-        }
     }
 
     private LogSanitizer resolveSanitizer(LogCollectConfig config) {

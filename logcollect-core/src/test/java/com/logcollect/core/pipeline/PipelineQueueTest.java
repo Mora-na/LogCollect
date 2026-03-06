@@ -1,9 +1,7 @@
 package com.logcollect.core.pipeline;
 
 import org.junit.jupiter.api.Test;
-import sun.misc.Unsafe;
-
-import java.lang.reflect.Field;
+import org.objenesis.ObjenesisStd;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -33,7 +31,7 @@ class PipelineQueueTest {
     }
 
     @Test
-    void legacyInstanceMethods_shouldThrowUnsupportedOperation() throws Exception {
+    void legacyInstanceMethods_shouldThrowUnsupportedOperation() {
         PipelineQueue queue = allocateWithoutConstructor();
 
         assertThatThrownBy(() -> queue.offer(null))
@@ -56,10 +54,7 @@ class PipelineQueueTest {
                 .hasMessageContaining("Use PipelineRingBuffer instead");
     }
 
-    private PipelineQueue allocateWithoutConstructor() throws Exception {
-        Field field = Unsafe.class.getDeclaredField("theUnsafe");
-        field.setAccessible(true);
-        Unsafe unsafe = (Unsafe) field.get(null);
-        return (PipelineQueue) unsafe.allocateInstance(PipelineQueue.class);
+    private PipelineQueue allocateWithoutConstructor() {
+        return new ObjenesisStd().newInstance(PipelineQueue.class);
     }
 }

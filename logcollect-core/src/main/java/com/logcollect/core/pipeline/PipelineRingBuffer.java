@@ -21,6 +21,7 @@ public final class PipelineRingBuffer {
 
     private final ProducerCursor producerCursor;
     private final ConsumerCursor consumerCursor;
+    private volatile PipelineConsumer boundConsumer;
 
     private final ConcurrentLinkedQueue<RawLogRecord> overflowQueue = new ConcurrentLinkedQueue<RawLogRecord>();
     private final AtomicInteger overflowSize = new AtomicInteger(0);
@@ -59,6 +60,21 @@ public final class PipelineRingBuffer {
 
     public void publish(long sequence) {
         publishedSeqs.set((int) (sequence & mask), sequence);
+    }
+
+    public void bindConsumer(PipelineConsumer consumer) {
+        this.boundConsumer = consumer;
+    }
+
+    public void unbindConsumer(PipelineConsumer consumer) {
+        if (boundConsumer == consumer) {
+            boundConsumer = null;
+        }
+    }
+
+    public boolean signalIfWaiting() {
+        PipelineConsumer consumer = boundConsumer;
+        return consumer != null && consumer.signalIfWaiting();
     }
 
     public MutableRawLogRecord tryConsume() {

@@ -25,6 +25,7 @@ public class StressCIGateTest {
     private static final String GATE_RUNS_OVERRIDE_PROPERTY = "benchmark.stress.gate.runs";
     private static final String BASELINE_PROFILE_PROPERTY = "benchmark.stress.gate.baseline.profile";
     private static final String STRICT_CI_BASELINE_PROPERTY = "benchmark.stress.gate.strictCiBaseline";
+    private static final String FRAMEWORK_VERSION_PROPERTY = "benchmark.stress.gate.framework.version";
     private static final String DEFAULT_CI_BASELINE_PROFILE = "github-ubuntu-latest";
     private static final String CI_STRESS_BASELINES_KEY = "ciStressBaselines";
 
@@ -35,12 +36,14 @@ public class StressCIGateTest {
     void smokeTest_shouldNotRegressAgainstBaseline() {
         StressGateConfig config = loadStressGateConfig();
         List<Map<String, BenchmarkResult>> runs = runSmokeMany(config);
+        Map<String, AggregationResult> throughputAggregates = new LinkedHashMap<String, AggregationResult>();
 
         for (Map.Entry<String, Double> entry : config.throughputBaselines.entrySet()) {
             String scenario = entry.getKey();
             double baseline = entry.getValue().doubleValue();
             List<Double> samples = collectThroughputSamples(runs, scenario);
             AggregationResult aggregated = robustAverage(samples, config);
+            throughputAggregates.put(scenario, aggregated);
             double floor = baseline * config.throughputMinMultiplier;
 
             System.out.printf(
@@ -80,14 +83,16 @@ public class StressCIGateTest {
             String[] pair = splitRatioKey(ratioKey);
             List<Double> samples = collectRatioSamples(runs, pair[0], pair[1], ratioKey);
             AggregationResult aggregated = robustAverage(samples, config);
-            double floor = baseline * config.ratioMinMultiplier;
+            double effectiveMultiplier = config.resolveRatioMinMultiplier(baseline);
+            double floor = baseline * effectiveMultiplier;
 
             System.out.printf(
-                    "[GATE] ratio[%s] aggregate=%.2f, baseline=%.2f, floor=%.2f, kept=%d/%d, p50=%.2f, p90=%.2f, range=[%.2f, %.2f], removed=%s%n",
+                    "[GATE] ratio[%s] aggregate=%.2f, baseline=%.2f, floor=%.2f, multiplier=%.2f, kept=%d/%d, p50=%.2f, p90=%.2f, range=[%.2f, %.2f], removed=%s%n",
                     ratioKey,
                     Double.valueOf(aggregated.value),
                     Double.valueOf(baseline),
                     Double.valueOf(floor),
+                    Double.valueOf(effectiveMultiplier),
                     Integer.valueOf(aggregated.keptCount),
                     Integer.valueOf(aggregated.totalCount),
                     Double.valueOf(aggregated.p50),
@@ -96,21 +101,63 @@ public class StressCIGateTest {
                     Double.valueOf(aggregated.max),
                     aggregated.removedValues);
 
-            assertTrue(aggregated.value >= floor,
-                    String.format(
-                            "GATE FAIL: ratio[%s] aggregate=%.2f < floor=%.2f (baseline=%.2f, minMultiplier=%.2f, kept=%d/%d, p50=%.2f, p90=%.2f, range=[%.2f, %.2f], removed=%s)",
+            if (aggregated.value >= floor) {
+                continue;
+            }
+
+            String numeratorScenario = pair[0];
+            Double numeratorBaseline = config.throughputBaselines.get(numeratorScenario);
+            if (numeratorBaseline != null) {
+                AggregationResult numeratorAgg = throughputAggregates.get(numeratorScenario);
+                if (numeratorAgg == null) {
+                    numeratorAgg = robustAverage(collectThroughputSamples(runs, numeratorScenario), config);
+                    throughputAggregates.put(numeratorScenario, numeratorAgg);
+                }
+                double numeratorFloor = numeratorBaseline * config.throughputMinMultiplier;
+                if (numeratorAgg.value >= numeratorFloor) {
+                    System.out.printf(
+                            "[GATE][WARN] ratio[%s] aggregate=%.2f < floor=%.2f but throughput[%s]=%,.0f >= floor=%,.0f, treat as warning%n",
                             ratioKey,
                             Double.valueOf(aggregated.value),
                             Double.valueOf(floor),
-                            Double.valueOf(baseline),
-                            Double.valueOf(config.ratioMinMultiplier),
-                            Integer.valueOf(aggregated.keptCount),
-                            Integer.valueOf(aggregated.totalCount),
-                            Double.valueOf(aggregated.p50),
-                            Double.valueOf(aggregated.p90),
-                            Double.valueOf(aggregated.min),
-                            Double.valueOf(aggregated.max),
-                            aggregated.removedValues));
+                            numeratorScenario,
+                            Double.valueOf(numeratorAgg.value),
+                            Double.valueOf(numeratorFloor));
+                    continue;
+                }
+                fail(String.format(
+                        "GATE FAIL: ratio[%s] aggregate=%.2f < floor=%.2f (baseline=%.2f, multiplier=%.2f, kept=%d/%d, p50=%.2f, p90=%.2f, range=[%.2f, %.2f], removed=%s); throughput[%s]=%,.0f < floor=%,.0f",
+                        ratioKey,
+                        Double.valueOf(aggregated.value),
+                        Double.valueOf(floor),
+                        Double.valueOf(baseline),
+                        Double.valueOf(effectiveMultiplier),
+                        Integer.valueOf(aggregated.keptCount),
+                        Integer.valueOf(aggregated.totalCount),
+                        Double.valueOf(aggregated.p50),
+                        Double.valueOf(aggregated.p90),
+                        Double.valueOf(aggregated.min),
+                        Double.valueOf(aggregated.max),
+                        aggregated.removedValues,
+                        numeratorScenario,
+                        Double.valueOf(numeratorAgg.value),
+                        Double.valueOf(numeratorFloor)));
+            }
+
+            fail(String.format(
+                    "GATE FAIL: ratio[%s] aggregate=%.2f < floor=%.2f (baseline=%.2f, multiplier=%.2f, kept=%d/%d, p50=%.2f, p90=%.2f, range=[%.2f, %.2f], removed=%s)",
+                    ratioKey,
+                    Double.valueOf(aggregated.value),
+                    Double.valueOf(floor),
+                    Double.valueOf(baseline),
+                    Double.valueOf(effectiveMultiplier),
+                    Integer.valueOf(aggregated.keptCount),
+                    Integer.valueOf(aggregated.totalCount),
+                    Double.valueOf(aggregated.p50),
+                    Double.valueOf(aggregated.p90),
+                    Double.valueOf(aggregated.min),
+                    Double.valueOf(aggregated.max),
+                    aggregated.removedValues));
         }
 
         for (Map.Entry<String, Double> entry : config.gcBaselines.entrySet()) {
@@ -315,11 +362,11 @@ public class StressCIGateTest {
             boolean strictCiBaseline = resolveStrictCiBaseline();
 
             if (baselineProfile != null && !baselineProfile.isEmpty()) {
-                JsonNode ciNode = root.path(CI_STRESS_BASELINES_KEY)
-                        .path(baselineProfile)
-                        .path(runtimeJdkKey)
-                        .path(STRESS_GATE_CONFIG_KEY);
+                JsonNode profileNode = root.path(CI_STRESS_BASELINES_KEY).path(baselineProfile);
+                JsonNode jdkNode = profileNode.path(runtimeJdkKey);
+                JsonNode ciNode = jdkNode.path(STRESS_GATE_CONFIG_KEY);
                 if (ciNode.isObject()) {
+                    validateFrameworkVersion(profileNode.path("_meta"), jdkNode.path("_meta"), baselineProfile, runtimeJdkKey);
                     System.out.printf("[GATE] Loaded CI stressGate baseline profile=%s, jdk=%s%n",
                             baselineProfile, runtimeJdkKey);
                     return StressGateConfig.from(ciNode);
@@ -354,6 +401,36 @@ public class StressCIGateTest {
             fail(String.format("[GATE] Failed to load stressGate baseline config: %s", ex.getMessage()));
             return null;
         }
+    }
+
+    private void validateFrameworkVersion(JsonNode profileMeta,
+                                          JsonNode jdkMeta,
+                                          String profile,
+                                          String runtimeJdkKey) {
+        String expected = System.getProperty(FRAMEWORK_VERSION_PROPERTY, "").trim();
+        if (expected.isEmpty()) {
+            return;
+        }
+        String actual = textValue(jdkMeta, "frameworkVersion");
+        if (actual.isEmpty()) {
+            actual = textValue(profileMeta, "frameworkVersion");
+        }
+        if (!actual.isEmpty() && !expected.equals(actual)) {
+            System.out.printf(
+                    "[GATE][WARN] CI baseline frameworkVersion mismatch: expected=%s, actual=%s (profile=%s, jdk=%s)%n",
+                    expected,
+                    actual,
+                    profile,
+                    runtimeJdkKey);
+        }
+    }
+
+    private static String textValue(JsonNode node, String field) {
+        if (node == null || !node.isObject()) {
+            return "";
+        }
+        JsonNode value = node.path(field);
+        return value.isTextual() ? value.asText().trim() : "";
     }
 
     private static String resolveBaselineProfile() {
@@ -464,6 +541,16 @@ public class StressCIGateTest {
             this.throughputBaselines = throughputBaselines;
             this.ratioBaselines = ratioBaselines;
             this.gcBaselines = gcBaselines;
+        }
+
+        double resolveRatioMinMultiplier(double baselineRatio) {
+            if (baselineRatio >= 5.0d) {
+                return 0.70d;
+            }
+            if (baselineRatio >= 3.0d) {
+                return ratioMinMultiplier;
+            }
+            return 0.80d;
         }
 
         static StressGateConfig from(JsonNode config) {

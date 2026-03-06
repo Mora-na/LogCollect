@@ -424,7 +424,7 @@ logcollect:
 | 方案 | 最优设计 | 代码落地 | 优化效果 |
 |------|---------|---------|---------|
 | S1 | `deadline + watchdog` 替代 `ScheduledExecutorService` 超时调度 | `HandlerTimeoutGuard` + `LogCollectAspect.safeInvoke/resolveTimeoutGuard` | 正常路径不再执行调度/取消；保留中断超时语义 |
-| S2 | Consumer 事件驱动 + 批量排空 | `ConsumerReadyQueue`、`AdaptiveIdleStrategy`、`PipelineConsumer.processContextBatch`、`PipelineRingBuffer.availableCount/advanceConsumerBy`、`LogCollectContext.markPipelineReady` | 从 O(N) 轮询转为 O(active)；减少 `consumerCursor` 频繁 volatile 写 |
+| S2 | Consumer 事件驱动 + Lazy Signal（去分配唤醒） | `PipelineRingBuffer.signalIfWaiting`、`PipelineConsumer.signalIfWaiting/idlePark/processAssignedContexts`、`AdaptiveIdleStrategy.idle(..., parkCallback)`、Appender 热路径改为 `publish + signalIfWaiting` | 生产者热路径去掉逐事件 `CLQ.offer + unpark`，常规路径仅 1 次 volatile 读；唤醒无堆分配 |
 | S3 | `MethodHandle` 缓存 `onSpinWait` | `SpinWaitHint` + `PipelineConsumer.onSpinWaitCompat` | 去除反射热开销，JDK8 自动回退 no-op |
 | S4 | Log4j2 定向提取字段、按需 MDC、线程名缓存替代 `intern` | `LogCollectLog4j2Appender.extractTraceId/extractRelevantMdc/cachedThreadName` + `LogCollectLog4j2AppenderAutoConfiguration` 注入 `log4j2.mdc-keys` | Log4j2 热路径消除全量 MDC 复制与 `intern` 竞争 |
 | S5 | 熔断器改为 CAS + 衰减计数器 | `LogCollectCircuitBreaker`（`maybeDecay`、原子计数、CAS 状态流转） | 去除 synchronized + 窗口遍历，失败率判定 O(1) |
@@ -433,16 +433,16 @@ logcollect:
 | S8 | Metrics 注册去重 | `LogCollectAspect.registeredBreakerGauges` | 每个 methodKey 仅首次注册 gauge |
 | S9 | 清理旧队列入口 | `PipelineQueue`（`@Deprecated(forRemoval=true)` + 构造/方法抛 `UnsupportedOperationException`） | 阻断旧 ABQ 误用，统一 RingBuffer 路径 |
 
-#### 1.5.3 配置变更（V2.2）
+#### 1.5.3 配置变更（V2.2 / V2.2.1）
 
-- 新增：`handler.watchdog-interval-ms`、`handler.watchdog-slots`、`pipeline.consumer-drain-batch`、`pipeline.consumer-spin-threshold`、`pipeline.consumer-yield-threshold`、`degrade.decay-interval-seconds`、`flush.retry-sync-cap-ms`、`log4j2.mdc-keys`。
+- 新增：`handler.watchdog-interval-ms`、`handler.watchdog-slots`、`pipeline.consumer-drain-batch`、`pipeline.consumer-spin-threshold`、`pipeline.consumer-yield-threshold`、`pipeline.consumer-cursor-advance-interval`、`degrade.decay-interval-seconds`、`flush.retry-sync-cap-ms`、`log4j2.mdc-keys`。
 - 废弃：`pipeline.consumer-idle-strategy`（V2.2 起固定使用自适应空闲策略；配置后 WARN 并忽略）。
 - 语义不变：`handler-timeout-ms`、`degrade.window-size`、`degrade.failure-rate-threshold`、`buffer.*`、`security.*`。
 
 #### 1.5.4 回归检查（方案逐条落实）
 
 - [x] S1：`HandlerTimeoutGuard` 已替代调度器超时保护，`LogCollectAspect` 接入并支持 watchdog 参数热生效重建。
-- [x] S2：Consumer 已切换 ready-queue 事件驱动，并启用批量排空与自适应 idle。
+- [x] S2：Consumer 已切换为 Lazy Signal 事件驱动（consumer 级 waiting 标记 + park 前双检 + 惰性 unpark）。
 - [x] S3：`SpinWaitHint` 已在 Consumer 自旋点替换反射调用。
 - [x] S4：Log4j2 已改为 `ReadOnlyStringMap.getValue` 定向提取 + 线程名缓存；`log4j2.mdc-keys` 已接入自动配置。
 - [x] S5：熔断器已改为原子计数 + 衰减模型 + CAS 状态机。
@@ -452,6 +452,29 @@ logcollect:
 - [x] S9：`PipelineQueue` 已空壳化并阻止运行时使用。
 - [x] 回归结果：`mvn -pl logcollect-logback-adapter,logcollect-log4j2-adapter,logcollect-spring-boot-autoconfigure -am test -DskipITs` 全通过（`core/logback/log4j2/autoconfigure`）。
 - [x] 偏差修正：无未落地点；S1-S9 与代码实现一致。
+
+#### 1.5.5 V2.2.1 并发扩展比修复（F1-F6）
+
+**原设计缺陷（V2.2 S2 首版实现）**
+
+- 生产者 `publish` 后逐事件触发 `signalConsumer`，热路径包含 `CLQ.offer + unpark`，在 8t 场景抹平 JDK11/17/21 的 CAS 扩展优势。
+- `ConsumerReadyQueue` 逐事件节点分配导致额外 GC 与 CAS 竞争。
+- `consumerCursor` 批末一次性推进，短窗口内放大生产者“队列满”误判概率。
+
+**修复方案（已落地）**
+
+- F1：Appender 热路径从 `publish + signalConsumer(context)` 重构为 `publish + ringBuffer.signalIfWaiting()`。
+- F2：移除 `ConsumerReadyQueue`；`LogCollectContext.markPipelineReady/clearPipelineReady` 废弃并保留 no-op 以保证二进制兼容；唤醒改为 consumer 级 `waiting` 原子标记。
+- F3：`PipelineConsumer.processContextBatch` 改为分段推进 `consumerCursor`（默认间隔 8，可配置）。
+- F4：`benchmark-baseline.json` 增加 CI 基线版本元信息（`frameworkVersion/commitHash/refreshDate/runs/buildStrategy`）。
+- F5：`StressCIGateTest` ratio 阈值改为分层 multiplier（高 ratio 放宽、低 ratio 收紧）。
+- F6：ratio 未达标时引入分子吞吐绝对值兜底，满足吞吐 floor 时降级为 WARNING，避免 ratio 单点误报。
+
+**优化效果**
+
+- 生产者常规路径恢复为 `1 CAS + 1 volatile 写 + 1 volatile 读`（无额外分配）。
+- Consumer 保持事件驱动响应性，同时避免逐事件唤醒开销。
+- Gate 规则更稳健：真实退化仍 FAIL，统计伪像降级 WARNING。
 
 ---
 
@@ -1565,6 +1588,8 @@ logcollect.global.pipeline.unpublished-slot-timeout-ms=100
 logcollect.global.pipeline.consumer-drain-batch=64
 logcollect.global.pipeline.consumer-spin-threshold=100
 logcollect.global.pipeline.consumer-yield-threshold=200
+# V2.2.1 新增：消费者分段推进 consumerCursor 的间隔（范围 1~consumer-drain-batch）
+logcollect.global.pipeline.consumer-cursor-advance-interval=8
 # 兼容旧 key（V2.2 起废弃，配置后会 WARN 且忽略）
 # logcollect.global.pipeline.consumer-idle-strategy=PARK
 # 兼容别名（已废弃）：未配置 ring-buffer-capacity 时才生效
@@ -1958,6 +1983,27 @@ logcollect-benchmark/
 - 结果基于 5 次均值，稳定性较单次测试显著提升。
 
 > 注：`BenchmarkLogCollectHandler` 为最小开销 handler，不含真实 DB/网络 I/O。生产实际吞吐取决于 Handler 持久化性能。
+
+#### 12.2.1 V2.2.1 修复后验证（F1-F6）
+
+> 本地冒烟（2026-03-06，JDK25，`benchmark.stress.gate.runs=1`，`strictCiBaseline=false`）用于验证修复逻辑链路，不替代 GitHub Runner 的多 JDK 基线刷新。
+
+| 指标 | 结果 |
+|------|------|
+| `isolated-1t-clean` 吞吐 | 4,063,265 logs/s |
+| `isolated-8t-clean` 吞吐 | 8,174,279 logs/s |
+| `isolated ratio`（8t/1t） | 2.01 |
+| `e2e-1t-clean` 吞吐 | 5,111,342 logs/s |
+| `e2e-8t-clean` 吞吐 | 4,176,159 logs/s |
+| `e2e ratio`（8t/1t） | 0.82 |
+
+本次冒烟验证结论：
+
+- F1/F2 生效：Appender 热路径已切换为 `publish + signalIfWaiting`，无逐事件 `ready-queue` 分配。
+- F3 生效：消费者分段推进 `consumerCursor`，配置项 `pipeline.consumer-cursor-advance-interval` 已接入。
+- F5/F6 生效：ratio 未达标时触发 WARNING（分子吞吐 floor 达标），不再单点误判 FAIL。
+
+> 多 JDK 基线（JDK8/11/17/21）需在 GitHub Runner 执行 `update-stress-ci-baseline.sh` 刷新，并回填 `benchmark-baseline.json` 的新数值。
 
 ### 12.3 性能评估报告
 

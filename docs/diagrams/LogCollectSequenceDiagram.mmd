@@ -6,7 +6,8 @@ sequenceDiagram
     participant App as LogCollectAppender（Logback/Log4j2）
     participant Ring as PipelineRingBuffer
     participant Consumer as PipelineConsumer 线程
-    participant Buffer as SingleWriterBuffer / AggregateDirectBuffer
+    participant PBuf as PipelineBuffer（SingleWriterBuffer / AggregateDirectBuffer）
+    participant LBuf as LegacyBuffer（SingleModeBuffer / AggregateModeBuffer）
     participant Flush as AsyncFlushExecutor（logcollect-flush-*）
     participant Retry as ResilientFlusher（retry-scheduler）
     participant Handler as LogCollectHandler
@@ -33,6 +34,8 @@ sequenceDiagram
                     App->>Ring: offerOverflow(raw)
                     alt overflow 满
                         App->>Degrade: handleDegraded(PIPELINE_QUEUE_FULL)
+                    else overflow 入队成功
+                        App->>Consumer: signal(ctx)
                     end
                 else 低等级
                     App->>App: backpressure discard + metrics
@@ -40,10 +43,12 @@ sequenceDiagram
             end
         else Pipeline 关闭（兼容分支）
             alt useBuffer=true
-                App->>Buffer: offer(...)（SingleMode/AggregateMode）
+                App->>LBuf: offer(...)（SingleMode/AggregateMode）
                 alt async=true 且阈值触发
-                    Buffer->>Flush: submit AsyncBufferFlushTask
-                    Flush->>Handler: appendLog / flushAggregatedLog
+                    LBuf->>Flush: submit AsyncBufferFlushTask
+                    Flush->>LBuf: doTriggerFlush(...)
+                    LBuf->>Retry: flushBatch(...)
+                    Retry->>Handler: appendLog / flushAggregatedLog
                 end
             else useBuffer=false
                 alt async=true
@@ -57,34 +62,36 @@ sequenceDiagram
     end
 
     loop Consumer 轮询 assignedContexts
-        Consumer->>Ring: pollOverflow() / tryConsume()
+        Consumer->>Ring: pollOverflow() / availableCount()+getSlot(seq)
         alt 有记录
             Consumer->>Consumer: shouldCollect + SecurityPipeline
             alt SINGLE
-                Consumer->>Buffer: SingleWriterBuffer.offer(LogEntry)
+                Consumer->>PBuf: SingleWriterBuffer.offer(LogEntry)
                 alt 达阈值
-                    Consumer->>Handler: 批量 appendLog（ResilientFlusher）
+                    Consumer->>Retry: flushBatch(single)
+                    Retry->>Handler: appendLog（逐条事务写）
                 end
             else AGGREGATE
-                Consumer->>Buffer: AggregateDirectBuffer.append(record)
+                Consumer->>PBuf: AggregateDirectBuffer.append(record)
                 alt 达阈值
-                    Consumer->>Handler: flushAggregatedLog（ResilientFlusher）
+                    Consumer->>Retry: flushBatch(aggregate)
+                    Retry->>Handler: flushAggregatedLog
                 end
             end
             alt flush 重试耗尽
-                Consumer->>Retry: backoff retry
+                Retry->>Retry: dumpToLocal(/tmp/logcollect-fallback/*.log)
                 Retry->>Degrade: 持久化失败降级（FILE/MEMORY）
             end
         else 空闲
-            Consumer->>Consumer: idle(PARK/YIELD/SPIN)
+            Consumer->>Consumer: idle(SPIN/YIELD/PARK, adaptive)
         end
     end
 
     Biz->>Aspect: 方法结束（return/throw）
     Aspect->>PM: closeContext(ctx)
-    PM->>Consumer: closeAndFlush(ctx, handoffTimeout)
-    Consumer->>Ring: drain 到 producerCursor（超时 slot 会 skip+discard）
-    Consumer->>Buffer: final flush（SINGLE/AGGREGATE）
+    PM->>Consumer: closeAndFlush(ctx, handoffTimeout+unpublishedTimeout)
+    Consumer->>Ring: drain 到 producerCursor（tryConsume；超时 slot 会 skip+discard）
+    Consumer->>PBuf: final flush（SINGLE/AGGREGATE）
     Consumer-->>PM: countDown close latch + markClosed
     Aspect->>Handler: after(ctx)
     Aspect->>Aspect: LogCollectContextManager.pop() + MDC 清理
