@@ -111,7 +111,7 @@ cd "$ROOT_DIR"
 
 if [[ "$SKIP_BUILD" != "1" ]]; then
   echo "=== Building benchmark module ==="
-  mvn -pl logcollect-benchmark -am package -DskipTests -q
+  mvn -pl logcollect-benchmark -am package -DskipTests -Dmaven.javadoc.skip=true -q
 else
   echo "=== Skip build (SKIP_BUILD=1) ==="
 fi

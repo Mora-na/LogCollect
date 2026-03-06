@@ -95,7 +95,7 @@ jdk_key_from_java() {
 
 build_with_java_home() {
   local java_home="$1"
-  JAVA_HOME="$java_home" PATH="$java_home/bin:$PATH" mvn -pl logcollect-benchmark -am package -DskipTests -q
+  JAVA_HOME="$java_home" PATH="$java_home/bin:$PATH" mvn -pl logcollect-benchmark -am package -DskipTests -Dmaven.javadoc.skip=true -q
 }
 
 build_once() {

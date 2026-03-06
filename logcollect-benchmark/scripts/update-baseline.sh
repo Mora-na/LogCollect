@@ -32,7 +32,7 @@ RESULT_JSON="$RESULT_DIR/full-baseline-${JDK_KEY}.json"
 cd "$ROOT_DIR"
 
 echo "=== Building benchmark module ==="
-mvn -pl logcollect-benchmark -am package -DskipTests -q
+mvn -pl logcollect-benchmark -am package -DskipTests -Dmaven.javadoc.skip=true -q
 
 echo "=== Running JMH benchmarks for ${JDK_KEY} (${JDK_VERSION}) ==="
 "$JAVA_BIN" -jar "$JAR_FILE" \
