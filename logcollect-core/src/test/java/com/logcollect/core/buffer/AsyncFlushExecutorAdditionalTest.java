@@ -23,10 +23,12 @@ class AsyncFlushExecutorAdditionalTest extends CoreUnitTestBase {
         try {
             AsyncFlushExecutor.configure(1, 1, 1);
             CountDownLatch blocker = new CountDownLatch(1);
+            CountDownLatch workerStarted = new CountDownLatch(1);
             CountDownLatch done = new CountDownLatch(2);
             AtomicReference<String> thirdThread = new AtomicReference<String>();
 
             AsyncFlushExecutor.submitOrRun(() -> {
+                workerStarted.countDown();
                 try {
                     blocker.await(2, TimeUnit.SECONDS);
                 } catch (InterruptedException e) {
@@ -35,6 +37,7 @@ class AsyncFlushExecutorAdditionalTest extends CoreUnitTestBase {
                     done.countDown();
                 }
             });
+            assertThat(workerStarted.await(2, TimeUnit.SECONDS)).isTrue();
             AsyncFlushExecutor.submitOrRun(done::countDown);
             String submitter = Thread.currentThread().getName();
             AsyncFlushExecutor.submitOrRun(() -> thirdThread.set(Thread.currentThread().getName()));

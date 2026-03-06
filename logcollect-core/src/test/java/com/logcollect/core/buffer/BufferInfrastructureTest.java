@@ -124,10 +124,12 @@ class BufferInfrastructureTest extends CoreUnitTestBase {
         try {
             AsyncFlushExecutor.configure(1, 1, 1);
             CountDownLatch block = new CountDownLatch(1);
+            CountDownLatch workerStarted = new CountDownLatch(1);
             CountDownLatch finished = new CountDownLatch(2);
             AtomicReference<String> callerThread = new AtomicReference<String>();
 
             AsyncFlushExecutor.submitOrRun(() -> {
+                workerStarted.countDown();
                 try {
                     block.await(2, TimeUnit.SECONDS);
                 } catch (InterruptedException e) {
@@ -136,6 +138,7 @@ class BufferInfrastructureTest extends CoreUnitTestBase {
                     finished.countDown();
                 }
             });
+            assertThat(workerStarted.await(2, TimeUnit.SECONDS)).isTrue();
             AsyncFlushExecutor.submitOrRun(finished::countDown);
 
             String testThread = Thread.currentThread().getName();

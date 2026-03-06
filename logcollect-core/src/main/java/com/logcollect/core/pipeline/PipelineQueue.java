@@ -4,7 +4,7 @@ package com.logcollect.core.pipeline;
  * @deprecated Deprecated since v2.2 and will be removed in v2.3.
  * Use {@link PipelineRingBuffer} instead.
  */
-@Deprecated(since = "2.2", forRemoval = true)
+@Deprecated
 public final class PipelineQueue {
 
     public enum OfferResult {

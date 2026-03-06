@@ -23,9 +23,14 @@ class AsyncFlushExecutorBranchTest {
     @Test
     void submitOrRun_whenQueueIsSaturated_shouldFallbackAndIncreaseRejectedCount() throws Exception {
         CountDownLatch blocker = new CountDownLatch(1);
+        CountDownLatch workerStarted = new CountDownLatch(1);
         try {
             AsyncFlushExecutor.configure(1, 1, 1);
-            AsyncFlushExecutor.submitOrRun(() -> awaitLatch(blocker));
+            AsyncFlushExecutor.submitOrRun(() -> {
+                workerStarted.countDown();
+                awaitLatch(blocker);
+            });
+            assertThat(workerStarted.await(2, TimeUnit.SECONDS)).isTrue();
             AsyncFlushExecutor.submitOrRun(() -> awaitLatch(blocker));
 
             long before = AsyncFlushExecutor.getRejectedCount();
