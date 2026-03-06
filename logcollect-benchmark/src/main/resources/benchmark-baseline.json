@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "updatedAt": "2026-03-04T02:56:06Z",
+    "updatedAt": "2026-03-06T14:41:04Z",
     "updatedBy": "panpan",
     "jdk": "17.0.18",
     "os": "Darwin 25.3.0",
@@ -24,70 +24,70 @@
       "ciCeilingMultiplier": 100.0
     },
     "reflection_getMethods_everyTime": {
-      "scoreNs": 167.5,
-      "errorNs": 3.4,
+      "scoreNs": 163.8,
+      "errorNs": 3.7,
       "ciCeilingMultiplier": 8.0
     },
     "fullCopy_large": {
-      "scoreNs": 125.5,
-      "errorNs": 0.4,
+      "scoreNs": 145.6,
+      "errorNs": 9.6,
       "ciCeilingMultiplier": 10.0
     },
     "fullCopy_typical": {
-      "scoreNs": 41.6,
-      "errorNs": 1.6,
+      "scoreNs": 40.7,
+      "errorNs": 0.7,
       "ciCeilingMultiplier": 10.0
     },
     "lazyCopy_large_clean": {
-      "scoreNs": 257.3,
-      "errorNs": 0.6,
+      "scoreNs": 250.9,
+      "errorNs": 4.4,
       "ciCeilingMultiplier": 5.0
     },
     "lazyCopy_typical_clean": {
-      "scoreNs": 1.0,
+      "scoreNs": 0.9,
       "errorNs": 0.0,
       "ciCeilingMultiplier": 100.0
     },
     "sanitize_cleanMessage": {
-      "scoreNs": 1297.7,
-      "errorNs": 2.6,
+      "scoreNs": 1261.2,
+      "errorNs": 17.8,
       "ciCeilingMultiplier": 10.0
     },
     "sanitize_longMessage": {
-      "scoreNs": 49244.6,
-      "errorNs": 489.5,
+      "scoreNs": 47145.9,
+      "errorNs": 767.8,
       "ciCeilingMultiplier": 4.0
     },
     "sanitize_withInjection": {
-      "scoreNs": 3780.7,
-      "errorNs": 10.5,
+      "scoreNs": 3643.6,
+      "errorNs": 71.1,
       "ciCeilingMultiplier": 5.0
     },
     "pipeline_cleanMessage_emptyMdc": {
-      "scoreNs": 1592.9,
-      "errorNs": 22.0,
+      "scoreNs": 1570.4,
+      "errorNs": 25.6,
       "ciCeilingMultiplier": 10.0
     },
     "pipeline_perCall_newInstance": {
-      "scoreNs": 11410.4,
-      "errorNs": 1768.5,
+      "scoreNs": 10108.3,
+      "errorNs": 152.3,
       "ciCeilingMultiplier": 4.0
     },
     "pipeline_sensitiveMessage_typicalMdc": {
-      "scoreNs": 8969.1,
-      "errorNs": 26.4,
+      "scoreNs": 8891.1,
+      "errorNs": 126.1,
       "ciCeilingMultiplier": 5.0
     },
     "pipeline_withThrowable": {
-      "scoreNs": 25625.6,
-      "errorNs": 135.3,
+      "scoreNs": 25240.9,
+      "errorNs": 448.7,
       "ciCeilingMultiplier": 4.5
     }
   },
   "jdkBaselines": {
     "jdk8": {
       "_meta": {
-        "updatedAt": "2026-03-04T02:40:14Z",
+        "updatedAt": "2026-03-06T14:27:57Z",
         "updatedBy": "panpan",
         "jdk": "1.8.0_482",
         "jdkKey": "jdk8",
@@ -110,23 +110,23 @@
           "ciCeilingMultiplier": 100.0
         },
         "reflection_getMethods_everyTime": {
-          "scoreNs": 150.1,
-          "errorNs": 1.9,
+          "scoreNs": 149.8,
+          "errorNs": 3.4,
           "ciCeilingMultiplier": 8.0
         },
         "fullCopy_large": {
-          "scoreNs": 160.1,
-          "errorNs": 2.7,
+          "scoreNs": 138.1,
+          "errorNs": 31.1,
           "ciCeilingMultiplier": 10.0
         },
         "fullCopy_typical": {
-          "scoreNs": 50.6,
+          "scoreNs": 49.8,
           "errorNs": 1.6,
           "ciCeilingMultiplier": 10.0
         },
         "lazyCopy_large_clean": {
-          "scoreNs": 261.9,
-          "errorNs": 1.4,
+          "scoreNs": 257.3,
+          "errorNs": 3.0,
           "ciCeilingMultiplier": 5.0
         },
         "lazyCopy_typical_clean": {
@@ -135,38 +135,38 @@
           "ciCeilingMultiplier": 100.0
         },
         "sanitize_cleanMessage": {
-          "scoreNs": 1292.8,
-          "errorNs": 8.1,
+          "scoreNs": 1266.2,
+          "errorNs": 12.4,
           "ciCeilingMultiplier": 10.0
         },
         "sanitize_longMessage": {
-          "scoreNs": 49045.3,
-          "errorNs": 182.7,
+          "scoreNs": 47228.6,
+          "errorNs": 912.8,
           "ciCeilingMultiplier": 4.0
         },
         "sanitize_withInjection": {
-          "scoreNs": 4547.8,
-          "errorNs": 24.8,
+          "scoreNs": 4461.2,
+          "errorNs": 55.2,
           "ciCeilingMultiplier": 5.0
         },
         "pipeline_cleanMessage_emptyMdc": {
-          "scoreNs": 1585.6,
-          "errorNs": 9.0,
+          "scoreNs": 1595.5,
+          "errorNs": 18.8,
           "ciCeilingMultiplier": 10.0
         },
         "pipeline_perCall_newInstance": {
-          "scoreNs": 11594.0,
-          "errorNs": 86.5,
+          "scoreNs": 11691.0,
+          "errorNs": 266.2,
           "ciCeilingMultiplier": 4.0
         },
         "pipeline_sensitiveMessage_typicalMdc": {
-          "scoreNs": 10778.9,
-          "errorNs": 64.1,
+          "scoreNs": 10234.7,
+          "errorNs": 179.5,
           "ciCeilingMultiplier": 5.0
         },
         "pipeline_withThrowable": {
-          "scoreNs": 26458.1,
-          "errorNs": 130.1,
+          "scoreNs": 25974.8,
+          "errorNs": 543.1,
           "ciCeilingMultiplier": 4.5
         }
       },
@@ -174,7 +174,7 @@
     },
     "jdk11": {
       "_meta": {
-        "updatedAt": "2026-03-04T02:44:06Z",
+        "updatedAt": "2026-03-06T14:33:22Z",
         "updatedBy": "panpan",
         "jdk": "11.0.30",
         "jdkKey": "jdk11",
@@ -192,28 +192,28 @@
           "ciCeilingMultiplier": 100.0
         },
         "interface_virtualDispatch": {
-          "scoreNs": 2.3,
-          "errorNs": 0.0,
+          "scoreNs": 2.7,
+          "errorNs": 1.2,
           "ciCeilingMultiplier": 100.0
         },
         "reflection_getMethods_everyTime": {
-          "scoreNs": 101.7,
-          "errorNs": 0.9,
+          "scoreNs": 100.3,
+          "errorNs": 2.7,
           "ciCeilingMultiplier": 8.0
         },
         "fullCopy_large": {
-          "scoreNs": 173.4,
-          "errorNs": 0.6,
+          "scoreNs": 173.7,
+          "errorNs": 6.9,
           "ciCeilingMultiplier": 10.0
         },
         "fullCopy_typical": {
-          "scoreNs": 51.5,
-          "errorNs": 0.7,
+          "scoreNs": 50.6,
+          "errorNs": 0.9,
           "ciCeilingMultiplier": 10.0
         },
         "lazyCopy_large_clean": {
-          "scoreNs": 352.4,
-          "errorNs": 1.8,
+          "scoreNs": 345.0,
+          "errorNs": 6.1,
           "ciCeilingMultiplier": 5.0
         },
         "lazyCopy_typical_clean": {
@@ -222,38 +222,38 @@
           "ciCeilingMultiplier": 100.0
         },
         "sanitize_cleanMessage": {
-          "scoreNs": 1298.4,
-          "errorNs": 9.4,
+          "scoreNs": 1263.7,
+          "errorNs": 36.8,
           "ciCeilingMultiplier": 10.0
         },
         "sanitize_longMessage": {
-          "scoreNs": 54979.2,
-          "errorNs": 7702.2,
+          "scoreNs": 53163.6,
+          "errorNs": 7424.6,
           "ciCeilingMultiplier": 4.0
         },
         "sanitize_withInjection": {
-          "scoreNs": 4004.1,
-          "errorNs": 23.2,
+          "scoreNs": 3885.5,
+          "errorNs": 54.3,
           "ciCeilingMultiplier": 5.0
         },
         "pipeline_cleanMessage_emptyMdc": {
-          "scoreNs": 2401.9,
-          "errorNs": 29.2,
+          "scoreNs": 2398.2,
+          "errorNs": 47.4,
           "ciCeilingMultiplier": 10.0
         },
         "pipeline_perCall_newInstance": {
-          "scoreNs": 11750.5,
-          "errorNs": 574.1,
+          "scoreNs": 10853.8,
+          "errorNs": 286.4,
           "ciCeilingMultiplier": 4.0
         },
         "pipeline_sensitiveMessage_typicalMdc": {
-          "scoreNs": 9984.9,
-          "errorNs": 442.6,
+          "scoreNs": 9542.9,
+          "errorNs": 158.8,
           "ciCeilingMultiplier": 5.0
         },
         "pipeline_withThrowable": {
-          "scoreNs": 26322.4,
-          "errorNs": 236.9,
+          "scoreNs": 27392.8,
+          "errorNs": 2423.9,
           "ciCeilingMultiplier": 4.5
         }
       },
@@ -296,7 +296,7 @@
     },
     "jdk17": {
       "_meta": {
-        "updatedAt": "2026-03-04T02:47:56Z",
+        "updatedAt": "2026-03-06T14:37:13Z",
         "updatedBy": "panpan",
         "jdk": "17.0.18",
         "jdkKey": "jdk17",
@@ -319,63 +319,63 @@
           "ciCeilingMultiplier": 100.0
         },
         "reflection_getMethods_everyTime": {
-          "scoreNs": 167.5,
-          "errorNs": 3.4,
+          "scoreNs": 163.8,
+          "errorNs": 3.7,
           "ciCeilingMultiplier": 8.0
         },
         "fullCopy_large": {
-          "scoreNs": 125.5,
-          "errorNs": 0.4,
+          "scoreNs": 145.6,
+          "errorNs": 9.6,
           "ciCeilingMultiplier": 10.0
         },
         "fullCopy_typical": {
-          "scoreNs": 41.6,
-          "errorNs": 1.6,
+          "scoreNs": 40.7,
+          "errorNs": 0.7,
           "ciCeilingMultiplier": 10.0
         },
         "lazyCopy_large_clean": {
-          "scoreNs": 257.3,
-          "errorNs": 0.6,
+          "scoreNs": 250.9,
+          "errorNs": 4.4,
           "ciCeilingMultiplier": 5.0
         },
         "lazyCopy_typical_clean": {
-          "scoreNs": 1.0,
+          "scoreNs": 0.9,
           "errorNs": 0.0,
           "ciCeilingMultiplier": 100.0
         },
         "sanitize_cleanMessage": {
-          "scoreNs": 1297.7,
-          "errorNs": 2.6,
+          "scoreNs": 1261.2,
+          "errorNs": 17.8,
           "ciCeilingMultiplier": 10.0
         },
         "sanitize_longMessage": {
-          "scoreNs": 49244.6,
-          "errorNs": 489.5,
+          "scoreNs": 47145.9,
+          "errorNs": 767.8,
           "ciCeilingMultiplier": 4.0
         },
         "sanitize_withInjection": {
-          "scoreNs": 3780.7,
-          "errorNs": 10.5,
+          "scoreNs": 3643.6,
+          "errorNs": 71.1,
           "ciCeilingMultiplier": 5.0
         },
         "pipeline_cleanMessage_emptyMdc": {
-          "scoreNs": 1592.9,
-          "errorNs": 22.0,
+          "scoreNs": 1570.4,
+          "errorNs": 25.6,
           "ciCeilingMultiplier": 10.0
         },
         "pipeline_perCall_newInstance": {
-          "scoreNs": 11410.4,
-          "errorNs": 1768.5,
+          "scoreNs": 10108.3,
+          "errorNs": 152.3,
           "ciCeilingMultiplier": 4.0
         },
         "pipeline_sensitiveMessage_typicalMdc": {
-          "scoreNs": 8969.1,
-          "errorNs": 26.4,
+          "scoreNs": 8891.1,
+          "errorNs": 126.1,
           "ciCeilingMultiplier": 5.0
         },
         "pipeline_withThrowable": {
-          "scoreNs": 25625.6,
-          "errorNs": 135.3,
+          "scoreNs": 25240.9,
+          "errorNs": 448.7,
           "ciCeilingMultiplier": 4.5
         }
       },
@@ -418,7 +418,7 @@
     },
     "jdk21": {
       "_meta": {
-        "updatedAt": "2026-03-04T02:56:06Z",
+        "updatedAt": "2026-03-06T14:41:04Z",
         "updatedBy": "panpan",
         "jdk": "21.0.10",
         "jdkKey": "jdk21",
@@ -441,23 +441,23 @@
           "ciCeilingMultiplier": 100.0
         },
         "reflection_getMethods_everyTime": {
-          "scoreNs": 169.7,
-          "errorNs": 1.5,
+          "scoreNs": 166.7,
+          "errorNs": 2.2,
           "ciCeilingMultiplier": 8.0
         },
         "fullCopy_large": {
-          "scoreNs": 142.3,
-          "errorNs": 0.8,
+          "scoreNs": 167.4,
+          "errorNs": 2.6,
           "ciCeilingMultiplier": 10.0
         },
         "fullCopy_typical": {
-          "scoreNs": 45.6,
-          "errorNs": 0.2,
+          "scoreNs": 41.8,
+          "errorNs": 1.6,
           "ciCeilingMultiplier": 10.0
         },
         "lazyCopy_large_clean": {
-          "scoreNs": 378.9,
-          "errorNs": 2.9,
+          "scoreNs": 381.6,
+          "errorNs": 4.5,
           "ciCeilingMultiplier": 5.0
         },
         "lazyCopy_typical_clean": {
@@ -466,38 +466,38 @@
           "ciCeilingMultiplier": 100.0
         },
         "sanitize_cleanMessage": {
-          "scoreNs": 1277.1,
-          "errorNs": 9.1,
+          "scoreNs": 1279.9,
+          "errorNs": 20.8,
           "ciCeilingMultiplier": 10.0
         },
         "sanitize_longMessage": {
-          "scoreNs": 57269.3,
-          "errorNs": 10399.2,
+          "scoreNs": 57153.6,
+          "errorNs": 10584.4,
           "ciCeilingMultiplier": 4.0
         },
         "sanitize_withInjection": {
-          "scoreNs": 3705.7,
-          "errorNs": 23.1,
+          "scoreNs": 3721.3,
+          "errorNs": 51.6,
           "ciCeilingMultiplier": 5.0
         },
         "pipeline_cleanMessage_emptyMdc": {
-          "scoreNs": 2400.8,
-          "errorNs": 17.4,
+          "scoreNs": 2420.6,
+          "errorNs": 34.8,
           "ciCeilingMultiplier": 10.0
         },
         "pipeline_perCall_newInstance": {
-          "scoreNs": 11735.1,
-          "errorNs": 88.4,
+          "scoreNs": 10970.8,
+          "errorNs": 714.3,
           "ciCeilingMultiplier": 4.0
         },
         "pipeline_sensitiveMessage_typicalMdc": {
-          "scoreNs": 10704.2,
-          "errorNs": 76.8,
+          "scoreNs": 10592.3,
+          "errorNs": 116.1,
           "ciCeilingMultiplier": 5.0
         },
         "pipeline_withThrowable": {
-          "scoreNs": 25999.2,
-          "errorNs": 68.3,
+          "scoreNs": 25583.3,
+          "errorNs": 339.4,
           "ciCeilingMultiplier": 4.5
         }
       },
@@ -537,915 +537,6 @@
         "e2e-1t-clean": 0.73,
         "e2e-8t-clean": 0.57,
         "e2e-8t-sensitive": 0.9
-      }
-    }
-  },
-  "ciStressBaselines": {
-    "github-ubuntu-latest": {
-      "jdk11": {
-        "_meta": {
-          "updatedAt": "2026-03-06T08:00:21Z",
-          "updatedBy": "Mora-na",
-          "profile": "github-ubuntu-latest",
-          "jdk": "11.0.30",
-          "jdkKey": "jdk11",
-          "javaHome": "/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/11.0.30-7/x64",
-          "os": "Linux 6.14.0-1017-azure",
-          "cpu": "x86_64",
-          "sampleRuns": 20,
-          "sampleMinPerMetric": 5,
-          "sampleTrimCountEachSide": 1,
-          "note": "CI stress baseline from 20 smoke runs (github-ubuntu-latest)",
-          "frameworkVersion": "2.2.0",
-          "commitHash": "5029b4500cad",
-          "refreshDate": "2026-03-06",
-          "runs": 20,
-          "buildStrategy": "per-jdk",
-          "jvmOpts": "-Xms512m -Xmx512m -XX:+UseG1GC",
-          "springProfiles": "stress",
-          "maxThreadCap": 128,
-          "taskTimeoutSeconds": 60,
-          "runnerMemoryMb": 15990,
-          "githubRunId": 22754333432,
-          "githubRunNumber": 6,
-          "githubRunAttempt": 1,
-          "githubSha": "5029b4500cadbcfa1552a254f97014fc8ae9165a",
-          "githubRefName": "main",
-          "githubWorkflow": "Refresh Stress CI Baseline",
-          "githubRepository": "Mora-na/LogCollect"
-        },
-        "stressGate": {
-          "aggregation": {
-            "runs": 5,
-            "trimCountEachSide": 1,
-            "minSamplesAfterFilter": 3
-          },
-          "throughputMinMultiplier": 0.8,
-          "ratioMinMultiplier": 0.75,
-          "gcMaxMultiplier": 4.0,
-          "gcAbsoluteMinPercent": 2.0,
-          "gcAbsoluteMaxPercent": 5.0,
-          "throughputBaselines": {
-            "isolated-1t-clean": 715998.8,
-            "isolated-8t-clean": 3352844.6,
-            "isolated-8t-sensitive": 3893185.8,
-            "e2e-1t-clean": 1051810.1,
-            "e2e-8t-clean": 2400188.9,
-            "e2e-8t-sensitive": 2920101.8
-          },
-          "ratioBaselines": {
-            "isolated-8t-clean/isolated-1t-clean": 4.705,
-            "e2e-8t-clean/e2e-1t-clean": 2.29
-          },
-          "gcBaselines": {
-            "isolated-1t-clean": 1.15,
-            "isolated-8t-clean": 2.56,
-            "isolated-8t-sensitive": 2.09,
-            "e2e-1t-clean": 0.43,
-            "e2e-8t-clean": 2.23,
-            "e2e-8t-sensitive": 1.23
-          },
-          "stats": {
-            "throughput": {
-              "isolated-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 611193.88,
-                "max": 788484.21,
-                "p50": 717464.18,
-                "p90": 765343.63,
-                "trimmedMean": 715998.8
-              },
-              "isolated-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2696052.57,
-                "max": 4834255.03,
-                "p50": 3299141.51,
-                "p90": 3878484.77,
-                "trimmedMean": 3352844.56
-              },
-              "isolated-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 3159681.7,
-                "max": 5248083.19,
-                "p50": 3990582.23,
-                "p90": 4400564.68,
-                "trimmedMean": 3893185.75
-              },
-              "e2e-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 863537.24,
-                "max": 1643341.68,
-                "p50": 1033228.49,
-                "p90": 1250229.74,
-                "trimmedMean": 1051810.09
-              },
-              "e2e-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2055347.23,
-                "max": 2792745.48,
-                "p50": 2442856.33,
-                "p90": 2596629.74,
-                "trimmedMean": 2400188.88
-              },
-              "e2e-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2611415.93,
-                "max": 3414881.56,
-                "p50": 2922357.33,
-                "p90": 3144742.43,
-                "trimmedMean": 2920101.83
-              }
-            },
-            "ratio": {
-              "isolated-8t-clean/isolated-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 3.7431,
-                "max": 7.1429,
-                "p50": 4.6745,
-                "p90": 5.6617,
-                "trimmedMean": 4.705
-              },
-              "e2e-8t-clean/e2e-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 1.4661,
-                "max": 2.9826,
-                "p50": 2.2062,
-                "p90": 2.7371,
-                "trimmedMean": 2.2897
-              }
-            },
-            "gc": {
-              "isolated-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 4.9424,
-                "p50": 0.0,
-                "p90": 4.1242,
-                "trimmedMean": 1.1498
-              },
-              "isolated-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 1.5531,
-                "max": 5.4562,
-                "p50": 2.4744,
-                "p90": 3.6394,
-                "trimmedMean": 2.5591
-              },
-              "isolated-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 5.9651,
-                "p50": 0.0,
-                "p90": 5.3035,
-                "trimmedMean": 2.0856
-              },
-              "e2e-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 8.0409,
-                "p50": 0.0,
-                "p90": 3.7159,
-                "trimmedMean": 0.4297
-              },
-              "e2e-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.9256,
-                "max": 3.8784,
-                "p50": 1.9022,
-                "p90": 3.5986,
-                "trimmedMean": 2.228
-              },
-              "e2e-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 3.6893,
-                "p50": 0.0,
-                "p90": 3.1533,
-                "trimmedMean": 1.2276
-              }
-            }
-          }
-        }
-      },
-      "jdk17": {
-        "_meta": {
-          "updatedAt": "2026-03-06T08:02:59Z",
-          "updatedBy": "Mora-na",
-          "profile": "github-ubuntu-latest",
-          "jdk": "17.0.18",
-          "jdkKey": "jdk17",
-          "javaHome": "/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.18-8/x64",
-          "os": "Linux 6.14.0-1017-azure",
-          "cpu": "x86_64",
-          "sampleRuns": 20,
-          "sampleMinPerMetric": 5,
-          "sampleTrimCountEachSide": 1,
-          "note": "CI stress baseline from 20 smoke runs (github-ubuntu-latest)",
-          "frameworkVersion": "2.2.0",
-          "commitHash": "5029b4500cad",
-          "refreshDate": "2026-03-06",
-          "runs": 20,
-          "buildStrategy": "per-jdk",
-          "jvmOpts": "-Xms512m -Xmx512m -XX:+UseG1GC",
-          "springProfiles": "stress",
-          "maxThreadCap": 128,
-          "taskTimeoutSeconds": 60,
-          "runnerMemoryMb": 15990,
-          "githubRunId": 22754333432,
-          "githubRunNumber": 6,
-          "githubRunAttempt": 1,
-          "githubSha": "5029b4500cadbcfa1552a254f97014fc8ae9165a",
-          "githubRefName": "main",
-          "githubWorkflow": "Refresh Stress CI Baseline",
-          "githubRepository": "Mora-na/LogCollect"
-        },
-        "stressGate": {
-          "aggregation": {
-            "runs": 5,
-            "trimCountEachSide": 1,
-            "minSamplesAfterFilter": 3
-          },
-          "throughputMinMultiplier": 0.8,
-          "ratioMinMultiplier": 0.75,
-          "gcMaxMultiplier": 4.0,
-          "gcAbsoluteMinPercent": 2.0,
-          "gcAbsoluteMaxPercent": 5.0,
-          "throughputBaselines": {
-            "isolated-1t-clean": 729090.8,
-            "isolated-8t-clean": 3515007.0,
-            "isolated-8t-sensitive": 4367742.6,
-            "e2e-1t-clean": 1408922.3,
-            "e2e-8t-clean": 2524004.3,
-            "e2e-8t-sensitive": 2868098.3
-          },
-          "ratioBaselines": {
-            "isolated-8t-clean/isolated-1t-clean": 4.843,
-            "e2e-8t-clean/e2e-1t-clean": 1.835
-          },
-          "gcBaselines": {
-            "isolated-1t-clean": 1.71,
-            "isolated-8t-clean": 2.77,
-            "isolated-8t-sensitive": 3.63,
-            "e2e-1t-clean": 1.03,
-            "e2e-8t-clean": 2.26,
-            "e2e-8t-sensitive": 1.64
-          },
-          "stats": {
-            "throughput": {
-              "isolated-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 602987.89,
-                "max": 842823.16,
-                "p50": 724707.24,
-                "p90": 787137.87,
-                "trimmedMean": 729090.79
-              },
-              "isolated-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 3049161.24,
-                "max": 4406595.34,
-                "p50": 3485486.44,
-                "p90": 4156286.79,
-                "trimmedMean": 3515007.04
-              },
-              "isolated-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 3507975.47,
-                "max": 6522265.34,
-                "p50": 4285038.42,
-                "p90": 4939539.07,
-                "trimmedMean": 4367742.64
-              },
-              "e2e-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 1098751.64,
-                "max": 1707371.95,
-                "p50": 1468261.3,
-                "p90": 1673331.34,
-                "trimmedMean": 1408922.29
-              },
-              "e2e-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2369739.28,
-                "max": 2779033.07,
-                "p50": 2531423.9,
-                "p90": 2643195.87,
-                "trimmedMean": 2524004.31
-              },
-              "e2e-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2049046.55,
-                "max": 3362298.36,
-                "p50": 2888974.34,
-                "p90": 3208415.82,
-                "trimmedMean": 2868098.26
-              }
-            },
-            "ratio": {
-              "isolated-8t-clean/isolated-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 3.7932,
-                "max": 7.0495,
-                "p50": 4.6198,
-                "p90": 5.8448,
-                "trimmedMean": 4.8431
-              },
-              "e2e-8t-clean/e2e-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 1.3879,
-                "max": 2.3816,
-                "p50": 1.7447,
-                "p90": 2.2178,
-                "trimmedMean": 1.835
-              }
-            },
-            "gc": {
-              "isolated-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 6.8726,
-                "p50": 0.0,
-                "p90": 4.2676,
-                "trimmedMean": 1.7085
-              },
-              "isolated-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2.0175,
-                "max": 3.9396,
-                "p50": 2.6929,
-                "p90": 3.8577,
-                "trimmedMean": 2.7724
-              },
-              "isolated-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 8.6973,
-                "p50": 4.8806,
-                "p90": 7.7302,
-                "trimmedMean": 3.6312
-              },
-              "e2e-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 8.7931,
-                "p50": 0.0,
-                "p90": 5.8723,
-                "trimmedMean": 1.0309
-              },
-              "e2e-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 1.269,
-                "max": 3.8067,
-                "p50": 1.7773,
-                "p90": 3.3979,
-                "trimmedMean": 2.2644
-              },
-              "e2e-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 4.0981,
-                "p50": 1.2562,
-                "p90": 3.7511,
-                "trimmedMean": 1.6417
-              }
-            }
-          }
-        }
-      },
-      "jdk8": {
-        "_meta": {
-          "updatedAt": "2026-03-06T07:57:34Z",
-          "updatedBy": "Mora-na",
-          "profile": "github-ubuntu-latest",
-          "jdk": "1.8.0_482",
-          "jdkKey": "jdk8",
-          "javaHome": "/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/8.0.482-8/x64",
-          "os": "Linux 6.14.0-1017-azure",
-          "cpu": "x86_64",
-          "sampleRuns": 20,
-          "sampleMinPerMetric": 5,
-          "sampleTrimCountEachSide": 1,
-          "note": "CI stress baseline from 20 smoke runs (github-ubuntu-latest)",
-          "frameworkVersion": "2.2.0",
-          "commitHash": "5029b4500cad",
-          "refreshDate": "2026-03-06",
-          "runs": 20,
-          "buildStrategy": "per-jdk",
-          "jvmOpts": "-Xms512m -Xmx512m -XX:+UseG1GC",
-          "springProfiles": "stress",
-          "maxThreadCap": 128,
-          "taskTimeoutSeconds": 60,
-          "runnerMemoryMb": 15990,
-          "githubRunId": 22754333432,
-          "githubRunNumber": 6,
-          "githubRunAttempt": 1,
-          "githubSha": "5029b4500cadbcfa1552a254f97014fc8ae9165a",
-          "githubRefName": "main",
-          "githubWorkflow": "Refresh Stress CI Baseline",
-          "githubRepository": "Mora-na/LogCollect"
-        },
-        "stressGate": {
-          "aggregation": {
-            "runs": 5,
-            "trimCountEachSide": 1,
-            "minSamplesAfterFilter": 3
-          },
-          "throughputMinMultiplier": 0.8,
-          "ratioMinMultiplier": 0.75,
-          "gcMaxMultiplier": 4.0,
-          "gcAbsoluteMinPercent": 2.0,
-          "gcAbsoluteMaxPercent": 5.0,
-          "throughputBaselines": {
-            "baseline-1t-nop": 3417611.2,
-            "e2e-1t-clean": 925251.3,
-            "e2e-8t-clean": 2538030.7,
-            "e2e-8t-sensitive": 2918585.6,
-            "isolated-1t-clean": 967888.8,
-            "isolated-8t-clean": 2921834.3,
-            "isolated-8t-sensitive": 2990869.3
-          },
-          "ratioBaselines": {
-            "isolated-8t-clean/isolated-1t-clean": 3.025,
-            "e2e-8t-clean/e2e-1t-clean": 2.76
-          },
-          "gcBaselines": {
-            "baseline-1t-nop": 0.0,
-            "e2e-1t-clean": 4.32,
-            "e2e-8t-clean": 2.98,
-            "e2e-8t-sensitive": 1.8,
-            "isolated-1t-clean": 3.36,
-            "isolated-8t-clean": 4.52,
-            "isolated-8t-sensitive": 3.06
-          },
-          "stats": {
-            "throughput": {
-              "baseline-1t-nop": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2688145.38,
-                "max": 4414675.99,
-                "p50": 3326082.05,
-                "p90": 4224875.26,
-                "trimmedMean": 3417611.25
-              },
-              "e2e-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 721482.22,
-                "max": 1148987.51,
-                "p50": 912409.68,
-                "p90": 1091920.59,
-                "trimmedMean": 925251.31
-              },
-              "e2e-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2255036.03,
-                "max": 2913478.98,
-                "p50": 2499628.91,
-                "p90": 2804200.25,
-                "trimmedMean": 2538030.7
-              },
-              "e2e-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2610087.62,
-                "max": 3143554.31,
-                "p50": 2938423.63,
-                "p90": 3099270.63,
-                "trimmedMean": 2918585.64
-              },
-              "isolated-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 858409.37,
-                "max": 1040945.8,
-                "p50": 979749.77,
-                "p90": 1008845.77,
-                "trimmedMean": 967888.76
-              },
-              "isolated-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2534826.38,
-                "max": 3411179.32,
-                "p50": 2875200.57,
-                "p90": 3319731.01,
-                "trimmedMean": 2921834.3
-              },
-              "isolated-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2297656.59,
-                "max": 4147377.82,
-                "p50": 2809241.27,
-                "p90": 3820060.11,
-                "trimmedMean": 2990869.34
-              }
-            },
-            "ratio": {
-              "isolated-8t-clean/isolated-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2.6659,
-                "max": 3.6533,
-                "p50": 2.9722,
-                "p90": 3.4913,
-                "trimmedMean": 3.0249
-              },
-              "e2e-8t-clean/e2e-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2.172,
-                "max": 4.0363,
-                "p50": 2.6867,
-                "p90": 3.4173,
-                "trimmedMean": 2.7603
-              }
-            },
-            "gc": {
-              "baseline-1t-nop": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 0.0,
-                "p50": 0.0,
-                "p90": 0.0,
-                "trimmedMean": 0.0
-              },
-              "e2e-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 10.9373,
-                "p50": 2.8859,
-                "p90": 10.1511,
-                "trimmedMean": 4.3167
-              },
-              "e2e-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.6523,
-                "max": 4.9891,
-                "p50": 3.0535,
-                "p90": 4.3492,
-                "trimmedMean": 2.9812
-              },
-              "e2e-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 5.428,
-                "p50": 1.8038,
-                "p90": 3.8187,
-                "trimmedMean": 1.7963
-              },
-              "isolated-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 9.2192,
-                "p50": 2.5752,
-                "p90": 8.0186,
-                "trimmedMean": 3.3614
-              },
-              "isolated-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2.5218,
-                "max": 6.635,
-                "p50": 4.7791,
-                "p90": 5.8593,
-                "trimmedMean": 4.5174
-              },
-              "isolated-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 8.2192,
-                "p50": 4.6593,
-                "p90": 6.4983,
-                "trimmedMean": 3.0584
-              }
-            }
-          }
-        }
-      },
-      "jdk21": {
-        "_meta": {
-          "updatedAt": "2026-03-06T08:05:39Z",
-          "updatedBy": "Mora-na",
-          "profile": "github-ubuntu-latest",
-          "jdk": "21.0.10",
-          "jdkKey": "jdk21",
-          "javaHome": "/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.10-7/x64",
-          "os": "Linux 6.14.0-1017-azure",
-          "cpu": "x86_64",
-          "sampleRuns": 20,
-          "sampleMinPerMetric": 5,
-          "sampleTrimCountEachSide": 1,
-          "note": "CI stress baseline from 20 smoke runs (github-ubuntu-latest)",
-          "frameworkVersion": "2.2.0",
-          "commitHash": "5029b4500cad",
-          "refreshDate": "2026-03-06",
-          "runs": 20,
-          "buildStrategy": "per-jdk",
-          "jvmOpts": "-Xms512m -Xmx512m -XX:+UseG1GC",
-          "springProfiles": "stress",
-          "maxThreadCap": 128,
-          "taskTimeoutSeconds": 60,
-          "runnerMemoryMb": 15990,
-          "githubRunId": 22754333432,
-          "githubRunNumber": 6,
-          "githubRunAttempt": 1,
-          "githubSha": "5029b4500cadbcfa1552a254f97014fc8ae9165a",
-          "githubRefName": "main",
-          "githubWorkflow": "Refresh Stress CI Baseline",
-          "githubRepository": "Mora-na/LogCollect"
-        },
-        "stressGate": {
-          "aggregation": {
-            "runs": 5,
-            "trimCountEachSide": 1,
-            "minSamplesAfterFilter": 3
-          },
-          "throughputMinMultiplier": 0.8,
-          "ratioMinMultiplier": 0.75,
-          "gcMaxMultiplier": 4.0,
-          "gcAbsoluteMinPercent": 2.0,
-          "gcAbsoluteMaxPercent": 5.0,
-          "throughputBaselines": {
-            "baseline-1t-nop": 3130777.7,
-            "e2e-1t-clean": 1259595.9,
-            "e2e-8t-clean": 2632224.1,
-            "e2e-8t-sensitive": 2834286.0,
-            "isolated-1t-clean": 712560.8,
-            "isolated-8t-clean": 3941506.6,
-            "isolated-8t-sensitive": 4672075.9
-          },
-          "ratioBaselines": {
-            "isolated-8t-clean/isolated-1t-clean": 5.534,
-            "e2e-8t-clean/e2e-1t-clean": 2.119
-          },
-          "gcBaselines": {
-            "baseline-1t-nop": 0.74,
-            "e2e-1t-clean": 1.79,
-            "e2e-8t-clean": 2.85,
-            "e2e-8t-sensitive": 1.76,
-            "isolated-1t-clean": 1.28,
-            "isolated-8t-clean": 3.9,
-            "isolated-8t-sensitive": 1.99
-          },
-          "stats": {
-            "throughput": {
-              "baseline-1t-nop": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2463466.06,
-                "max": 3905738.13,
-                "p50": 3103067.5,
-                "p90": 3640772.8,
-                "trimmedMean": 3130777.69
-              },
-              "e2e-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 1057109.67,
-                "max": 1700283.39,
-                "p50": 1213875.1,
-                "p90": 1612643.33,
-                "trimmedMean": 1259595.86
-              },
-              "e2e-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2409371.94,
-                "max": 3204884.83,
-                "p50": 2609793.24,
-                "p90": 2785183.33,
-                "trimmedMean": 2632224.14
-              },
-              "e2e-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2520108.75,
-                "max": 3366085.4,
-                "p50": 2847298.07,
-                "p90": 3170767.67,
-                "trimmedMean": 2834285.98
-              },
-              "isolated-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 644100.01,
-                "max": 804189.91,
-                "p50": 710266.02,
-                "p90": 754377.05,
-                "trimmedMean": 712560.84
-              },
-              "isolated-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 3245692.43,
-                "max": 5192680.17,
-                "p50": 3901054.56,
-                "p90": 4630398.25,
-                "trimmedMean": 3941506.59
-              },
-              "isolated-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 3859996.05,
-                "max": 6855432.6,
-                "p50": 4669358.12,
-                "p90": 5065116.51,
-                "trimmedMean": 4672075.94
-              }
-            },
-            "ratio": {
-              "isolated-8t-clean/isolated-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 4.3816,
-                "max": 7.3846,
-                "p50": 5.446,
-                "p90": 6.8887,
-                "trimmedMean": 5.5339
-              },
-              "e2e-8t-clean/e2e-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 1.4962,
-                "max": 3.0046,
-                "p50": 2.1267,
-                "p90": 2.5789,
-                "trimmedMean": 2.1191
-              }
-            },
-            "gc": {
-              "baseline-1t-nop": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 14.7808,
-                "p50": 0.0,
-                "p90": 1.3232,
-                "trimmedMean": 0.7351
-              },
-              "e2e-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 8.6305,
-                "p50": 0.0,
-                "p90": 6.7069,
-                "trimmedMean": 1.7935
-              },
-              "e2e-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 1.6412,
-                "max": 4.1537,
-                "p50": 3.2062,
-                "p90": 3.7532,
-                "trimmedMean": 2.8487
-              },
-              "e2e-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 4.3896,
-                "p50": 1.5751,
-                "p90": 3.7346,
-                "trimmedMean": 1.7604
-              },
-              "isolated-1t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 6.7171,
-                "p50": 0.0,
-                "p90": 4.9684,
-                "trimmedMean": 1.2811
-              },
-              "isolated-8t-clean": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 2.4471,
-                "max": 6.409,
-                "p50": 3.7078,
-                "p90": 5.6965,
-                "trimmedMean": 3.896
-              },
-              "isolated-8t-sensitive": {
-                "runs": 20,
-                "kept": 18,
-                "trimCountEachSide": 1,
-                "min": 0.0,
-                "max": 7.0889,
-                "p50": 0.0,
-                "p90": 6.9871,
-                "trimmedMean": 1.988
-              }
-            }
-          }
-        }
-      },
-      "_meta": {
-        "frameworkVersion": "2.2.0",
-        "commitHash": "5029b4500cad",
-        "refreshDate": "2026-03-06",
-        "runs": 20,
-        "buildStrategy": "per-jdk",
-        "updatedAt": "2026-03-06T08:05:39Z",
-        "updatedBy": "Mora-na"
       }
     }
   }
