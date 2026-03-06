@@ -5,7 +5,7 @@ import com.logcollect.core.util.SpinWaitHint;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * Three-level adaptive idle strategy: spin, then yield, then short park.
+ * Three-level adaptive idle strategy: spin -> yield -> short park.
  */
 public final class AdaptiveIdleStrategy {
 

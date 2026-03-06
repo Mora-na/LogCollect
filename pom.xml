@@ -38,6 +38,8 @@
 
     <properties>
         <java.version>1.8</java.version>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
@@ -67,29 +69,6 @@
     </modules>
 
     <profiles>
-        <profile>
-            <id>jdk8-compiler</id>
-            <activation>
-                <jdk>[1.8,1.9)</jdk>
-            </activation>
-            <properties>
-                <maven.compiler.source>1.8</maven.compiler.source>
-                <maven.compiler.target>1.8</maven.compiler.target>
-            </properties>
-        </profile>
-        <profile>
-            <id>jdk9plus-compiler</id>
-            <activation>
-                <jdk>[9,)</jdk>
-            </activation>
-            <properties>
-                <!-- Use release mode on JDK 9+ to avoid source/target bootstrap warnings -->
-                <maven.compiler.release>8</maven.compiler.release>
-                <!-- JDK 21+ emits obsolete-option warnings for Java 8 cross-compilation -->
-                <maven.compiler.compilerArgument>-Xlint:-options</maven.compiler.compilerArgument>
-                <maven.compiler.showWarnings>false</maven.compiler.showWarnings>
-            </properties>
-        </profile>
         <profile>
             <id>release-publish</id>
             <properties>
@@ -187,6 +166,10 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>3.11.0</version>
+                    <configuration>
+                        <source>${maven.compiler.source}</source>
+                        <target>${maven.compiler.target}</target>
+                    </configuration>
                 </plugin>
 
                 <!-- Enforcer（保持 Java 版本检查与禁止依赖） -->

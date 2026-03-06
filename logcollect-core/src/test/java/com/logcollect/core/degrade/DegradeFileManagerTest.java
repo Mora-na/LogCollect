@@ -2,6 +2,8 @@ package com.logcollect.core.degrade;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.crypto.KeyGenerator;
@@ -71,6 +73,7 @@ class DegradeFileManagerTest {
     }
 
     @Test
+    @EnabledOnOs(OS.LINUX)
     void write_filePermissions_ownerOnly() throws Exception {
         String traceId = UUID.randomUUID().toString();
         manager.write(traceId, "m", "sensitive data");
