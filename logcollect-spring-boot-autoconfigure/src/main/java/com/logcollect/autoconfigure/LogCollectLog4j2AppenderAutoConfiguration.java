@@ -79,6 +79,7 @@ public class LogCollectLog4j2AppenderAutoConfiguration implements InitializingBe
                 ((LogCollectLog4j2Appender) existingByName).setSecurityRegistry(securityRegistry);
                 ((LogCollectLog4j2Appender) existingByName).setMetrics(metrics);
                 ((LogCollectLog4j2Appender) existingByName).setPipelineManager(pipelineManager);
+                ((LogCollectLog4j2Appender) existingByName).setRequiredMdcKeys(resolveRequiredMdcKeys());
             }
 
             Appender logCollectAppender = findLogCollectAppender(log4jConfiguration.getAppenders());
@@ -86,6 +87,7 @@ public class LogCollectLog4j2AppenderAutoConfiguration implements InitializingBe
                 ((LogCollectLog4j2Appender) logCollectAppender).setSecurityRegistry(securityRegistry);
                 ((LogCollectLog4j2Appender) logCollectAppender).setMetrics(metrics);
                 ((LogCollectLog4j2Appender) logCollectAppender).setPipelineManager(pipelineManager);
+                ((LogCollectLog4j2Appender) logCollectAppender).setRequiredMdcKeys(resolveRequiredMdcKeys());
             }
             if (logCollectAppender == null) {
                 LogCollectLog4j2Appender created = LogCollectLog4j2Appender.createAppender(appenderName, null);
@@ -96,6 +98,7 @@ public class LogCollectLog4j2AppenderAutoConfiguration implements InitializingBe
                 created.setSecurityRegistry(securityRegistry);
                 created.setMetrics(metrics);
                 created.setPipelineManager(pipelineManager);
+                created.setRequiredMdcKeys(resolveRequiredMdcKeys());
                 created.start();
                 log4jConfiguration.addAppender(created);
                 logCollectAppender = created;
@@ -134,6 +137,14 @@ public class LogCollectLog4j2AppenderAutoConfiguration implements InitializingBe
             return DEFAULT_APPENDER_NAME;
         }
         return configured.trim();
+    }
+
+    private String[] resolveRequiredMdcKeys() {
+        if (properties == null || properties.getGlobal() == null) {
+            return new String[0];
+        }
+        String[] keys = properties.getGlobal().getLog4j2MdcKeys();
+        return keys == null ? new String[0] : keys;
     }
 
     @Bean

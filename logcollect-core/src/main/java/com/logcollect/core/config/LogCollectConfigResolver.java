@@ -38,8 +38,17 @@ public class LogCollectConfigResolver {
                     "buffer.hard-ceiling-bytes",
                     "buffer.counter-mode",
                     "buffer.estimation-factor",
+                    "handler.watchdog-interval-ms",
+                    "handler.watchdog-slots",
                     "pipeline.consumer-threads",
+                    "pipeline.consumer-drain-batch",
+                    "pipeline.consumer-spin-threshold",
+                    "pipeline.consumer-yield-threshold",
+                    "pipeline.consumer-idle-strategy",
+                    "degrade.decay-interval-seconds",
+                    "flush.retry-sync-cap-ms",
                     "metrics.prefix",
+                    "log4j2.mdc-keys",
                     "guard.max-content-length",
                     "guard.max-throwable-length"
             )));
@@ -580,7 +589,13 @@ public class LogCollectConfigResolver {
         applyInt(props, "pipeline.consumer-threads", config::setPipelineConsumerThreads);
         applyInt(props, "pipeline.overflow-queue-capacity", config::setPipelineOverflowQueueCapacity);
         applyInt(props, "pipeline.unpublished-slot-timeout-ms", config::setPipelineUnpublishedSlotTimeoutMs);
-        applyString(props, "pipeline.consumer-idle-strategy", config::setPipelineConsumerIdleStrategy);
+        if (props.containsKey("pipeline.consumer-idle-strategy")) {
+            LogCollectInternalLogger.warn(
+                    "Detected deprecated config key 'pipeline.consumer-idle-strategy'; V2.2 uses adaptive idle strategy and ignores this value.");
+        }
+        applyInt(props, "pipeline.consumer-drain-batch", config::setPipelineConsumerDrainBatch);
+        applyInt(props, "pipeline.consumer-spin-threshold", config::setPipelineConsumerSpinThreshold);
+        applyInt(props, "pipeline.consumer-yield-threshold", config::setPipelineConsumerYieldThreshold);
         applyDouble(props, "pipeline.backpressure-warning", config::setPipelineBackpressureWarning);
         applyDouble(props, "pipeline.backpressure-critical", config::setPipelineBackpressureCritical);
         applyInt(props, "pipeline.handoff-timeout-ms", config::setPipelineHandoffTimeoutMs);
@@ -594,6 +609,7 @@ public class LogCollectConfigResolver {
         applyInt(props, "degrade.half-open-success-threshold", config::setHalfOpenSuccessThreshold);
         applyInt(props, "degrade.window-size", config::setDegradeWindowSize);
         applyDouble(props, "degrade.failure-rate-threshold", config::setDegradeFailureRateThreshold);
+        applyInt(props, "degrade.decay-interval-seconds", config::setDegradeDecayIntervalSeconds);
         applyBoolean(props, "degrade.block-when-degrade-fail", config::setBlockWhenDegradeFail);
 
         applyString(props, "degrade.file.max-total-size", config::setDegradeFileMaxTotalSize);
@@ -607,13 +623,17 @@ public class LogCollectConfigResolver {
         applyInt(props, "guard.max-throwable-length", config::setGuardMaxThrowableLength);
 
         applyInt(props, "handler-timeout-ms", config::setHandlerTimeoutMs);
+        applyInt(props, "handler.watchdog-interval-ms", config::setHandlerWatchdogIntervalMs);
+        applyInt(props, "handler.watchdog-slots", config::setHandlerWatchdogSlots);
         applyBoolean(props, "transaction-isolation", config::setTransactionIsolation);
+        applyInt(props, "flush.retry-sync-cap-ms", config::setFlushRetrySyncCapMs);
         applyInt(props, "max-nesting-depth", config::setMaxNestingDepth);
         applyInt(props, "max-total-collect", config::setMaxTotalCollect);
         applyDataSize(props, "max-total-collect-bytes", config::setMaxTotalCollectBytes);
         applyEnum(props, "total-limit-policy", TotalLimitPolicy.class, config::setTotalLimitPolicy);
         applyDouble(props, "sampling-rate", config::setSamplingRate);
         applyEnum(props, "sampling-strategy", SamplingStrategy.class, config::setSamplingStrategy);
+        applyCsv(props, "log4j2.mdc-keys", values -> config.setLog4j2MdcKeys(values.toArray(new String[0])));
 
         applyBoolean(props, "metrics.enabled", config::setEnableMetrics);
     }

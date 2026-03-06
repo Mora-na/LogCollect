@@ -32,12 +32,12 @@ class PipelineConsumerBranchTest extends CoreUnitTestBase {
         LogCollectConfig config = baseConfig();
         SingleWriterBuffer buffer = new SingleWriterBuffer(16, parseBytes("1MB"), 16);
         LogCollectContext context = createTestContext(config, handler, CollectMode.SINGLE, buffer, null);
-        context.setPipelineQueue(new PipelineQueue(32, 0.7d, 0.9d));
+        PipelineRingBuffer ringBuffer = new PipelineRingBuffer(32, 16);
+        context.setPipelineQueue(ringBuffer);
         context.setAttribute("__globalBufferManager", new GlobalBufferMemoryManager(parseBytes("16MB")));
 
-        PipelineQueue queue = (PipelineQueue) context.getPipelineQueue();
-        queue.offer(raw(context, "queue-1", "INFO"));
-        queue.offer(raw(context, "queue-2", "WARN"));
+        publishToRing(context, "queue-1", "INFO");
+        publishToRing(context, "queue-2", "WARN");
 
         PipelineConsumer consumer = new PipelineConsumer("ut-consumer", null);
         consumer.assign(context);
@@ -55,7 +55,8 @@ class PipelineConsumerBranchTest extends CoreUnitTestBase {
         LogCollectConfig config = baseConfig();
         SingleWriterBuffer buffer = new SingleWriterBuffer(8, parseBytes("1MB"), 8);
         LogCollectContext context = createTestContext(config, handler, CollectMode.SINGLE, buffer, null);
-        context.setPipelineQueue(new PipelineQueue(8, 0.7d, 0.9d));
+        PipelineRingBuffer ringBuffer = new PipelineRingBuffer(8, 8);
+        context.setPipelineQueue(ringBuffer);
         context.setAttribute("__globalBufferManager", new GlobalBufferMemoryManager(parseBytes("4MB")));
 
         PipelineConsumer consumer = new PipelineConsumer("ut-consumer", null);
@@ -72,7 +73,7 @@ class PipelineConsumerBranchTest extends CoreUnitTestBase {
 
         context.markClosing();
         processOne.invoke(consumer, context, raw(context, "closing-requeue", "INFO"), false);
-        assertThat(((PipelineQueue) context.getPipelineQueue()).size()).isGreaterThan(0);
+        assertThat(ringBuffer.pollOverflow()).isNotNull();
 
         buffer.markClosed();
         processOne.invoke(consumer, context, raw(context, "late", "WARN"), true);
@@ -86,7 +87,7 @@ class PipelineConsumerBranchTest extends CoreUnitTestBase {
         LogCollectConfig config = baseConfig();
         SingleWriterBuffer buffer = new SingleWriterBuffer(8, 64, 8);
         LogCollectContext context = createTestContext(config, handler, CollectMode.SINGLE, buffer, null);
-        context.setPipelineQueue(new PipelineQueue(8, 0.7d, 0.9d));
+        context.setPipelineQueue(new PipelineRingBuffer(8, 8));
         context.setAttribute("__globalBufferManager", new GlobalBufferMemoryManager(parseBytes("1MB")));
 
         PipelineConsumer consumer = new PipelineConsumer("ut-consumer", null);
@@ -112,7 +113,7 @@ class PipelineConsumerBranchTest extends CoreUnitTestBase {
         LogCollectConfig config = baseConfig();
         SingleWriterBuffer buffer = new SingleWriterBuffer(4, parseBytes("1MB"), 4);
         LogCollectContext context = createTestContext(config, handler, CollectMode.AGGREGATE, buffer, null);
-        context.setPipelineQueue(new PipelineQueue(16, 0.7d, 0.9d));
+        context.setPipelineQueue(new PipelineRingBuffer(16, 8));
 
         Method joinContents = method("joinContents", List.class);
         assertThat((String) joinContents.invoke(consumer, Collections.emptyList())).isEmpty();
@@ -163,13 +164,13 @@ class PipelineConsumerBranchTest extends CoreUnitTestBase {
         LogCollectConfig config = baseConfig();
         SingleWriterBuffer buffer = new SingleWriterBuffer(1, parseBytes("1MB"), 8);
         LogCollectContext context = createTestContext(config, handler, CollectMode.SINGLE, buffer, null);
-        PipelineQueue queue = new PipelineQueue(16, 0.7d, 0.9d);
+        PipelineRingBuffer queue = new PipelineRingBuffer(16, 8);
         context.setPipelineQueue(queue);
         context.setAttribute("__globalBufferManager", new GlobalBufferMemoryManager(parseBytes("8MB")));
 
         PipelineConsumer consumer = new PipelineConsumer("ut-loop", null);
         consumer.assign(context);
-        queue.offer(raw(context, "loop-msg", "INFO"));
+        publishToRing(context, "loop-msg", "INFO");
 
         Thread worker = new Thread(consumer, "ut-pipeline-consumer");
         worker.start();
@@ -202,6 +203,26 @@ class PipelineConsumerBranchTest extends CoreUnitTestBase {
                 System.currentTimeMillis(),
                 Collections.emptyMap(),
                 context);
+    }
+
+    private void publishToRing(LogCollectContext context, String content, String level) {
+        PipelineRingBuffer ringBuffer = (PipelineRingBuffer) context.getPipelineQueue();
+        long sequence = ringBuffer.tryClaim();
+        if (sequence >= 0L) {
+            MutableRawLogRecord slot = ringBuffer.getSlot(sequence);
+            slot.populate(
+                    content,
+                    level,
+                    "ut.logger",
+                    "main",
+                    System.currentTimeMillis(),
+                    context.getTraceId(),
+                    null,
+                    Collections.emptyMap());
+            ringBuffer.publish(sequence);
+            return;
+        }
+        ringBuffer.offerOverflow(raw(context, content, level));
     }
 
     private Method method(String name, Class<?>... parameterTypes) throws Exception {

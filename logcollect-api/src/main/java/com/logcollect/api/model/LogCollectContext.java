@@ -80,6 +80,8 @@ public class LogCollectContext {
     private volatile boolean closed;
     /** Consumer 是否正在处理当前 context 的记录。 */
     private final AtomicBoolean consumerProcessing = new AtomicBoolean(false);
+    /** 上下文是否已进入 Consumer 就绪队列（幂等入队标记）。 */
+    private final AtomicBoolean pipelineReady = new AtomicBoolean(false);
 
     /**
      * 业务侧主键/关联 ID。
@@ -343,6 +345,22 @@ public class LogCollectContext {
     public boolean isConsumerProcessing() { return consumerProcessing.get(); }
 
     public void setConsumerProcessing(boolean processing) { this.consumerProcessing.set(processing); }
+
+    /**
+     * 标记当前上下文已进入就绪队列。
+     *
+     * @return true 首次标记成功（可入队），false 表示已在队列中
+     */
+    public boolean markPipelineReady() {
+        return pipelineReady.compareAndSet(false, true);
+    }
+
+    /**
+     * 清除就绪标记，允许后续再次入队。
+     */
+    public void clearPipelineReady() {
+        pipelineReady.set(false);
+    }
 
     /**
      * @return 业务 ID（原始对象）

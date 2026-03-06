@@ -8,7 +8,7 @@
         <!--<groupId>org.dpdns.mora</groupId>-->
         <groupId>io.github.mora-na</groupId>
         <artifactId>logcollect-samples</artifactId>
-        <version>1.1.0</version>
+        <version>2.2.0</version>
     </parent>
 
     <artifactId>logcollect-sample-boot27-logback</artifactId>

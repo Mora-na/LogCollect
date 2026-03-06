@@ -2,18 +2,19 @@ package com.logcollect.core.buffer;
 
 import com.logcollect.core.internal.LogCollectInternalLogger;
 
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 
 /**
- * 聚合/单条缓冲区的异步 flush 执行器。
- *
- * <p>默认使用 {@link java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy}，
- * 在线程池饱和时由调用线程执行任务，提供自然反压并避免数据丢失。
+ * Lock-free async flush executor based on MPSC queue + worker threads.
  */
 public final class AsyncFlushExecutor {
 
@@ -26,13 +27,10 @@ public final class AsyncFlushExecutor {
         }
     }
 
-    private static final AtomicLong REJECTED_COUNT = new AtomicLong(0);
-
-    private static final Object EXECUTOR_LOCK = new Object();
-    private static volatile ThreadPoolExecutor executor = newExecutor(
-            defaultCoreThreads(),
-            defaultMaxThreads(),
-            4096);
+    private static final long IDLE_PARK_NANOS = 100_000L;
+    private static final AtomicLong REJECTED_COUNT = new AtomicLong(0L);
+    private static final AtomicReference<LockFreeExecutor> EXECUTOR_REF =
+            new AtomicReference<LockFreeExecutor>(new LockFreeExecutor(defaultMaxThreads(), 4096));
 
     private AsyncFlushExecutor() {
     }
@@ -41,22 +39,32 @@ public final class AsyncFlushExecutor {
         if (task == null) {
             return;
         }
-        ThreadPoolExecutor current = executor;
-        if (current.isShutdown()) {
+
+        LockFreeExecutor executor = EXECUTOR_REF.get();
+        if (executor == null || executor.isShutdown()) {
             runSafely(task, "executor_shutdown");
             return;
         }
-        try {
-            current.execute(task);
-        } catch (RejectedExecutionException e) {
-            REJECTED_COUNT.incrementAndGet();
-            if (current.isShutdown()) {
-                runSafely(task, "executor_shutdown");
+
+        if (executor.offer(task)) {
+            return;
+        }
+
+        REJECTED_COUNT.incrementAndGet();
+        if (task instanceof RejectedAwareTask) {
+            RejectedAwareTask rejectedAwareTask = (RejectedAwareTask) task;
+            Runnable downgraded = rejectedAwareTask.downgradeForRetry();
+            if (downgraded != null && executor.offer(downgraded)) {
                 return;
             }
-            // CallerRunsPolicy 在正常运行时不应触发该分支，兜底保护。
-            runSafely(task, "executor_rejected_fallback");
+            try {
+                rejectedAwareTask.onDiscard("executor_queue_full");
+            } catch (Exception ignored) {
+                // fallback to caller-runs below
+            }
         }
+
+        runSafely(task, "executor_queue_full_caller_runs");
     }
 
     public static long getRejectedCount() {
@@ -67,57 +75,29 @@ public final class AsyncFlushExecutor {
         int normalizedCore = Math.max(1, coreThreads);
         int normalizedMax = Math.max(normalizedCore, maxThreads);
         int normalizedQueue = Math.max(1, queueCapacity);
-        ThreadPoolExecutor replacement = newExecutor(normalizedCore, normalizedMax, normalizedQueue);
-        ThreadPoolExecutor old;
-        synchronized (EXECUTOR_LOCK) {
-            old = executor;
-            executor = replacement;
-        }
+
+        LockFreeExecutor replacement = new LockFreeExecutor(normalizedMax, normalizedQueue);
+        LockFreeExecutor old = EXECUTOR_REF.getAndSet(replacement);
         if (old != null) {
-            old.shutdown();
+            old.shutdown(0L, false);
         }
     }
 
     public static void resize(int coreThreads, int maxThreads) {
-        ThreadPoolExecutor current = executor;
         int normalizedCore = Math.max(1, coreThreads);
         int normalizedMax = Math.max(normalizedCore, maxThreads);
-        current.setMaximumPoolSize(normalizedMax);
-        current.setCorePoolSize(normalizedCore);
+        LockFreeExecutor current = EXECUTOR_REF.get();
+        if (current != null) {
+            current.resizeWorkers(normalizedMax);
+        }
     }
 
     public static void shutdownAndAwait(long timeoutMs) {
-        ThreadPoolExecutor current = executor;
-        current.shutdown();
-        if (timeoutMs <= 0) {
+        LockFreeExecutor current = EXECUTOR_REF.get();
+        if (current == null) {
             return;
         }
-        try {
-            if (!current.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS)) {
-                current.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            current.shutdownNow();
-        }
-    }
-
-    private static ThreadPoolExecutor newExecutor(int coreThreads, int maxThreads, int queueCapacity) {
-        AtomicInteger threadCounter = new AtomicInteger(0);
-        ThreadPoolExecutor pool = new ThreadPoolExecutor(
-                coreThreads,
-                maxThreads,
-                60L,
-                TimeUnit.SECONDS,
-                new LinkedBlockingQueue<Runnable>(queueCapacity),
-                r -> {
-                    Thread thread = new Thread(r, "logcollect-flush-" + threadCounter.incrementAndGet());
-                    thread.setDaemon(true);
-                    return thread;
-                },
-                new ThreadPoolExecutor.CallerRunsPolicy());
-        pool.allowCoreThreadTimeOut(true);
-        return pool;
+        current.shutdown(Math.max(0L, timeoutMs), true);
     }
 
     private static int defaultCoreThreads() {
@@ -135,6 +115,176 @@ public final class AsyncFlushExecutor {
             LogCollectInternalLogger.warn("Run async flush task failed, reason={}", reason, ex);
         } catch (Error e) {
             throw e;
+        }
+    }
+
+    private static final class LockFreeExecutor {
+        private final ConcurrentLinkedQueue<Runnable> queue = new ConcurrentLinkedQueue<Runnable>();
+        private final AtomicInteger queueSize = new AtomicInteger(0);
+        private final AtomicInteger workerSeq = new AtomicInteger(0);
+        private final AtomicInteger desiredWorkers = new AtomicInteger(0);
+        private final List<Worker> workers = new CopyOnWriteArrayList<Worker>();
+        private final AtomicBoolean shutdown = new AtomicBoolean(false);
+
+        private volatile int maxQueueSize;
+
+        private LockFreeExecutor(int workerCount, int maxQueueSize) {
+            this.maxQueueSize = Math.max(1, maxQueueSize);
+            int normalizedWorkers = Math.max(1, workerCount);
+            this.desiredWorkers.set(normalizedWorkers);
+            ensureWorkers(normalizedWorkers);
+        }
+
+        private boolean offer(Runnable task) {
+            if (task == null || shutdown.get()) {
+                return false;
+            }
+            int currentSize = queueSize.get();
+            if (currentSize >= maxQueueSize) {
+                return false;
+            }
+            queue.offer(task);
+            queueSize.incrementAndGet();
+            unparkOne();
+            return true;
+        }
+
+        private boolean isShutdown() {
+            return shutdown.get();
+        }
+
+        private void resizeWorkers(int workerCount) {
+            if (shutdown.get()) {
+                return;
+            }
+            int normalizedWorkers = Math.max(1, workerCount);
+            desiredWorkers.set(normalizedWorkers);
+            ensureWorkers(normalizedWorkers);
+            unparkAll();
+        }
+
+        private void shutdown(long timeoutMs, boolean interruptWorkers) {
+            if (!shutdown.compareAndSet(false, true)) {
+                return;
+            }
+            desiredWorkers.set(0);
+
+            if (interruptWorkers) {
+                for (Worker worker : workers) {
+                    Thread thread = worker.thread;
+                    if (thread != null) {
+                        thread.interrupt();
+                    }
+                }
+            } else {
+                unparkAll();
+            }
+
+            long deadlineNanos = timeoutMs <= 0
+                    ? 0L
+                    : System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+            for (Worker worker : workers) {
+                Thread thread = worker.thread;
+                if (thread == null) {
+                    continue;
+                }
+                long joinMillis = timeoutMs <= 0
+                        ? 0L
+                        : Math.max(1L, TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()));
+                try {
+                    if (timeoutMs <= 0) {
+                        thread.join(1L);
+                    } else {
+                        if (System.nanoTime() >= deadlineNanos) {
+                            break;
+                        }
+                        thread.join(joinMillis);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+
+            Runnable remaining;
+            while ((remaining = queue.poll()) != null) {
+                decrementQueueSize();
+                runSafely(remaining, "executor_shutdown_drain");
+            }
+        }
+
+        private void ensureWorkers(int expectedCount) {
+            while (workers.size() < expectedCount) {
+                int index = workerSeq.getAndIncrement();
+                Worker worker = new Worker(index);
+                workers.add(worker);
+                Thread thread = new Thread(() -> runWorker(worker), "logcollect-flush-" + (index + 1));
+                thread.setDaemon(true);
+                worker.thread = thread;
+                thread.start();
+            }
+        }
+
+        private void runWorker(Worker worker) {
+            while (true) {
+                if (shutdown.get()) {
+                    if (queue.isEmpty()) {
+                        return;
+                    }
+                } else if (worker.index >= desiredWorkers.get() && queue.isEmpty()) {
+                    return;
+                }
+
+                Runnable task = queue.poll();
+                if (task != null) {
+                    decrementQueueSize();
+                    runSafely(task, "executor_worker");
+                    continue;
+                }
+
+                LockSupport.parkNanos(IDLE_PARK_NANOS);
+                if (Thread.interrupted() && shutdown.get()) {
+                    // continue loop and honor shutdown branch at top
+                }
+            }
+        }
+
+        private void decrementQueueSize() {
+            int size = queueSize.decrementAndGet();
+            if (size < 0) {
+                queueSize.compareAndSet(size, 0);
+            }
+        }
+
+        private void unparkOne() {
+            List<Worker> snapshot = workers;
+            int size = snapshot.size();
+            if (size == 0) {
+                return;
+            }
+            Worker worker = snapshot.get(ThreadLocalRandom.current().nextInt(size));
+            Thread thread = worker.thread;
+            if (thread != null) {
+                LockSupport.unpark(thread);
+            }
+        }
+
+        private void unparkAll() {
+            for (Worker worker : workers) {
+                Thread thread = worker.thread;
+                if (thread != null) {
+                    LockSupport.unpark(thread);
+                }
+            }
+        }
+    }
+
+    private static final class Worker {
+        private final int index;
+        private volatile Thread thread;
+
+        private Worker(int index) {
+            this.index = index;
         }
     }
 }

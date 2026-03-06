@@ -2,10 +2,10 @@ package com.logcollect.core.buffer;
 
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.concurrent.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.*;
@@ -21,13 +21,10 @@ class AsyncFlushExecutorBranchTest {
     }
 
     @Test
-    void submitOrRun_whenExecutorRejects_shouldFallbackAndIncreaseRejectedCount() throws Exception {
-        ThreadPoolExecutor rejecting = new ThreadPoolExecutor(
-                1, 1, 60L, TimeUnit.SECONDS, new ArrayBlockingQueue<Runnable>(1),
-                new ThreadPoolExecutor.AbortPolicy());
-        ThreadPoolExecutor old = swapExecutor(rejecting);
+    void submitOrRun_whenQueueIsSaturated_shouldFallbackAndIncreaseRejectedCount() throws Exception {
         CountDownLatch blocker = new CountDownLatch(1);
         try {
+            AsyncFlushExecutor.configure(1, 1, 1);
             AsyncFlushExecutor.submitOrRun(() -> awaitLatch(blocker));
             AsyncFlushExecutor.submitOrRun(() -> awaitLatch(blocker));
 
@@ -39,29 +36,20 @@ class AsyncFlushExecutorBranchTest {
             assertThat(AsyncFlushExecutor.getRejectedCount()).isGreaterThan(before);
         } finally {
             blocker.countDown();
-            rejecting.shutdownNow();
-            restoreExecutor(old);
+            AsyncFlushExecutor.configure(2, 4, 4096);
         }
     }
 
     @Test
-    void submitOrRun_whenRejectedAndExecutorBecomesShutdown_shouldRunShutdownFallback() throws Exception {
-        ThreadPoolExecutor shutdownRejecting = new ThreadPoolExecutor(
-                1, 1, 60L, TimeUnit.SECONDS, new ArrayBlockingQueue<Runnable>(1)) {
-            @Override
-            public void execute(Runnable command) {
-                shutdown();
-                throw new RejectedExecutionException("forced");
-            }
-        };
-        ThreadPoolExecutor old = swapExecutor(shutdownRejecting);
+    void submitOrRun_whenExecutorShutdown_shouldRunOnCallerThread() {
         try {
+            AsyncFlushExecutor.configure(1, 1, 8);
+            AsyncFlushExecutor.shutdownAndAwait(200);
             AtomicBoolean ran = new AtomicBoolean(false);
             AsyncFlushExecutor.submitOrRun(() -> ran.set(true));
             assertThat(ran.get()).isTrue();
         } finally {
-            shutdownRejecting.shutdownNow();
-            restoreExecutor(old);
+            AsyncFlushExecutor.configure(2, 4, 4096);
         }
     }
 
@@ -113,17 +101,4 @@ class AsyncFlushExecutorBranchTest {
         }
     }
 
-    private static ThreadPoolExecutor swapExecutor(ThreadPoolExecutor replacement) throws Exception {
-        Field field = AsyncFlushExecutor.class.getDeclaredField("executor");
-        field.setAccessible(true);
-        ThreadPoolExecutor previous = (ThreadPoolExecutor) field.get(null);
-        field.set(null, replacement);
-        return previous;
-    }
-
-    private static void restoreExecutor(ThreadPoolExecutor executor) throws Exception {
-        Field field = AsyncFlushExecutor.class.getDeclaredField("executor");
-        field.setAccessible(true);
-        field.set(null, executor);
-    }
 }

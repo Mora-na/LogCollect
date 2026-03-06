@@ -28,7 +28,13 @@ public class LogCollectConfig {
     private int pipelineRingBufferCapacity = 4096;
     private int pipelineOverflowQueueCapacity = 1024;
     private int pipelineUnpublishedSlotTimeoutMs = 100;
+    /**
+     * @deprecated ignored since v2.2, replaced by adaptive idle thresholds.
+     */
     private String pipelineConsumerIdleStrategy = "PARK";
+    private int pipelineConsumerDrainBatch = 64;
+    private int pipelineConsumerSpinThreshold = 100;
+    private int pipelineConsumerYieldThreshold = 200;
     private int pipelineConsumerThreads = 2;
     private double pipelineBackpressureWarning = 0.7d;
     private double pipelineBackpressureCritical = 0.9d;
@@ -54,6 +60,7 @@ public class LogCollectConfig {
     private int halfOpenSuccessThreshold = 3;
     private int degradeWindowSize = 10;
     private double degradeFailureRateThreshold = 0.6d;
+    private int degradeDecayIntervalSeconds = 0;
     private boolean blockWhenDegradeFail = false;
 
     // ===== 安全防护配置 =====
@@ -72,13 +79,17 @@ public class LogCollectConfig {
 
     // ===== 高级配置 =====
     private int handlerTimeoutMs = 5000;
+    private int handlerWatchdogIntervalMs = 100;
+    private int handlerWatchdogSlots = 64;
     private boolean transactionIsolation = false;
+    private int flushRetrySyncCapMs = 200;
     private int maxNestingDepth = 10;
     private int maxTotalCollect = 100000;
     private long maxTotalCollectBytes = 50L * 1024L * 1024L;
     private TotalLimitPolicy totalLimitPolicy = TotalLimitPolicy.STOP_COLLECTING;
     private double samplingRate = 1.0d;
     private SamplingStrategy samplingStrategy = SamplingStrategy.RATE;
+    private String[] log4j2MdcKeys = new String[0];
     private Class<? extends BackpressureCallback> backpressureCallbackClass = BackpressureCallback.class;
 
     // ===== 可观测性配置 =====
@@ -202,6 +213,30 @@ public class LogCollectConfig {
 
     public void setPipelineConsumerIdleStrategy(String pipelineConsumerIdleStrategy) {
         this.pipelineConsumerIdleStrategy = pipelineConsumerIdleStrategy;
+    }
+
+    public int getPipelineConsumerDrainBatch() {
+        return pipelineConsumerDrainBatch;
+    }
+
+    public void setPipelineConsumerDrainBatch(int pipelineConsumerDrainBatch) {
+        this.pipelineConsumerDrainBatch = pipelineConsumerDrainBatch;
+    }
+
+    public int getPipelineConsumerSpinThreshold() {
+        return pipelineConsumerSpinThreshold;
+    }
+
+    public void setPipelineConsumerSpinThreshold(int pipelineConsumerSpinThreshold) {
+        this.pipelineConsumerSpinThreshold = pipelineConsumerSpinThreshold;
+    }
+
+    public int getPipelineConsumerYieldThreshold() {
+        return pipelineConsumerYieldThreshold;
+    }
+
+    public void setPipelineConsumerYieldThreshold(int pipelineConsumerYieldThreshold) {
+        this.pipelineConsumerYieldThreshold = pipelineConsumerYieldThreshold;
     }
 
     public int getPipelineConsumerThreads() {
@@ -372,6 +407,14 @@ public class LogCollectConfig {
         this.degradeFailureRateThreshold = degradeFailureRateThreshold;
     }
 
+    public int getDegradeDecayIntervalSeconds() {
+        return degradeDecayIntervalSeconds;
+    }
+
+    public void setDegradeDecayIntervalSeconds(int degradeDecayIntervalSeconds) {
+        this.degradeDecayIntervalSeconds = degradeDecayIntervalSeconds;
+    }
+
     public boolean isBlockWhenDegradeFail() {
         return blockWhenDegradeFail;
     }
@@ -468,12 +511,36 @@ public class LogCollectConfig {
         this.handlerTimeoutMs = handlerTimeoutMs;
     }
 
+    public int getHandlerWatchdogIntervalMs() {
+        return handlerWatchdogIntervalMs;
+    }
+
+    public void setHandlerWatchdogIntervalMs(int handlerWatchdogIntervalMs) {
+        this.handlerWatchdogIntervalMs = handlerWatchdogIntervalMs;
+    }
+
+    public int getHandlerWatchdogSlots() {
+        return handlerWatchdogSlots;
+    }
+
+    public void setHandlerWatchdogSlots(int handlerWatchdogSlots) {
+        this.handlerWatchdogSlots = handlerWatchdogSlots;
+    }
+
     public boolean isTransactionIsolation() {
         return transactionIsolation;
     }
 
     public void setTransactionIsolation(boolean transactionIsolation) {
         this.transactionIsolation = transactionIsolation;
+    }
+
+    public int getFlushRetrySyncCapMs() {
+        return flushRetrySyncCapMs;
+    }
+
+    public void setFlushRetrySyncCapMs(int flushRetrySyncCapMs) {
+        this.flushRetrySyncCapMs = flushRetrySyncCapMs;
     }
 
     public int getMaxNestingDepth() {
@@ -522,6 +589,16 @@ public class LogCollectConfig {
 
     public void setSamplingStrategy(SamplingStrategy samplingStrategy) {
         this.samplingStrategy = samplingStrategy;
+    }
+
+    public String[] getLog4j2MdcKeys() {
+        return Arrays.copyOf(log4j2MdcKeys, log4j2MdcKeys.length);
+    }
+
+    public void setLog4j2MdcKeys(String[] log4j2MdcKeys) {
+        this.log4j2MdcKeys = log4j2MdcKeys == null
+                ? new String[0]
+                : Arrays.copyOf(log4j2MdcKeys, log4j2MdcKeys.length);
     }
 
     public Class<? extends BackpressureCallback> getBackpressureCallbackClass() {

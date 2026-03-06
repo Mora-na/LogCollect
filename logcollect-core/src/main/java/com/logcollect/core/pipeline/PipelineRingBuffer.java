@@ -72,22 +72,64 @@ public final class PipelineRingBuffer {
 
     public void advanceConsumer() {
         long seq = consumerCursor.value;
-        int index = (int) (seq & mask);
+        markConsumed(seq);
+        consumerCursor.value = seq + 1;
+    }
+
+    public void advanceConsumerBy(int count) {
+        if (count <= 0) {
+            return;
+        }
+        consumerCursor.value = consumerCursor.value + count;
+    }
+
+    public void markConsumed(long sequence) {
+        int index = (int) (sequence & mask);
         slots[index].clearReferences();
         publishedSeqs.set(index, UNPUBLISHED);
-        consumerCursor.value = seq + 1;
     }
 
     public void skipUnpublishedSlot() {
         long seq = consumerCursor.value;
-        int index = (int) (seq & mask);
-        slots[index].clearReferences();
-        publishedSeqs.set(index, UNPUBLISHED);
+        markConsumed(seq);
         consumerCursor.value = seq + 1;
     }
 
     public boolean hasPending() {
         return consumerCursor.value < producerCursor.value.get();
+    }
+
+    public boolean hasAvailable() {
+        return availableCount(1) > 0;
+    }
+
+    public boolean hasOverflow() {
+        return overflowSize.get() > 0;
+    }
+
+    public boolean isPublished(long sequence) {
+        return publishedSeqs.get((int) (sequence & mask)) == sequence;
+    }
+
+    public int availableCount() {
+        return availableCount(64);
+    }
+
+    public int availableCount(int maxBatch) {
+        int maxProbe = Math.max(1, maxBatch);
+        long produced = producerCursor.value.get();
+        long consumed = consumerCursor.value;
+        int tentative = (int) Math.max(0L, produced - consumed);
+        int limit = Math.min(tentative, maxProbe);
+        int verified = 0;
+        for (int i = 0; i < limit; i++) {
+            long sequence = consumed + i;
+            if (!isPublished(sequence)) {
+                break;
+            }
+            verified++;
+        }
+        return verified;
     }
 
     public long pending() {

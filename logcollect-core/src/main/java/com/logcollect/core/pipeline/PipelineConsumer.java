@@ -17,11 +17,12 @@ import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.security.DefaultLogMasker;
 import com.logcollect.core.security.DefaultLogSanitizer;
 import com.logcollect.core.security.SecurityComponentRegistry;
+import com.logcollect.core.util.SpinWaitHint;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -39,10 +40,15 @@ public final class PipelineConsumer implements Runnable {
     private static final String ATTR_CLOSE_LATCH = "__pipelineCloseLatch";
     private static final String ATTR_AGGREGATE_DIRECT_BUFFER = "__aggregateDirectBuffer";
     private static final String ATTR_MEMORY_ACCOUNTANT = "__memoryAccountant";
+    private static final int DEFAULT_DRAIN_BATCH = 64;
+    private static final int DEFAULT_SPIN_THRESHOLD = 100;
+    private static final int DEFAULT_YIELD_THRESHOLD = 200;
 
     private final String consumerName;
-    private final ConcurrentLinkedQueue<LogCollectContext> assignedContexts =
-            new ConcurrentLinkedQueue<LogCollectContext>();
+    private final ConcurrentHashMap<LogCollectContext, Boolean> activeContexts =
+            new ConcurrentHashMap<LogCollectContext, Boolean>();
+    private final ConsumerReadyQueue readyQueue = new ConsumerReadyQueue();
+    private final AdaptiveIdleStrategy adaptiveIdleStrategy = new AdaptiveIdleStrategy();
     private final SecurityComponentRegistry securityRegistry;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final ResilientFlusher resilientFlusher = new ResilientFlusher();
@@ -54,6 +60,8 @@ public final class PipelineConsumer implements Runnable {
     private final AtomicLong totalLoops = new AtomicLong(0L);
 
     private volatile Thread workerThread;
+    private volatile int spinThreshold = DEFAULT_SPIN_THRESHOLD;
+    private volatile int yieldThreshold = DEFAULT_YIELD_THRESHOLD;
 
     public PipelineConsumer(String consumerName, SecurityComponentRegistry securityRegistry) {
         this.consumerName = consumerName;
@@ -68,19 +76,30 @@ public final class PipelineConsumer implements Runnable {
         if (context == null) {
             return;
         }
-        assignedContexts.offer(context);
+        activeContexts.put(context, Boolean.TRUE);
         context.setPipelineConsumer(this);
+        refreshIdleThresholds(context);
+        signal(context);
     }
 
     public void remove(LogCollectContext context) {
         if (context == null) {
             return;
         }
-        assignedContexts.remove(context);
+        activeContexts.remove(context);
+        context.clearPipelineReady();
     }
 
     public void shutdown() {
         running.set(false);
+        Thread worker = workerThread;
+        if (worker != null) {
+            LockSupport.unpark(worker);
+        }
+    }
+
+    public void signal(LogCollectContext context) {
+        readyQueue.signal(context);
         Thread worker = workerThread;
         if (worker != null) {
             LockSupport.unpark(worker);
@@ -107,10 +126,7 @@ public final class PipelineConsumer implements Runnable {
         CountDownLatch latch = new CountDownLatch(1);
         context.setAttribute(ATTR_CLOSE_LATCH, latch);
 
-        Thread worker = workerThread;
-        if (worker != null) {
-            LockSupport.unpark(worker);
-        }
+        signal(context);
 
         boolean closedByWorker = false;
         try {
@@ -131,90 +147,73 @@ public final class PipelineConsumer implements Runnable {
     public void run() {
         workerThread = Thread.currentThread();
         while (running.get() && !Thread.currentThread().isInterrupted()) {
-            boolean idle = true;
-            for (LogCollectContext context : assignedContexts) {
-                if (context == null) {
-                    continue;
-                }
+            boolean didWork = false;
+            LogCollectContext context = readyQueue.poll();
+            if (context != null) {
+                context.clearPipelineReady();
                 if (context.isClosed()) {
-                    assignedContexts.remove(context);
-                    continue;
-                }
-                if (context.isClosing()) {
+                    remove(context);
+                } else if (context.isClosing()) {
                     drainAndClose(context);
-                    idle = false;
-                    continue;
-                }
-
-                int processedCount = processContextBatch(context, 64);
-                if (processedCount > 0) {
-                    idle = false;
+                    didWork = true;
+                    adaptiveIdleStrategy.reset();
+                } else {
+                    refreshIdleThresholds(context);
+                    int processedCount = processContextBatch(context);
+                    if (processedCount > 0) {
+                        didWork = true;
+                        adaptiveIdleStrategy.reset();
+                    }
+                    PipelineRingBuffer ringBuffer = asRingBuffer(context.getPipelineQueue());
+                    if (ringBuffer != null
+                            && (context.isClosing() || ringBuffer.hasAvailable() || ringBuffer.hasOverflow())) {
+                        signal(context);
+                    }
                 }
             }
 
             long loops = totalLoops.incrementAndGet();
-            if (idle) {
+            if (!didWork) {
                 idleLoops.incrementAndGet();
             }
             if ((loops & 0x3FFL) == 0L) {
                 resolveAnyMetrics().updatePipelineConsumerIdleRatio(consumerName, idleRatio());
             }
 
-            if (idle) {
-                idle(resolveIdleStrategy());
+            if (!didWork) {
+                if (processClosingContexts()) {
+                    adaptiveIdleStrategy.reset();
+                    continue;
+                }
+                adaptiveIdleStrategy.idle(spinThreshold, yieldThreshold);
             }
         }
     }
 
-    private int processContextBatch(LogCollectContext context, int maxBatch) {
+    private int processContextBatch(LogCollectContext context) {
         if (context == null) {
             return 0;
         }
         PipelineRingBuffer ringBuffer = asRingBuffer(context.getPipelineQueue());
-        PipelineQueue legacyQueue = asPipelineQueue(context.getPipelineQueue());
-        if (ringBuffer == null && legacyQueue == null) {
+        if (ringBuffer == null) {
             return 0;
         }
+        int maxBatch = resolveDrainBatch(context);
 
         LogCollectMetrics metrics = resolveMetrics(context);
         String methodKey = context.getMethodSignature();
-        if (ringBuffer != null) {
-            metrics.updatePipelineQueueUtilization(methodKey, ringBuffer.utilization());
-        } else {
-            metrics.updatePipelineQueueUtilization(methodKey, legacyQueue.utilization());
-        }
+        metrics.updatePipelineQueueUtilization(methodKey, ringBuffer.utilization());
 
         int count = 0;
-        for (int i = 0; i < maxBatch; i++) {
-            if (context.isClosing()) {
+        while (count < maxBatch && !context.isClosing()) {
+            RawLogRecord overflow = ringBuffer.pollOverflow();
+            if (overflow == null) {
                 break;
             }
             Object timer = metrics.startPipelineProcessTimer();
             context.setConsumerProcessing(true);
             try {
-                if (ringBuffer != null) {
-                    RawLogRecord overflow = ringBuffer.pollOverflow();
-                    if (overflow != null) {
-                        processOverflowRecord(context, overflow, false);
-                        count++;
-                        continue;
-                    }
-
-                    MutableRawLogRecord slot = ringBuffer.tryConsume();
-                    if (slot == null) {
-                        break;
-                    }
-                    processSlotRecord(context, slot, false);
-                    ringBuffer.advanceConsumer();
-                    count++;
-                    continue;
-                }
-
-                RawLogRecord raw = legacyQueue.poll();
-                if (raw == null) {
-                    break;
-                }
-                processOverflowRecord(context, raw, false);
+                processOverflowRecord(context, overflow, false);
                 count++;
             } catch (Exception e) {
                 LogCollectInternalLogger.warn("Pipeline consumer process error", e);
@@ -225,6 +224,38 @@ public final class PipelineConsumer implements Runnable {
             } finally {
                 context.setConsumerProcessing(false);
                 metrics.stopPipelineProcessTimer(timer, methodKey);
+            }
+        }
+
+        if (!context.isClosing() && count < maxBatch) {
+            int ringBatch = Math.min(maxBatch - count, ringBuffer.availableCount(maxBatch - count));
+            if (ringBatch > 0) {
+                long baseSeq = ringBuffer.consumerSequence();
+                int processed = 0;
+                for (int i = 0; i < ringBatch; i++) {
+                    long sequence = baseSeq + i;
+                    MutableRawLogRecord slot = ringBuffer.getSlot(sequence);
+                    Object timer = metrics.startPipelineProcessTimer();
+                    context.setConsumerProcessing(true);
+                    try {
+                        processSlotRecord(context, slot, false);
+                        ringBuffer.markConsumed(sequence);
+                        processed++;
+                    } catch (Exception e) {
+                        LogCollectInternalLogger.warn("Pipeline consumer process error", e);
+                        context.incrementDiscardedCount();
+                        metrics.incrementDiscarded(methodKey, "pipeline_process_error");
+                    } catch (Error e) {
+                        throw e;
+                    } finally {
+                        context.setConsumerProcessing(false);
+                        metrics.stopPipelineProcessTimer(timer, methodKey);
+                    }
+                }
+                if (processed > 0) {
+                    ringBuffer.advanceConsumerBy(processed);
+                    count += processed;
+                }
             }
         }
         return count;
@@ -338,8 +369,8 @@ public final class PipelineConsumer implements Runnable {
         if (context == null || raw == null) {
             return;
         }
-        PipelineQueue queue = asPipelineQueue(context.getPipelineQueue());
-        if (queue != null && queue.forceOffer(raw)) {
+        PipelineRingBuffer ringBuffer = asRingBuffer(context.getPipelineQueue());
+        if (ringBuffer != null && ringBuffer.offerOverflow(raw)) {
             return;
         }
         context.incrementDiscardedCount();
@@ -566,7 +597,13 @@ public final class PipelineConsumer implements Runnable {
             DegradeFallbackHandler.handleDegraded(context, batch, DegradeReason.PERSIST_FAILED);
         };
 
-        resilientFlusher.flushBatch(writeAction, onSuccess, onExhausted, () -> joinContents(batch), finalFlush);
+        resilientFlusher.flushBatch(
+                writeAction,
+                onSuccess,
+                onExhausted,
+                () -> joinContents(batch),
+                finalFlush,
+                resolveSyncRetryCapMs(context));
         return success.get();
     }
 
@@ -634,7 +671,13 @@ public final class PipelineConsumer implements Runnable {
                     DegradeReason.PERSIST_FAILED);
         };
 
-        resilientFlusher.flushBatch(writeAction, onSuccess, onExhausted, aggregated::getContent, finalFlush);
+        resilientFlusher.flushBatch(
+                writeAction,
+                onSuccess,
+                onExhausted,
+                aggregated::getContent,
+                finalFlush,
+                resolveSyncRetryCapMs(context));
         return success.get();
     }
 
@@ -671,7 +714,6 @@ public final class PipelineConsumer implements Runnable {
         }
 
         PipelineRingBuffer ringBuffer = asRingBuffer(context.getPipelineQueue());
-        PipelineQueue legacyQueue = asPipelineQueue(context.getPipelineQueue());
         LogCollectConfig config = context.getConfig();
         long timeoutMs = config == null ? 100L : Math.max(1L, config.getPipelineUnpublishedSlotTimeoutMs());
         long timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMs);
@@ -712,11 +754,6 @@ public final class PipelineConsumer implements Runnable {
                 }
                 LockSupport.parkNanos(100_000L);
             }
-        } else if (legacyQueue != null) {
-            RawLogRecord raw;
-            while ((raw = legacyQueue.poll()) != null) {
-                processOverflowRecord(context, raw, true);
-            }
         }
 
         flushSingleBuffer(context, true);
@@ -733,6 +770,7 @@ public final class PipelineConsumer implements Runnable {
             buffer.markClosed();
         }
         context.markClosed();
+        context.clearPipelineReady();
         remove(context);
         countDownCloseLatch(context);
     }
@@ -1077,7 +1115,7 @@ public final class PipelineConsumer implements Runnable {
     }
 
     private LogCollectMetrics resolveAnyMetrics() {
-        for (LogCollectContext context : assignedContexts) {
+        for (LogCollectContext context : activeContexts.keySet()) {
             LogCollectMetrics metrics = resolveMetrics(context);
             if (!(metrics instanceof NoopLogCollectMetrics)) {
                 return metrics;
@@ -1094,12 +1132,44 @@ public final class PipelineConsumer implements Runnable {
         return value instanceof PipelineRingBuffer ? (PipelineRingBuffer) value : null;
     }
 
-    private PipelineQueue asPipelineQueue(Object value) {
-        return value instanceof PipelineQueue ? (PipelineQueue) value : null;
-    }
-
     private SingleWriterBuffer asSingleWriterBuffer(Object value) {
         return value instanceof SingleWriterBuffer ? (SingleWriterBuffer) value : null;
+    }
+
+    private int resolveDrainBatch(LogCollectContext context) {
+        LogCollectConfig config = context == null ? null : context.getConfig();
+        if (config == null) {
+            return DEFAULT_DRAIN_BATCH;
+        }
+        return Math.max(1, config.getPipelineConsumerDrainBatch());
+    }
+
+    private long resolveSyncRetryCapMs(LogCollectContext context) {
+        LogCollectConfig config = context == null ? null : context.getConfig();
+        if (config == null) {
+            return 200L;
+        }
+        return Math.max(1L, config.getFlushRetrySyncCapMs());
+    }
+
+    private void refreshIdleThresholds(LogCollectContext context) {
+        LogCollectConfig config = context == null ? null : context.getConfig();
+        if (config == null) {
+            return;
+        }
+        spinThreshold = Math.max(1, config.getPipelineConsumerSpinThreshold());
+        yieldThreshold = Math.max(spinThreshold + 1, config.getPipelineConsumerYieldThreshold());
+    }
+
+    private boolean processClosingContexts() {
+        for (LogCollectContext context : activeContexts.keySet()) {
+            if (context == null || context.isClosed() || !context.isClosing()) {
+                continue;
+            }
+            drainAndClose(context);
+            return true;
+        }
+        return false;
     }
 
     private boolean isHighPriority(String level) {
@@ -1137,44 +1207,15 @@ public final class PipelineConsumer implements Runnable {
     }
 
     private String resolveIdleStrategy() {
-        String strategy = "PARK";
-        for (LogCollectContext context : assignedContexts) {
-            if (context == null || context.getConfig() == null) {
-                continue;
-            }
-            String configured = context.getConfig().getPipelineConsumerIdleStrategy();
-            if (configured == null) {
-                continue;
-            }
-            String v = configured.trim().toUpperCase();
-            if ("SPIN".equals(v)) {
-                return "SPIN";
-            }
-            if ("YIELD".equals(v)) {
-                strategy = "YIELD";
-            }
-        }
-        return strategy;
+        return "ADAPTIVE";
     }
 
     private void idle(String strategy) {
-        if ("SPIN".equals(strategy)) {
-            onSpinWaitCompat();
-            return;
-        }
-        if ("YIELD".equals(strategy)) {
-            Thread.yield();
-            return;
-        }
-        LockSupport.parkNanos(100_000L);
+        adaptiveIdleStrategy.idle(spinThreshold, yieldThreshold);
     }
 
     private void onSpinWaitCompat() {
-        try {
-            Thread.class.getMethod("onSpinWait").invoke(null);
-        } catch (Exception ignored) {
-            Thread.yield();
-        }
+        SpinWaitHint.onSpinWait();
     }
 
     @SuppressWarnings("unused")

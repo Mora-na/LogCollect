@@ -549,7 +549,13 @@ public class AggregateModeBuffer implements LogCollectBuffer {
                 DegradeFallbackHandler.handleDegraded(context, agg.getContent(), agg.getMaxLevel(), DegradeReason.PERSIST_FAILED);
             }
         };
-        resilientFlusher.flushBatch(writeAction, onSuccess, onExhausted, agg::getContent, isFinal);
+        resilientFlusher.flushBatch(
+                writeAction,
+                onSuccess,
+                onExhausted,
+                agg::getContent,
+                isFinal,
+                resolveSyncRetryCapMs(context));
     }
 
     private boolean handleOversizedSegment(LogCollectContext context, LogSegment segment) {
@@ -613,7 +619,7 @@ public class AggregateModeBuffer implements LogCollectBuffer {
             TransactionExecutor txExecutor = resolveTransactionExecutor(context);
             txExecutor.executeInNewTransaction(() -> handler.flushAggregatedLog(context, agg));
         };
-        boolean success = resilientFlusher.flush(writeAction, agg::getContent);
+        boolean success = resilientFlusher.flush(writeAction, agg::getContent, resolveSyncRetryCapMs(context));
         if (success) {
             if (breaker != null) {
                 breaker.recordSuccess();
@@ -820,6 +826,14 @@ public class AggregateModeBuffer implements LogCollectBuffer {
 
     private String methodKey(LogCollectContext context) {
         return context == null ? "unknown" : context.getMethodSignature();
+    }
+
+    private long resolveSyncRetryCapMs(LogCollectContext context) {
+        LogCollectConfig config = context == null ? null : context.getConfig();
+        if (config == null) {
+            return 200L;
+        }
+        return Math.max(1L, config.getFlushRetrySyncCapMs());
     }
 
     private final class AsyncBufferFlushTask implements AsyncFlushExecutor.RejectedAwareTask {

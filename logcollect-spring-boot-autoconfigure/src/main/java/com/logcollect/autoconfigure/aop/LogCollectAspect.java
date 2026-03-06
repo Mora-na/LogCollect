@@ -20,6 +20,7 @@ import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.config.LogCollectConfigResolver;
 import com.logcollect.core.context.LogCollectContextManager;
 import com.logcollect.core.degrade.DegradeFileManager;
+import com.logcollect.core.handler.HandlerTimeoutGuard;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.mdc.MDCAdapter;
 import com.logcollect.core.pipeline.LogCollectPipelineManager;
@@ -43,7 +44,10 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -89,12 +93,6 @@ public class LogCollectAspect {
 
     private static volatile GlobalBufferMemoryManager fallbackGlobalBufferManager;
     private static final NoopLogCollectHandler NOOP_HANDLER = new NoopLogCollectHandler();
-    private static final ScheduledExecutorService TIMEOUT_SCHEDULER =
-            Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "logcollect-timeout-guard");
-                t.setDaemon(true);
-                return t;
-            });
 
     private final ConcurrentHashMap<String, LogCollectCircuitBreaker> breakerCache =
             new ConcurrentHashMap<String, LogCollectCircuitBreaker>();
@@ -106,6 +104,8 @@ public class LogCollectAspect {
     private volatile Instant handlerCacheRefreshTime;
     private final ConcurrentHashMap<Class<? extends BackpressureCallback>, BackpressureCallback> backpressureCallbackCache =
             new ConcurrentHashMap<Class<? extends BackpressureCallback>, BackpressureCallback>();
+    private final java.util.Set<String> registeredBreakerGauges = ConcurrentHashMap.newKeySet();
+    private final AtomicReference<HandlerTimeoutGuard> timeoutGuardRef = new AtomicReference<HandlerTimeoutGuard>();
 
     @Around("@annotation(logCollect)")
     public Object around(ProceedingJoinPoint pjp, LogCollect logCollect) throws Throwable {
@@ -141,7 +141,9 @@ public class LogCollectAspect {
                 ctx = buildContext(traceId, method, pjp.getArgs(), config, handler, breaker, collectMode, logCollect);
                 if (metrics != null && config.isEnableMetrics()) {
                     metrics.recordActiveCollectionStart();
-                    metrics.registerCircuitBreakerGauge(methodKey, breaker);
+                    if (registeredBreakerGauges.add(methodKey)) {
+                        metrics.registerCircuitBreakerGauge(methodKey, breaker);
+                    }
                 }
                 LogCollectContextManager.push(ctx);
                 final LogCollectContext finalCtx = ctx;
@@ -579,31 +581,44 @@ public class LogCollectAspect {
     private <T> T safeInvoke(Callable<T> callable, int timeoutMs, boolean transactionIsolation,
                              LogCollectContext context, String phase) {
         boolean interruptedBefore = Thread.currentThread().isInterrupted();
-        AtomicBoolean timeoutTriggered = new AtomicBoolean(false);
         AtomicBoolean timeoutHandled = new AtomicBoolean(false);
-        ScheduledFuture<?> interruptGuard = null;
+        long startNanos = System.nanoTime();
+        HandlerTimeoutGuard guard = null;
+        long guardHandle = 0L;
+        long timeoutNanos = timeoutMs <= 0
+                ? 0L
+                : TimeUnit.MILLISECONDS.toNanos(Math.max(1L, timeoutMs));
+        if (timeoutNanos > 0L) {
+            guard = resolveTimeoutGuard(context == null ? null : context.getConfig());
+            guardHandle = guard.registerDeadline(
+                    Thread.currentThread(),
+                    startNanos + timeoutNanos,
+                    timeoutNanos,
+                    context == null ? "unknown" : context.getMethodSignature(),
+                    phase);
+        }
         try {
-            if (timeoutMs > 0) {
-                Thread currentThread = Thread.currentThread();
-                interruptGuard = TIMEOUT_SCHEDULER.schedule(() -> {
-                    timeoutTriggered.set(true);
-                    currentThread.interrupt();
+            T result = invokeWithIsolation(callable, transactionIsolation);
+            if (guard != null && guard.wasTimedOut(guardHandle)) {
+                handleTimeoutOnce(context, phase, timeoutMs, timeoutHandled);
+                return null;
+            }
+            if (timeoutNanos > 0L) {
+                long elapsedNanos = System.nanoTime() - startNanos;
+                if (elapsedNanos > timeoutNanos) {
                     if (metrics != null && context != null && context.getConfig() != null && context.getConfig().isEnableMetrics()) {
                         metrics.incrementHandlerTimeout(context.getMethodSignature());
                     }
-                    LogCollectInternalLogger.warn("Handler {} timed out after {}ms", phase, timeoutMs);
-                }, timeoutMs, TimeUnit.MILLISECONDS);
-            }
-
-            T result = invokeWithIsolation(callable, transactionIsolation);
-            if (timeoutTriggered.get()) {
-                handleTimeoutOnce(context, phase, timeoutMs, timeoutHandled);
-                return null;
+                    LogCollectInternalLogger.warn("Handler {} exceeded timeout {}ms by {}ms",
+                            phase,
+                            Integer.valueOf(timeoutMs),
+                            Long.valueOf(TimeUnit.NANOSECONDS.toMillis(elapsedNanos - timeoutNanos)));
+                }
             }
             return result;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            if (timeoutTriggered.get()) {
+            if (guard != null && guard.wasTimedOut(guardHandle)) {
                 handleTimeoutOnce(context, phase, timeoutMs, timeoutHandled);
             } else {
                 notifyHandlerError(context, e, phase);
@@ -621,8 +636,11 @@ public class LogCollectAspect {
             notifyHandlerError(context, e, phase);
             return null;
         } finally {
-            if (interruptGuard != null) {
-                interruptGuard.cancel(false);
+            if (guard != null) {
+                HandlerTimeoutGuard.DeregisterResult result = guard.deregister(guardHandle);
+                if (result.isOwner() && result.isTimedOut()) {
+                    handleTimeoutOnce(context, phase, timeoutMs, timeoutHandled);
+                }
             }
             if (!interruptedBefore) {
                 Thread.interrupted();
@@ -640,6 +658,44 @@ public class LogCollectAspect {
             return;
         }
         notifyHandlerError(context, new TimeoutException("Handler " + phase + " timeout=" + timeoutMs + "ms"), phase);
+    }
+
+    private HandlerTimeoutGuard resolveTimeoutGuard(LogCollectConfig config) {
+        int watchdogIntervalMs = config == null ? 100 : Math.max(10, config.getHandlerWatchdogIntervalMs());
+        int slots = config == null ? 64 : Math.max(8, config.getHandlerWatchdogSlots());
+        HandlerTimeoutGuard existing = timeoutGuardRef.get();
+        if (existing != null && existing.matches(slots, watchdogIntervalMs)) {
+            return existing;
+        }
+        HandlerTimeoutGuard candidate = new HandlerTimeoutGuard(slots, watchdogIntervalMs, this::onHandlerTimeout);
+        while (true) {
+            HandlerTimeoutGuard current = timeoutGuardRef.get();
+            if (current != null && current.matches(slots, watchdogIntervalMs)) {
+                candidate.shutdown();
+                return current;
+            }
+            if (timeoutGuardRef.compareAndSet(current, candidate)) {
+                if (current != null) {
+                    current.shutdown();
+                }
+                return candidate;
+            }
+        }
+    }
+
+    private void onHandlerTimeout(HandlerTimeoutGuard.TimeoutEvent event) {
+        if (event == null) {
+            return;
+        }
+        if (metrics != null && event.getMethodKey() != null) {
+            metrics.incrementHandlerTimeout(event.getMethodKey());
+        }
+        Thread target = event.getTargetThread();
+        String threadName = target == null ? "unknown" : target.getName();
+        LogCollectInternalLogger.warn("Handler {} timed out after {}ms, interrupted thread={}",
+                event.getPhase(),
+                Long.valueOf(event.getTimeoutMs()),
+                threadName);
     }
 
     private <T> T invokeWithIsolation(Callable<T> callable, boolean transactionIsolation) throws Exception {

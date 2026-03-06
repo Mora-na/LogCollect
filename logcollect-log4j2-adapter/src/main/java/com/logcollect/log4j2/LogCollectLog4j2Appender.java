@@ -40,14 +40,13 @@ import org.apache.logging.log4j.core.config.plugins.PluginAttribute;
 import org.apache.logging.log4j.core.config.plugins.PluginElement;
 import org.apache.logging.log4j.core.config.plugins.PluginFactory;
 import org.apache.logging.log4j.message.Message;
+import org.apache.logging.log4j.util.ReadOnlyStringMap;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.time.LocalDateTime;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -59,10 +58,14 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
     private static final String INTERNAL_LOGGER_PREFIX_V2 = "io.github.morana.logcollect.internal";
     private static final String ATTR_SECURITY_PIPELINE = "__securityPipeline";
     private static final String ATTR_SECURITY_METRICS = "__securityMetrics";
+    private static final int MAX_THREAD_NAME_CACHE_SIZE = 1024;
+    private static final ConcurrentHashMap<String, String> THREAD_NAME_CACHE =
+            new ConcurrentHashMap<String, String>(64);
 
     private volatile SecurityComponentRegistry securityRegistry;
     private volatile LogCollectMetrics metrics = NoopLogCollectMetrics.INSTANCE;
     private volatile LogCollectPipelineManager pipelineManager;
+    private volatile Set<String> requiredMdcKeys = Collections.emptySet();
 
     protected LogCollectLog4j2Appender(String name, Filter filter) {
         super(name, filter, null, true, null);
@@ -87,11 +90,30 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         this.pipelineManager = pipelineManager;
     }
 
+    public void setRequiredMdcKeys(String[] keys) {
+        if (keys == null || keys.length == 0) {
+            this.requiredMdcKeys = Collections.emptySet();
+            return;
+        }
+        Set<String> normalized = new LinkedHashSet<String>(keys.length);
+        for (String key : keys) {
+            if (key == null) {
+                continue;
+            }
+            String trimmed = key.trim();
+            if (!trimmed.isEmpty() && !MDC_KEY.equals(trimmed)) {
+                normalized.add(trimmed);
+            }
+        }
+        this.requiredMdcKeys = normalized.isEmpty() ? Collections.emptySet() : normalized;
+    }
+
     @Override
     public void append(LogEvent event) {
         LogCollectContext context = null;
         try {
-            String mdcTraceId = event.getContextData().getValue(MDC_KEY);
+            ReadOnlyStringMap contextData = event.getContextData();
+            String mdcTraceId = extractTraceId(contextData);
             if (mdcTraceId == null || mdcTraceId.isEmpty()) {
                 return;
             }
@@ -102,7 +124,7 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
 
             LogCollectConfig config = context.getConfig();
             String methodKey = context.getMethodSignature();
-            String loggerName = safeIntern(event.getLoggerName());
+            String loggerName = event.getLoggerName();
             if (isInternalLogger(loggerName)) {
                 return;
             }
@@ -129,7 +151,7 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             if (config != null && config.isPipelineEnabled()
                     && context.getPipelineQueue() != null
                     && pipelineManager != null) {
-                appendToPipeline(event, context, level, loggerName, m);
+                appendToPipeline(event, context, level, loggerName, contextData, m);
                 return;
             }
             if (!allowByBackpressure(context, level, methodKey, m)) {
@@ -150,9 +172,8 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             long eventTimestamp = event.getTimeMillis();
             String content = rawMessage;
             String throwable = extractThrowableString(event);
-            String threadName = safeIntern(event.getThreadName());
-
-            Map<String, String> mdc = new HashMap<String, String>(event.getContextData().toMap());
+            String threadName = cachedThreadName(event.getThreadName());
+            Map<String, String> mdc = extractRelevantMdc(contextData, context);
             Object securityTimer = m.startSecurityTimer();
             SecurityPipeline.ProcessedLogRecord safeRecord = securityProcess(
                     context,
@@ -207,6 +228,7 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                                   LogCollectContext context,
                                   String level,
                                   String loggerName,
+                                  ReadOnlyStringMap contextData,
                                   LogCollectMetrics metrics) {
         if (context.isClosed() || context.isClosing()) {
             context.incrementDiscardedCount();
@@ -223,16 +245,18 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             long sequence = ringBuffer.tryClaim();
             if (sequence >= 0L) {
                 MutableRawLogRecord slot = ringBuffer.getSlot(sequence);
+                Map<String, String> relevantMdc = extractRelevantMdc(contextData, context);
                 slot.populate(
                         resolveRawMessage(event),
                         level,
                         loggerName,
-                        safeIntern(event.getThreadName()),
+                        cachedThreadName(event.getThreadName()),
                         event.getTimeMillis(),
                         context.getTraceId(),
                         extractThrowableString(event),
-                        new HashMap<String, String>(event.getContextData().toMap()));
+                        relevantMdc);
                 ringBuffer.publish(sequence);
+                signalConsumer(context);
                 metrics.updatePipelineQueueUtilization(context.getMethodSignature(), ringBuffer.utilization());
                 return;
             }
@@ -242,17 +266,19 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
             metrics.updatePipelineQueueUtilization(context.getMethodSignature(), ringBuffer.utilization());
 
             if (isWarnOrAbove(level)) {
+                Map<String, String> relevantMdc = extractRelevantMdc(contextData, context);
                 RawLogRecord overflow = new RawLogRecord(
                         resolveRawMessage(event),
                         extractThrowableString(event),
                         level,
                         loggerName,
-                        safeIntern(event.getThreadName()),
+                        cachedThreadName(event.getThreadName()),
                         event.getTimeMillis(),
-                        new HashMap<String, String>(event.getContextData().toMap()),
+                        relevantMdc == null ? Collections.emptyMap() : relevantMdc,
                         context);
                 if (ringBuffer.offerOverflow(overflow)) {
                     metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
+                    signalConsumer(context);
                     return;
                 }
                 metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
@@ -264,43 +290,6 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
                 return;
             }
             metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
-            return;
-        }
-
-        if (queue instanceof PipelineQueue) {
-            PipelineQueue legacyQueue = (PipelineQueue) queue;
-            RawLogRecord raw = new RawLogRecord(
-                    resolveRawMessage(event),
-                    extractThrowableString(event),
-                    level,
-                    loggerName,
-                    safeIntern(event.getThreadName()),
-                    event.getTimeMillis(),
-                    new HashMap<String, String>(event.getContextData().toMap()),
-                    context);
-            PipelineQueue.OfferResult result = legacyQueue.offer(raw);
-            metrics.updatePipelineQueueUtilization(context.getMethodSignature(), legacyQueue.utilization());
-            if (result == PipelineQueue.OfferResult.ACCEPTED) {
-                return;
-            }
-
-            context.incrementDiscardedCount();
-            metrics.incrementPipelineBackpressure(context.getMethodSignature(), level);
-            if (result == PipelineQueue.OfferResult.BACKPRESSURE_REJECTED) {
-                metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
-                return;
-            }
-
-            if (isWarnOrAbove(level)) {
-                metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
-                DegradeFallbackHandler.handleDegraded(
-                        context,
-                        DegradeReason.PIPELINE_QUEUE_FULL.code(),
-                        Collections.singletonList(raw.content),
-                        raw.level);
-            } else {
-                metrics.incrementDiscarded(context.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
-            }
             return;
         }
 
@@ -403,14 +392,83 @@ public class LogCollectLog4j2Appender extends AbstractAppender {
         return sw.toString();
     }
 
-    private String safeIntern(String value) {
-        if (value == null) {
+    private String extractTraceId(ReadOnlyStringMap contextData) {
+        if (contextData == null) {
             return null;
         }
-        if (value.length() > 256) {
-            return new String(value);
+        Object value = contextData.getValue(MDC_KEY);
+        return value == null ? null : value.toString();
+    }
+
+    private Map<String, String> extractRelevantMdc(ReadOnlyStringMap contextData, LogCollectContext context) {
+        if (contextData == null) {
+            return null;
         }
-        return value.intern();
+        Set<String> staticKeys = requiredMdcKeys;
+        if (staticKeys != null && !staticKeys.isEmpty()) {
+            Map<String, String> result = new HashMap<String, String>(staticKeys.size() + 1, 1.0f);
+            for (String key : staticKeys) {
+                Object value = contextData.getValue(key);
+                if (value != null) {
+                    result.put(key, value.toString());
+                }
+            }
+            return result.isEmpty() ? null : result;
+        }
+
+        String[] configured = null;
+        if (context != null && context.getConfig() != null) {
+            configured = context.getConfig().getLog4j2MdcKeys();
+        }
+        if (configured == null || configured.length == 0) {
+            return null;
+        }
+
+        Map<String, String> result = new HashMap<String, String>(configured.length + 1, 1.0f);
+        for (String key : configured) {
+            if (key == null) {
+                continue;
+            }
+            String trimmed = key.trim();
+            if (trimmed.isEmpty() || MDC_KEY.equals(trimmed)) {
+                continue;
+            }
+            Object value = contextData.getValue(trimmed);
+            if (value != null) {
+                result.put(trimmed, value.toString());
+            }
+        }
+        return result.isEmpty() ? null : result;
+    }
+
+    private String cachedThreadName(String value) {
+        if (value == null) {
+            return "unknown";
+        }
+        String cached = THREAD_NAME_CACHE.get(value);
+        if (cached != null) {
+            return cached;
+        }
+        if (THREAD_NAME_CACHE.size() >= MAX_THREAD_NAME_CACHE_SIZE) {
+            return value;
+        }
+        THREAD_NAME_CACHE.putIfAbsent(value, value);
+        String reused = THREAD_NAME_CACHE.get(value);
+        return reused == null ? value : reused;
+    }
+
+    private String safeIntern(String value) {
+        return cachedThreadName(value);
+    }
+
+    private void signalConsumer(LogCollectContext context) {
+        if (context == null) {
+            return;
+        }
+        Object consumer = context.getPipelineConsumer();
+        if (consumer instanceof PipelineConsumer) {
+            ((PipelineConsumer) consumer).signal(context);
+        }
     }
 
     private LogSanitizer resolveSanitizer(LogCollectConfig config) {

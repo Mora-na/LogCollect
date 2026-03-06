@@ -1,55 +1,90 @@
 sequenceDiagram
     autonumber
     participant Biz as 业务线程（@LogCollect 方法）
-    participant App as LogCollectAppender（ROOT 监听）
-    participant Buf as Buffer（Single/Aggregate）
-    participant Flush as logcollect-flush-* 线程池
-    participant Retry as logcollect-retry-scheduler
-    participant Handler as LogCollectHandler（你的入库实现）
-    participant Degrade as 降级存储（degrade-writer/内存）
+    participant Aspect as LogCollectAspect（AOP）
+    participant PM as LogCollectPipelineManager
+    participant App as LogCollectAppender（Logback/Log4j2）
+    participant Ring as PipelineRingBuffer
+    participant Consumer as PipelineConsumer 线程
+    participant Buffer as SingleWriterBuffer / AggregateDirectBuffer
+    participant Flush as AsyncFlushExecutor（logcollect-flush-*）
+    participant Retry as ResilientFlusher（retry-scheduler）
+    participant Handler as LogCollectHandler
+    participant Degrade as DegradeFallbackHandler（FILE/MEMORY）
 
-    Note over Biz,App: log.info(...) 进入 ROOT Appender
-    Biz->>App: append(event)
-    App->>App: traceId匹配/级别过滤/采样/安全处理
+    Note over Biz,PM: 默认主路径：pipeline.enabled=true && useBuffer=true
+    Biz->>Aspect: 进入 @LogCollect 方法
+    Aspect->>Aspect: resolve config/handler/circuitBreaker
+    Aspect->>PM: registerContext(ctx)
+    PM->>Ring: new PipelineRingBuffer(ring, overflow)
+    PM->>Consumer: assign(ctx)
+    Aspect->>Handler: before(ctx)
 
-    alt 使用Buffer
-        App->>Buf: offer(...)
-        alt 达阈值 && async=true && 非final
-            Buf->>Flush: submit AsyncBufferFlushTask
-            Note over Biz,Flush: 线程池满时 CallerRunsPolicy，提交线程会直接执行
-            Flush->>Buf: drain()
-            Flush->>Handler: flush（SINGLE: appendLog；AGGREGATE: flushAggregatedLog）
-            alt 首次写入失败
-                Flush->>Retry: schedule 重试（退避）
-                Retry->>Handler: retry flush
-                alt 重试耗尽
-                    Retry->>Degrade: 降级（FILE/MEMORY）
+    loop 业务方法内 log.xxx()
+        Biz->>App: append(event)
+        App->>App: traceId匹配 + 级别/Logger过滤
+        alt Pipeline 打开且队列是 RingBuffer
+            App->>Ring: tryClaim()
+            alt claim 成功
+                App->>Ring: getSlot().populate(...)
+                App->>Ring: publish(sequence)
+            else claim 失败
+                alt WARN 及以上
+                    App->>Ring: offerOverflow(raw)
+                    alt overflow 满
+                        App->>Degrade: handleDegraded(PIPELINE_QUEUE_FULL)
+                    end
+                else 低等级
+                    App->>App: backpressure discard + metrics
                 end
             end
-        else
-            Note right of Buf: 继续缓存，等待下次阈值或方法结束
-        end
-    else
-        alt async=true
-            App->>Flush: submit writeTask
-            Flush->>Handler: 直接写入
-        else
-            App->>Handler: 业务线程直接写入
+        else Pipeline 关闭（兼容分支）
+            alt useBuffer=true
+                App->>Buffer: offer(...)（SingleMode/AggregateMode）
+                alt async=true 且阈值触发
+                    Buffer->>Flush: submit AsyncBufferFlushTask
+                    Flush->>Handler: appendLog / flushAggregatedLog
+                end
+            else useBuffer=false
+                alt async=true
+                    App->>Flush: submit writeTask
+                    Flush->>Handler: appendLog / flushAggregatedLog
+                else async=false
+                    App->>Handler: 业务线程直接写入
+                end
+            end
         end
     end
 
-    Biz->>Buf: 方法结束 closeAndFlush(final)
-    Buf->>Handler: final flush（同步）
-    alt final flush 失败
-        Buf->>Degrade: 降级（默认 FILE 异步）
+    loop Consumer 轮询 assignedContexts
+        Consumer->>Ring: pollOverflow() / tryConsume()
+        alt 有记录
+            Consumer->>Consumer: shouldCollect + SecurityPipeline
+            alt SINGLE
+                Consumer->>Buffer: SingleWriterBuffer.offer(LogEntry)
+                alt 达阈值
+                    Consumer->>Handler: 批量 appendLog（ResilientFlusher）
+                end
+            else AGGREGATE
+                Consumer->>Buffer: AggregateDirectBuffer.append(record)
+                alt 达阈值
+                    Consumer->>Handler: flushAggregatedLog（ResilientFlusher）
+                end
+            end
+            alt flush 重试耗尽
+                Consumer->>Retry: backoff retry
+                Retry->>Degrade: 持久化失败降级（FILE/MEMORY）
+            end
+        else 空闲
+            Consumer->>Consumer: idle(PARK/YIELD/SPIN)
+        end
     end
 
-    %% 线程分工速览
-    %% - 业务线程: 业务逻辑 + appender过滤 + 入缓冲 + final flush（同步）
-    %% - logcollect-flush-* : 阈值触发的异步flush、正常入库主力线程
-    %% - logcollect-retry-scheduler: flush失败后的退避重试调度/执行
-    %% - logcollect-degrade-writer: 降级到文件时的异步写线程
-    Biz->>Biz: 业务逻辑 + appender过滤 + 入缓冲 + final flush（同步）
-    Flush->>Flush: 阈值触发的异步flush、正常入库主力线程
-    Retry->>Retry: flush失败后的退避重试调度/执行
-    Degrade->>Degrade: 降级到文件时的异步写线程
+    Biz->>Aspect: 方法结束（return/throw）
+    Aspect->>PM: closeContext(ctx)
+    PM->>Consumer: closeAndFlush(ctx, handoffTimeout)
+    Consumer->>Ring: drain 到 producerCursor（超时 slot 会 skip+discard）
+    Consumer->>Buffer: final flush（SINGLE/AGGREGATE）
+    Consumer-->>PM: countDown close latch + markClosed
+    Aspect->>Handler: after(ctx)
+    Aspect->>Aspect: LogCollectContextManager.pop() + MDC 清理

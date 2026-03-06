@@ -274,7 +274,13 @@ public class SingleModeBuffer implements LogCollectBuffer {
                 DegradeFallbackHandler.handleDegraded(context, batch, DegradeReason.PERSIST_FAILED);
             }
         };
-        resilientFlusher.flushBatch(writeAction, onSuccess, onExhausted, () -> joinContents(batch), isFinal);
+        resilientFlusher.flushBatch(
+                writeAction,
+                onSuccess,
+                onExhausted,
+                () -> joinContents(batch),
+                isFinal,
+                resolveSyncRetryCapMs(context));
     }
 
     private boolean handleOversizedEntry(LogCollectContext context, LogEntry entry, long entryBytes) {
@@ -330,7 +336,7 @@ public class SingleModeBuffer implements LogCollectBuffer {
             TransactionExecutor txExecutor = resolveTransactionExecutor(context);
             txExecutor.executeInNewTransaction(() -> handler.appendLog(context, entry));
         };
-        boolean success = resilientFlusher.flush(writeAction, entry::getContent);
+        boolean success = resilientFlusher.flush(writeAction, entry::getContent, resolveSyncRetryCapMs(context));
         if (success) {
             if (breaker != null) {
                 breaker.recordSuccess();
@@ -577,6 +583,14 @@ public class SingleModeBuffer implements LogCollectBuffer {
 
     private String methodKey(LogCollectContext context) {
         return context == null ? "unknown" : context.getMethodSignature();
+    }
+
+    private long resolveSyncRetryCapMs(LogCollectContext context) {
+        LogCollectConfig config = context == null ? null : context.getConfig();
+        if (config == null) {
+            return 200L;
+        }
+        return Math.max(1L, config.getFlushRetrySyncCapMs());
     }
 
     private final class AsyncBufferFlushTask implements AsyncFlushExecutor.RejectedAwareTask {

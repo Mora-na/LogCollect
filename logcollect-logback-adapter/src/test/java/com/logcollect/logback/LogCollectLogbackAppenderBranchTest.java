@@ -20,7 +20,7 @@ import com.logcollect.api.transaction.TransactionExecutor;
 import com.logcollect.core.buffer.GlobalBufferMemoryManager;
 import com.logcollect.core.context.LogCollectContextManager;
 import com.logcollect.core.context.LogCollectIgnoreManager;
-import com.logcollect.core.pipeline.PipelineQueue;
+import com.logcollect.core.pipeline.PipelineRingBuffer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -289,7 +289,7 @@ class LogCollectLogbackAppenderBranchTest {
                 null);
 
         LogCollectContext closedCtx = newContext("trace-pipe-closed", config, mock(LogCollectHandler.class));
-        closedCtx.setPipelineQueue(new PipelineQueue(2, 1.0d, 1.0d));
+        closedCtx.setPipelineQueue(new PipelineRingBuffer(2, 1));
         closedCtx.markClosed();
         invoke(appender, "appendToPipeline", appendToPipelineTypes,
                 infoEvent, closedCtx, "INFO", "com.test.Pipeline", Collections.emptyMap(), metrics);
@@ -302,35 +302,48 @@ class LogCollectLogbackAppenderBranchTest {
         assertThat(nullQueueCtx.getTotalDiscardedCount()).isZero();
 
         LogCollectContext acceptedCtx = newContext("trace-pipe-accept", config, mock(LogCollectHandler.class));
-        PipelineQueue acceptedQueue = new PipelineQueue(4, 0.75d, 1.0d);
+        PipelineRingBuffer acceptedQueue = new PipelineRingBuffer(4, 2);
         acceptedCtx.setPipelineQueue(acceptedQueue);
         Map<String, String> mdc = new HashMap<String, String>();
         mdc.put("key", "value");
         invoke(appender, "appendToPipeline", appendToPipelineTypes,
                 infoEvent, acceptedCtx, "INFO", "com.test.Pipeline", mdc, metrics);
-        assertThat(acceptedQueue.size()).isEqualTo(1);
+        assertThat(acceptedQueue.availableCount()).isEqualTo(1);
 
         LogCollectContext fullCtx = newContext("trace-pipe-full", config, mock(LogCollectHandler.class));
-        PipelineQueue fullQueue = new PipelineQueue(1, 1.0d, 1.0d);
+        PipelineRingBuffer fullQueue = new PipelineRingBuffer(1, 1);
         fullCtx.setPipelineQueue(fullQueue);
         Map<String, String> nullMdc = null;
         invoke(appender, "appendToPipeline", appendToPipelineTypes,
                 infoEvent, fullCtx, "INFO", "com.test.Pipeline", nullMdc, metrics);
         invoke(appender, "appendToPipeline", appendToPipelineTypes,
+                infoEvent, fullCtx, "INFO", "com.test.Pipeline", nullMdc, metrics);
+        fullQueue.offerOverflow(new com.logcollect.core.pipeline.RawLogRecord(
+                "prefill",
+                null,
+                "WARN",
+                "com.test.Pipeline",
+                "main",
+                System.currentTimeMillis(),
+                Collections.<String, String>emptyMap(),
+                fullCtx));
+        invoke(appender, "appendToPipeline", appendToPipelineTypes,
                 warnEvent, fullCtx, "WARN", "com.test.Pipeline", Collections.emptyMap(), metrics);
         assertThat(fullCtx.getTotalDiscardedCount()).isEqualTo(1);
         verify(metrics).incrementDiscarded(fullCtx.getMethodSignature(), DegradeReason.PIPELINE_QUEUE_FULL.code());
-        verify(metrics).incrementPipelineBackpressure(fullCtx.getMethodSignature(), "WARN");
+        verify(metrics, atLeastOnce()).incrementPipelineBackpressure(fullCtx.getMethodSignature(), "WARN");
 
         LogCollectContext backpressureCtx = newContext("trace-pipe-backpressure", config, mock(LogCollectHandler.class));
-        PipelineQueue backpressureQueue = new PipelineQueue(4, 0.25d, 0.25d);
+        PipelineRingBuffer backpressureQueue = new PipelineRingBuffer(1, 1);
         backpressureCtx.setPipelineQueue(backpressureQueue);
         invoke(appender, "appendToPipeline", appendToPipelineTypes,
                 warnEvent, backpressureCtx, "WARN", "com.test.Pipeline", Collections.emptyMap(), metrics);
-        int sizeBeforeReject = backpressureQueue.size();
+        invoke(appender, "appendToPipeline", appendToPipelineTypes,
+                warnEvent, backpressureCtx, "WARN", "com.test.Pipeline", Collections.emptyMap(), metrics);
+        int sizeBeforeReject = backpressureQueue.availableCount();
         invoke(appender, "appendToPipeline", appendToPipelineTypes,
                 infoEvent, backpressureCtx, "INFO", "com.test.Pipeline", Collections.emptyMap(), metrics);
-        assertThat(backpressureQueue.size()).isEqualTo(sizeBeforeReject);
+        assertThat(backpressureQueue.availableCount()).isEqualTo(sizeBeforeReject);
         assertThat(backpressureCtx.getTotalDiscardedCount()).isEqualTo(1);
         verify(metrics).incrementDiscarded(backpressureCtx.getMethodSignature(), DegradeReason.PIPELINE_BACKPRESSURE.code());
         verify(metrics).incrementPipelineBackpressure(backpressureCtx.getMethodSignature(), "INFO");

@@ -87,23 +87,23 @@ class PipelineConsumerCoverageTest extends CoreUnitTestBase {
 
         SingleWriterBuffer buffer = new SingleWriterBuffer(8, parseBytes("1MB"), 8);
         LogCollectContext throwingContext = createTestContext(config, throwingHandler, CollectMode.SINGLE, buffer, null);
-        PipelineQueue throwingQueue = new PipelineQueue(4, 0.7d, 0.9d);
+        PipelineRingBuffer throwingQueue = new PipelineRingBuffer(4, 4);
         throwingContext.setPipelineQueue(throwingQueue);
         throwingContext.setAttribute("__metrics", mock(LogCollectMetrics.class));
-        throwingQueue.offer(raw(throwingContext, "boom", "INFO"));
+        publishToRing(throwingContext, "boom", "INFO");
 
-        Method processContextBatch = method("processContextBatch", LogCollectContext.class, int.class);
-        assertThat((Integer) processContextBatch.invoke(consumer, null, 1)).isZero();
+        Method processContextBatch = method("processContextBatch", LogCollectContext.class);
+        assertThat((Integer) processContextBatch.invoke(consumer, new Object[]{null})).isZero();
 
         LogCollectContext closingContext = createTestContext(config, throwingHandler, CollectMode.SINGLE, buffer, null);
-        closingContext.setPipelineQueue(new PipelineQueue(2, 0.7d, 0.9d));
+        closingContext.setPipelineQueue(new PipelineRingBuffer(2, 2));
         closingContext.markClosing();
-        assertThat((Integer) processContextBatch.invoke(consumer, closingContext, 1)).isZero();
+        assertThat((Integer) processContextBatch.invoke(consumer, closingContext)).isZero();
 
         LogCollectContext noQueueContext = createTestContext(config, throwingHandler, CollectMode.SINGLE, buffer, null);
-        assertThat((Integer) processContextBatch.invoke(consumer, noQueueContext, 1)).isZero();
+        assertThat((Integer) processContextBatch.invoke(consumer, noQueueContext)).isZero();
 
-        processContextBatch.invoke(consumer, throwingContext, 1);
+        processContextBatch.invoke(consumer, throwingContext);
         assertThat(throwingContext.getTotalDiscardedCount()).isGreaterThan(0);
 
         LogCollectContext handoffContext = createTestContext(config, mock(LogCollectHandler.class), CollectMode.SINGLE, buffer, null);
@@ -121,10 +121,10 @@ class PipelineConsumerCoverageTest extends CoreUnitTestBase {
         handoffRelease.join(200L);
 
         LogCollectContext requeueContext = createTestContext(config, mock(LogCollectHandler.class), CollectMode.SINGLE, buffer, null);
-        PipelineQueue requeueQueue = new PipelineQueue(1, 0.7d, 0.9d);
+        PipelineRingBuffer requeueQueue = new PipelineRingBuffer(2, 1);
         requeueContext.setPipelineQueue(requeueQueue);
         requeueContext.setAttribute("__metrics", mock(LogCollectMetrics.class));
-        requeueQueue.offer(raw(requeueContext, "full", "WARN"));
+        requeueQueue.offerOverflow(raw(requeueContext, "full", "WARN"));
         Method requeue = method("requeueForClosingHandoff", LogCollectContext.class, RawLogRecord.class);
         requeue.invoke(consumer, requeueContext, raw(requeueContext, "late-error", "ERROR"));
         assertThat(requeueContext.getTotalDiscardedCount()).isGreaterThan(0);
@@ -355,6 +355,26 @@ class PipelineConsumerCoverageTest extends CoreUnitTestBase {
                 System.currentTimeMillis(),
                 Collections.emptyMap(),
                 context);
+    }
+
+    private void publishToRing(LogCollectContext context, String content, String level) {
+        PipelineRingBuffer ringBuffer = (PipelineRingBuffer) context.getPipelineQueue();
+        long sequence = ringBuffer.tryClaim();
+        if (sequence >= 0L) {
+            MutableRawLogRecord slot = ringBuffer.getSlot(sequence);
+            slot.populate(
+                    content,
+                    level,
+                    "ut.logger",
+                    "main",
+                    System.currentTimeMillis(),
+                    context.getTraceId(),
+                    null,
+                    Collections.emptyMap());
+            ringBuffer.publish(sequence);
+            return;
+        }
+        ringBuffer.offerOverflow(raw(context, content, level));
     }
 
     private Method method(String name, Class<?>... parameterTypes) throws Exception {

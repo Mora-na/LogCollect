@@ -137,7 +137,7 @@
         <dependency>
             <groupId>io.github.mora-na</groupId>
             <artifactId>logcollect-bom</artifactId>
-            <version>1.1.0</version>
+            <version>2.2.0</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -385,6 +385,7 @@ logcollect:
 #### 1.4.4 配置升级与兼容策略
 
 - 新增全局参数：`pipeline.ring-buffer-capacity`、`pipeline.overflow-queue-capacity`、`pipeline.unpublished-slot-timeout-ms`、`pipeline.consumer-idle-strategy`、`buffer.memory-sync-threshold-bytes`。
+  说明：`pipeline.consumer-idle-strategy` 在 V2.2 起已废弃，改为自适应 idle（spin/yield/park）自动策略。
 - 注解新增：`@LogCollect(pipelineRingBufferCapacity=...)`。
 - 兼容保留：`pipeline.queue-capacity` 与 `@LogCollect(pipelineQueueCapacity)` 仍可用，但会映射到 ring 参数并输出迁移告警。
 - 热更新语义：`ring-buffer-capacity` 变更需要重建上下文（运行期变更会提示需重启生效）；其余新增参数按原有动态配置语义执行。
@@ -401,6 +402,56 @@ logcollect:
 - [x] 关闭协议：`closeContext -> drainAndClose` 基于游标精确排空，支持未发布槽位超时跳过并记录指标。
 - [x] 配置迁移：旧 `queue-capacity` 自动映射新 key，注解旧参数同样映射。
 - [x] 回归验证：`mvn -q -Djacoco.skip=true test` 全仓通过。
+
+### 1.5 V2.2 全流程无锁升级（S1-S9）
+
+#### 1.5.1 原设计缺陷（V2.1 残余）
+
+| 缺陷 | 影响路径 | 现象 |
+|------|---------|------|
+| `before/after` 超时保护依赖调度器 | 逐调用路径 | 每次调用产生 `schedule + cancel` 锁竞争，P99 尾延迟抖动 |
+| Consumer 线性扫描上下文 | Consumer 路径 | 并发上下文多时出现大量空轮询，扩展性退化 |
+| `onSpinWait` 反射调用 | 空闲路径 | 空转分支存在可避免的反射开销 |
+| Log4j2 全量 MDC 复制 + `intern` | 逐事件热路径 | 产生额外分配与 StringTable 竞争 |
+| 熔断器窗口遍历与同步路径 | 失败恢复路径 | 失败密集场景存在锁与 O(N) 扫描 |
+| AsyncFlushExecutor 基于阻塞队列 | 兼容路径 | flush 提交/获取依赖锁 |
+| 重试退避阻塞调用线程 | flush 失败路径 | Consumer/业务线程可被退避冻结 |
+| Metrics 重复注册检查 | 逐调用路径 | 重复 map 查找 |
+| `PipelineQueue` 仍可被误用 | 兼容路径 | 旧队列 API 误接入风险 |
+
+#### 1.5.2 升级方案与代码落地（严格对照 S1-S9）
+
+| 方案 | 最优设计 | 代码落地 | 优化效果 |
+|------|---------|---------|---------|
+| S1 | `deadline + watchdog` 替代 `ScheduledExecutorService` 超时调度 | `HandlerTimeoutGuard` + `LogCollectAspect.safeInvoke/resolveTimeoutGuard` | 正常路径不再执行调度/取消；保留中断超时语义 |
+| S2 | Consumer 事件驱动 + 批量排空 | `ConsumerReadyQueue`、`AdaptiveIdleStrategy`、`PipelineConsumer.processContextBatch`、`PipelineRingBuffer.availableCount/advanceConsumerBy`、`LogCollectContext.markPipelineReady` | 从 O(N) 轮询转为 O(active)；减少 `consumerCursor` 频繁 volatile 写 |
+| S3 | `MethodHandle` 缓存 `onSpinWait` | `SpinWaitHint` + `PipelineConsumer.onSpinWaitCompat` | 去除反射热开销，JDK8 自动回退 no-op |
+| S4 | Log4j2 定向提取字段、按需 MDC、线程名缓存替代 `intern` | `LogCollectLog4j2Appender.extractTraceId/extractRelevantMdc/cachedThreadName` + `LogCollectLog4j2AppenderAutoConfiguration` 注入 `log4j2.mdc-keys` | Log4j2 热路径消除全量 MDC 复制与 `intern` 竞争 |
+| S5 | 熔断器改为 CAS + 衰减计数器 | `LogCollectCircuitBreaker`（`maybeDecay`、原子计数、CAS 状态流转） | 去除 synchronized + 窗口遍历，失败率判定 O(1) |
+| S6 | AsyncFlushExecutor 无锁队列化 | `AsyncFlushExecutor`（`ConcurrentLinkedQueue + queueSize + LockSupport`） | 兼容路径 flush 提交/消费去锁化 |
+| S7 | 常规 flush 非阻塞重试；同步 flush 退避上限可配 | `ResilientFlusher.flushBatch`（sync/async 双分支）+ `flush.retry-sync-cap-ms` | Consumer 常规路径不被失败重试长期阻塞 |
+| S8 | Metrics 注册去重 | `LogCollectAspect.registeredBreakerGauges` | 每个 methodKey 仅首次注册 gauge |
+| S9 | 清理旧队列入口 | `PipelineQueue`（`@Deprecated(forRemoval=true)` + 构造/方法抛 `UnsupportedOperationException`） | 阻断旧 ABQ 误用，统一 RingBuffer 路径 |
+
+#### 1.5.3 配置变更（V2.2）
+
+- 新增：`handler.watchdog-interval-ms`、`handler.watchdog-slots`、`pipeline.consumer-drain-batch`、`pipeline.consumer-spin-threshold`、`pipeline.consumer-yield-threshold`、`degrade.decay-interval-seconds`、`flush.retry-sync-cap-ms`、`log4j2.mdc-keys`。
+- 废弃：`pipeline.consumer-idle-strategy`（V2.2 起固定使用自适应空闲策略；配置后 WARN 并忽略）。
+- 语义不变：`handler-timeout-ms`、`degrade.window-size`、`degrade.failure-rate-threshold`、`buffer.*`、`security.*`。
+
+#### 1.5.4 回归检查（方案逐条落实）
+
+- [x] S1：`HandlerTimeoutGuard` 已替代调度器超时保护，`LogCollectAspect` 接入并支持 watchdog 参数热生效重建。
+- [x] S2：Consumer 已切换 ready-queue 事件驱动，并启用批量排空与自适应 idle。
+- [x] S3：`SpinWaitHint` 已在 Consumer 自旋点替换反射调用。
+- [x] S4：Log4j2 已改为 `ReadOnlyStringMap.getValue` 定向提取 + 线程名缓存；`log4j2.mdc-keys` 已接入自动配置。
+- [x] S5：熔断器已改为原子计数 + 衰减模型 + CAS 状态机。
+- [x] S6：`AsyncFlushExecutor` 已替换为无锁 MPSC 任务队列实现。
+- [x] S7：`ResilientFlusher` 已支持异步重试与同步退避上限（默认 200ms）。
+- [x] S8：Metrics breaker gauge 已做 methodKey 级幂等注册。
+- [x] S9：`PipelineQueue` 已空壳化并阻止运行时使用。
+- [x] 回归结果：`mvn -pl logcollect-logback-adapter,logcollect-log4j2-adapter,logcollect-spring-boot-autoconfigure -am test -DskipITs` 全通过（`core/logback/log4j2/autoconfigure`）。
+- [x] 偏差修正：无未落地点；S1-S9 与代码实现一致。
 
 ---
 
@@ -669,7 +720,7 @@ handler.preferredMode() 返回值?
 #### 3.5.2 Legacy 兼容路径（仅 pipeline 关闭时）
 
 - 保留 `SingleModeBuffer` / `AggregateModeBuffer` 作为兼容实现。
-- `PipelineQueue` 也保留为兼容对象，供旧测试与历史配置平滑迁移。
+- `PipelineQueue` 在 V2.2 已降级为空壳兼容类（`@Deprecated(forRemoval=true)`），构造即抛 `UnsupportedOperationException`，防止误用旧队列实现。
 
 > V2.1 的关键变化是将 “多线程并发聚合” 收敛为 “Appender 并发写 RingBuffer + Consumer 单线程聚合”，因此可以安全使用复用型 `StringBuilder`，并消除大量中间对象。
 
@@ -722,9 +773,9 @@ handler.preferredMode() 返回值?
 | flush 互斥 | `AtomicBoolean.compareAndSet()` | ✅ |
 | 关闭标记 | `volatile/AtomicBoolean` | ✅ |
 | 全局内存 | `AtomicLong` + `BatchedMemoryAccountant` 批量同步 | ✅ |
-| 异步 flush 调度 | `ThreadPoolExecutor + CallerRunsPolicy` | ❌ Lock-based |
+| 异步 flush 调度 | `AsyncFlushExecutor`（`ConcurrentLinkedQueue + LockSupport`） | ✅ |
 
-> 日志采集热路径无锁（Appender 仅 CAS claim + 槽位写入 + publish）。异步 flush 线程池饱和时 `CallerRunsPolicy` 触发自然反压。
+> 日志采集热路径无锁（Appender 仅 CAS claim + 槽位写入 + publish）。兼容路径异步 flush 使用无锁队列；队列满时回退 caller-runs 形成自然反压。
 
 ### 3.8 调用时序示例
 
@@ -1005,7 +1056,7 @@ public class SimpleLogHandler implements LogCollectHandler {
 
 > **全局参数说明**：`metricsPrefix` 仅支持 `logcollect.global.metrics.prefix`，运行期修改需重启。FILE 降级参数（`max-total-size` / `ttl-days` / `encrypt-enabled`）仅支持 `logcollect.global.degrade.file.*`，方法级配置会被忽略。
 
-> **handlerTimeoutMs 实现**：基于当前线程 `Thread.interrupt()` 实现超时保护。仅作用于 `before()` / `after()`，不影响 `appendLog` / `flushAggregatedLog`。CPU 密集循环请显式检查 `Thread.currentThread().isInterrupted()`。
+> **handlerTimeoutMs 实现（V2.2）**：`deadline + watchdog`。调用侧仅注册 deadline（无调度器锁），watchdog 线程按 `handler.watchdog-interval-ms` 扫描并 `Thread.interrupt()`；仅作用于 `before()` / `after()`，不影响 `appendLog` / `flushAggregatedLog`。
 
 ### 5.2 常用配置组合
 
@@ -1510,7 +1561,12 @@ logcollect.global.pipeline.enabled=true
 logcollect.global.pipeline.ring-buffer-capacity=4096
 logcollect.global.pipeline.overflow-queue-capacity=1024
 logcollect.global.pipeline.unpublished-slot-timeout-ms=100
-logcollect.global.pipeline.consumer-idle-strategy=PARK
+# V2.2 新增：Consumer 事件驱动批量排空 + 自适应空闲策略参数
+logcollect.global.pipeline.consumer-drain-batch=64
+logcollect.global.pipeline.consumer-spin-threshold=100
+logcollect.global.pipeline.consumer-yield-threshold=200
+# 兼容旧 key（V2.2 起废弃，配置后会 WARN 且忽略）
+# logcollect.global.pipeline.consumer-idle-strategy=PARK
 # 兼容别名（已废弃）：未配置 ring-buffer-capacity 时才生效
 # logcollect.global.pipeline.queue-capacity=4096
 logcollect.global.pipeline.consumer-threads=2
@@ -1520,12 +1576,14 @@ logcollect.global.pipeline.handoff-timeout-ms=5
 logcollect.global.flush.core-threads=2
 logcollect.global.flush.max-threads=4
 logcollect.global.flush.queue-capacity=4096
+logcollect.global.flush.retry-sync-cap-ms=200
 logcollect.global.degrade.enabled=true
 logcollect.global.degrade.fail-threshold=5
 logcollect.global.degrade.storage=FILE
 logcollect.global.degrade.recover-interval-seconds=30
 logcollect.global.degrade.window-size=10
 logcollect.global.degrade.failure-rate-threshold=0.6
+logcollect.global.degrade.decay-interval-seconds=0
 logcollect.global.degrade.file.max-total-size=500MB
 logcollect.global.degrade.file.ttl-days=90
 logcollect.global.security.sanitize.enabled=true
@@ -1535,12 +1593,15 @@ logcollect.global.security.pipeline-timeout-ms=50
 logcollect.global.guard.max-content-length=32768
 logcollect.global.guard.max-throwable-length=65536
 logcollect.global.handler-timeout-ms=5000
+logcollect.global.handler.watchdog-interval-ms=100
+logcollect.global.handler.watchdog-slots=64
 logcollect.global.max-nesting-depth=10
 logcollect.global.max-total-collect=100000
 logcollect.global.max-total-collect-bytes=50MB
 logcollect.global.total-limit-policy=STOP_COLLECTING
 logcollect.global.sampling-rate=1.0
 logcollect.global.sampling-strategy=RATE
+logcollect.global.log4j2.mdc-keys=
 logcollect.global.metrics.enabled=true
 
 # ── 方法级配置 ────────────────────────────────────────────────
@@ -2067,7 +2128,7 @@ per-jdk 编译在关键业务路径（e2e-8t）上的收益如下：
 
 - [x] 单元/集成：`mvn -q -Djacoco.skip=true test` 全仓通过。
 - [x] 兼容回归：旧 `pipeline.queue-capacity` 与 `@LogCollect(pipelineQueueCapacity)` 均自动映射。
-- [x] Adapter 回归：Logback/Log4j2 的 pipeline 分支均兼容 ring + legacy queue。
+- [x] Adapter 回归：Logback/Log4j2 的 pipeline 分支均兼容 RingBuffer；`PipelineQueue` 已空壳化并阻断运行时误用。
 - [x] 文档一致性：README 已标注原设计缺陷、升级方案、优化效果、配置迁移策略。
 - [x] 性能门禁冒烟：`mvn -q -pl logcollect-benchmark -Pbenchmark-ci -Dtest=JmhCIGateTest -Djmh.mode=ci test` 通过。
 - [ ] 全量性能矩阵：12 个 GC 场景 + e2e 扩展比 + dual-build 策略结果需在专用 benchmark 环境刷新。

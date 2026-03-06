@@ -101,7 +101,10 @@ public class LogCollectProperties {
         private Guard guard = new Guard();
 
         private int handlerTimeoutMs = 5000;
+        @NestedConfigurationProperty
+        private Handler handler = new Handler();
         private int maxNestingDepth = 10;
+        private String[] log4j2MdcKeys = new String[0];
 
         @NestedConfigurationProperty
         private Metrics metrics = new Metrics();
@@ -202,12 +205,28 @@ public class LogCollectProperties {
             this.handlerTimeoutMs = handlerTimeoutMs;
         }
 
+        public Handler getHandler() {
+            return handler;
+        }
+
+        public void setHandler(Handler handler) {
+            this.handler = handler;
+        }
+
         public int getMaxNestingDepth() {
             return maxNestingDepth;
         }
 
         public void setMaxNestingDepth(int maxNestingDepth) {
             this.maxNestingDepth = maxNestingDepth;
+        }
+
+        public String[] getLog4j2MdcKeys() {
+            return log4j2MdcKeys;
+        }
+
+        public void setLog4j2MdcKeys(String[] log4j2MdcKeys) {
+            this.log4j2MdcKeys = log4j2MdcKeys;
         }
 
         public Metrics getMetrics() {
@@ -328,6 +347,9 @@ public class LogCollectProperties {
         private int overflowQueueCapacity = 1024;
         private int unpublishedSlotTimeoutMs = 100;
         private String consumerIdleStrategy = "PARK";
+        private int consumerDrainBatch = 64;
+        private int consumerSpinThreshold = 100;
+        private int consumerYieldThreshold = 200;
         private int consumerThreads = 2;
         private double backpressureWarning = 0.7d;
         private double backpressureCritical = 0.9d;
@@ -383,6 +405,30 @@ public class LogCollectProperties {
             this.consumerIdleStrategy = consumerIdleStrategy;
         }
 
+        public int getConsumerDrainBatch() {
+            return consumerDrainBatch;
+        }
+
+        public void setConsumerDrainBatch(int consumerDrainBatch) {
+            this.consumerDrainBatch = consumerDrainBatch;
+        }
+
+        public int getConsumerSpinThreshold() {
+            return consumerSpinThreshold;
+        }
+
+        public void setConsumerSpinThreshold(int consumerSpinThreshold) {
+            this.consumerSpinThreshold = consumerSpinThreshold;
+        }
+
+        public int getConsumerYieldThreshold() {
+            return consumerYieldThreshold;
+        }
+
+        public void setConsumerYieldThreshold(int consumerYieldThreshold) {
+            this.consumerYieldThreshold = consumerYieldThreshold;
+        }
+
         public int getConsumerThreads() {
             return consumerThreads;
         }
@@ -420,6 +466,7 @@ public class LogCollectProperties {
         private int coreThreads = 2;
         private int maxThreads = 4;
         private int queueCapacity = 4096;
+        private int retrySyncCapMs = 200;
 
         public int getCoreThreads() {
             return coreThreads;
@@ -444,6 +491,14 @@ public class LogCollectProperties {
         public void setQueueCapacity(int queueCapacity) {
             this.queueCapacity = queueCapacity;
         }
+
+        public int getRetrySyncCapMs() {
+            return retrySyncCapMs;
+        }
+
+        public void setRetrySyncCapMs(int retrySyncCapMs) {
+            this.retrySyncCapMs = retrySyncCapMs;
+        }
     }
 
     public static class Degrade {
@@ -454,6 +509,7 @@ public class LogCollectProperties {
         private int recoverMaxIntervalSeconds = 300;
         private int halfOpenPassCount = 3;
         private int halfOpenSuccessThreshold = 3;
+        private int decayIntervalSeconds = 0;
         private boolean blockWhenDegradeFail = false;
 
         @NestedConfigurationProperty
@@ -513,6 +569,14 @@ public class LogCollectProperties {
 
         public void setHalfOpenSuccessThreshold(int halfOpenSuccessThreshold) {
             this.halfOpenSuccessThreshold = halfOpenSuccessThreshold;
+        }
+
+        public int getDecayIntervalSeconds() {
+            return decayIntervalSeconds;
+        }
+
+        public void setDecayIntervalSeconds(int decayIntervalSeconds) {
+            this.decayIntervalSeconds = decayIntervalSeconds;
         }
 
         public boolean isBlockWhenDegradeFail() {
@@ -681,6 +745,27 @@ public class LogCollectProperties {
 
         public void setPrefix(String prefix) {
             this.prefix = prefix;
+        }
+    }
+
+    public static class Handler {
+        private int watchdogIntervalMs = 100;
+        private int watchdogSlots = 64;
+
+        public int getWatchdogIntervalMs() {
+            return watchdogIntervalMs;
+        }
+
+        public void setWatchdogIntervalMs(int watchdogIntervalMs) {
+            this.watchdogIntervalMs = watchdogIntervalMs;
+        }
+
+        public int getWatchdogSlots() {
+            return watchdogSlots;
+        }
+
+        public void setWatchdogSlots(int watchdogSlots) {
+            this.watchdogSlots = watchdogSlots;
         }
     }
 

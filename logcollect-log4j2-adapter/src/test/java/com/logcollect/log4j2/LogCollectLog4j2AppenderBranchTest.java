@@ -264,7 +264,8 @@ class LogCollectLog4j2AppenderBranchTest {
         appender.setSecurityRegistry(null);
 
         assertThat(LogCollectLog4j2Appender.createAppender("factory", null)).isNotNull();
-        assertThat(invoke(appender, "safeIntern", new Class[]{String.class}, (Object) null)).isNull();
+        assertThat(invoke(appender, "safeIntern", new Class[]{String.class}, (Object) null))
+                .isEqualTo("unknown");
         assertThat(invoke(appender, "safeIntern", new Class[]{String.class}, "worker-1")).isEqualTo("worker-1");
 
         LogCollectConfig disabled = LogCollectConfig.frameworkDefaults();
