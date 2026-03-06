@@ -137,7 +137,7 @@
         <dependency>
             <groupId>io.github.mora-na</groupId>
             <artifactId>logcollect-bom</artifactId>
-            <version>2.2.0</version>
+            <version>2.2.2</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
