@@ -539,5 +539,958 @@
         "e2e-8t-sensitive": 0.9
       }
     }
+  },
+  "ciStressBaselines": {
+    "github-ubuntu-latest": {
+      "_meta": {
+        "frameworkVersion": "2.2.3",
+        "commitHash": "e6cafe16fd88",
+        "refreshDate": "2026-03-07",
+        "runs": 20,
+        "buildStrategy": "per-jdk",
+        "updatedAt": "2026-03-07T14:50:48Z",
+        "updatedBy": "Mora-na"
+      },
+      "jdk8": {
+        "_meta": {
+          "updatedAt": "2026-03-07T14:42:30Z",
+          "updatedBy": "Mora-na",
+          "profile": "github-ubuntu-latest",
+          "jdk": "1.8.0_482",
+          "jdkKey": "jdk8",
+          "javaHome": "/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/8.0.482-8/x64",
+          "os": "Linux 6.14.0-1017-azure",
+          "cpu": "x86_64",
+          "sampleRuns": 20,
+          "sampleMinPerMetric": 5,
+          "sampleTrimCountEachSide": 1,
+          "note": "CI stress baseline from 20 smoke runs (github-ubuntu-latest)",
+          "frameworkVersion": "2.2.3",
+          "commitHash": "e6cafe16fd88",
+          "refreshDate": "2026-03-07",
+          "runs": 20,
+          "buildStrategy": "per-jdk",
+          "jvmOpts": "-Xms512m -Xmx512m -XX:+UseG1GC",
+          "springProfiles": "stress",
+          "maxThreadCap": 128,
+          "taskTimeoutSeconds": 60,
+          "runnerMemoryMb": 15989,
+          "githubRunId": 22800990875,
+          "githubRunNumber": 7,
+          "githubRunAttempt": 1,
+          "githubSha": "e6cafe16fd88e12e89b7b647727beceb0474de3e",
+          "githubRefName": "main",
+          "githubWorkflow": "Refresh Stress CI Baseline",
+          "githubRepository": "Mora-na/LogCollect"
+        },
+        "stressGate": {
+          "aggregation": {
+            "runs": 5,
+            "trimCountEachSide": 1,
+            "minSamplesAfterFilter": 3
+          },
+          "throughputMinMultiplier": 0.8,
+          "ratioMinMultiplier": 0.75,
+          "gcMaxMultiplier": 4.0,
+          "gcAbsoluteMinPercent": 2.0,
+          "gcAbsoluteMaxPercent": 5.0,
+          "throughputBaselines": {
+            "baseline-1t-nop": 3720330.2,
+            "e2e-1t-clean": 1036209.1,
+            "e2e-8t-clean": 1924350.3,
+            "e2e-8t-sensitive": 1973163.2,
+            "isolated-1t-clean": 930793.2,
+            "isolated-8t-clean": 1986344.3,
+            "isolated-8t-sensitive": 1764980.4
+          },
+          "ratioBaselines": {
+            "isolated-8t-clean/isolated-1t-clean": 2.143,
+            "e2e-8t-clean/e2e-1t-clean": 1.912
+          },
+          "gcBaselines": {
+            "baseline-1t-nop": 0.0,
+            "e2e-1t-clean": 4.36,
+            "e2e-8t-clean": 1.39,
+            "e2e-8t-sensitive": 0.84,
+            "isolated-1t-clean": 4.52,
+            "isolated-8t-clean": 4.23,
+            "isolated-8t-sensitive": 3.6
+          },
+          "stats": {
+            "throughput": {
+              "baseline-1t-nop": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 2597353.48,
+                "max": 4458009.47,
+                "p50": 3765763.97,
+                "p90": 4407386.08,
+                "trimmedMean": 3720330.23
+              },
+              "e2e-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 749713.43,
+                "max": 1393877.52,
+                "p50": 958092.98,
+                "p90": 1333489.0,
+                "trimmedMean": 1036209.06
+              },
+              "e2e-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1756014.9,
+                "max": 2118094.65,
+                "p50": 1935703.94,
+                "p90": 2062488.64,
+                "trimmedMean": 1924350.27
+              },
+              "e2e-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1824046.63,
+                "max": 2158683.71,
+                "p50": 1951744.86,
+                "p90": 2114849.47,
+                "trimmedMean": 1973163.19
+              },
+              "isolated-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 751319.83,
+                "max": 1058661.07,
+                "p50": 911066.61,
+                "p90": 1024805.99,
+                "trimmedMean": 930793.17
+              },
+              "isolated-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1863383.76,
+                "max": 2112738.65,
+                "p50": 1985183.54,
+                "p90": 2075525.52,
+                "trimmedMean": 1986344.31
+              },
+              "isolated-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1496969.53,
+                "max": 2022093.0,
+                "p50": 1758884.22,
+                "p90": 1959720.89,
+                "trimmedMean": 1764980.41
+              }
+            },
+            "ratio": {
+              "isolated-8t-clean/isolated-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1.8418,
+                "max": 2.7281,
+                "p50": 2.1617,
+                "p90": 2.3785,
+                "trimmedMean": 2.1432
+              },
+              "e2e-8t-clean/e2e-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1.3422,
+                "max": 2.6173,
+                "p50": 1.9662,
+                "p90": 2.355,
+                "trimmedMean": 1.9121
+              }
+            },
+            "gc": {
+              "baseline-1t-nop": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 0.0,
+                "p50": 0.0,
+                "p90": 0.0,
+                "trimmedMean": 0.0
+              },
+              "e2e-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 9.7463,
+                "p50": 6.1224,
+                "p90": 9.1718,
+                "trimmedMean": 4.361
+              },
+              "e2e-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.878,
+                "max": 3.1932,
+                "p50": 1.2056,
+                "p90": 2.6551,
+                "trimmedMean": 1.3909
+              },
+              "e2e-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 1.9558,
+                "p50": 0.9759,
+                "p90": 1.4884,
+                "trimmedMean": 0.8428
+              },
+              "isolated-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 11.2977,
+                "p50": 3.4988,
+                "p90": 10.8233,
+                "trimmedMean": 4.5174
+              },
+              "isolated-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 2.36,
+                "max": 5.1272,
+                "p50": 4.3432,
+                "p90": 4.6421,
+                "trimmedMean": 4.2298
+              },
+              "isolated-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 5.7951,
+                "p50": 3.7484,
+                "p90": 5.19,
+                "trimmedMean": 3.5994
+              }
+            }
+          }
+        }
+      },
+      "jdk11": {
+        "_meta": {
+          "updatedAt": "2026-03-07T14:45:22Z",
+          "updatedBy": "Mora-na",
+          "profile": "github-ubuntu-latest",
+          "jdk": "11.0.30",
+          "jdkKey": "jdk11",
+          "javaHome": "/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/11.0.30-7/x64",
+          "os": "Linux 6.14.0-1017-azure",
+          "cpu": "x86_64",
+          "sampleRuns": 20,
+          "sampleMinPerMetric": 5,
+          "sampleTrimCountEachSide": 1,
+          "note": "CI stress baseline from 20 smoke runs (github-ubuntu-latest)",
+          "frameworkVersion": "2.2.3",
+          "commitHash": "e6cafe16fd88",
+          "refreshDate": "2026-03-07",
+          "runs": 20,
+          "buildStrategy": "per-jdk",
+          "jvmOpts": "-Xms512m -Xmx512m -XX:+UseG1GC",
+          "springProfiles": "stress",
+          "maxThreadCap": 128,
+          "taskTimeoutSeconds": 60,
+          "runnerMemoryMb": 15989,
+          "githubRunId": 22800990875,
+          "githubRunNumber": 7,
+          "githubRunAttempt": 1,
+          "githubSha": "e6cafe16fd88e12e89b7b647727beceb0474de3e",
+          "githubRefName": "main",
+          "githubWorkflow": "Refresh Stress CI Baseline",
+          "githubRepository": "Mora-na/LogCollect"
+        },
+        "stressGate": {
+          "aggregation": {
+            "runs": 5,
+            "trimCountEachSide": 1,
+            "minSamplesAfterFilter": 3
+          },
+          "throughputMinMultiplier": 0.8,
+          "ratioMinMultiplier": 0.75,
+          "gcMaxMultiplier": 4.0,
+          "gcAbsoluteMinPercent": 2.0,
+          "gcAbsoluteMaxPercent": 5.0,
+          "throughputBaselines": {
+            "baseline-1t-nop": 3181146.2,
+            "e2e-1t-clean": 901397.3,
+            "e2e-8t-clean": 1845186.2,
+            "e2e-8t-sensitive": 1866249.3,
+            "isolated-1t-clean": 683435.6,
+            "isolated-8t-clean": 2386103.4,
+            "isolated-8t-sensitive": 2333915.9
+          },
+          "ratioBaselines": {
+            "isolated-8t-clean/isolated-1t-clean": 3.504,
+            "e2e-8t-clean/e2e-1t-clean": 2.036
+          },
+          "gcBaselines": {
+            "baseline-1t-nop": 0.0,
+            "e2e-1t-clean": 1.4,
+            "e2e-8t-clean": 1.77,
+            "e2e-8t-sensitive": 1.6,
+            "isolated-1t-clean": 1.82,
+            "isolated-8t-clean": 2.51,
+            "isolated-8t-sensitive": 2.1
+          },
+          "stats": {
+            "throughput": {
+              "baseline-1t-nop": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 2611226.98,
+                "max": 4609440.28,
+                "p50": 3000745.36,
+                "p90": 4247806.02,
+                "trimmedMean": 3181146.17
+              },
+              "e2e-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 769174.95,
+                "max": 1173802.03,
+                "p50": 903183.86,
+                "p90": 1006731.61,
+                "trimmedMean": 901397.28
+              },
+              "e2e-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1541157.69,
+                "max": 2014663.59,
+                "p50": 1864664.59,
+                "p90": 1934758.33,
+                "trimmedMean": 1845186.15
+              },
+              "e2e-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1591228.5,
+                "max": 2041505.35,
+                "p50": 1872236.73,
+                "p90": 1957946.11,
+                "trimmedMean": 1866249.28
+              },
+              "isolated-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 589998.01,
+                "max": 824188.13,
+                "p50": 688502.77,
+                "p90": 735864.09,
+                "trimmedMean": 683435.63
+              },
+              "isolated-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 2241340.96,
+                "max": 2632741.61,
+                "p50": 2380471.24,
+                "p90": 2532715.44,
+                "trimmedMean": 2386103.41
+              },
+              "isolated-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1858939.84,
+                "max": 2573384.4,
+                "p50": 2412505.36,
+                "p90": 2527638.41,
+                "trimmedMean": 2333915.88
+              }
+            },
+            "ratio": {
+              "isolated-8t-clean/isolated-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 2.7725,
+                "max": 4.2801,
+                "p50": 3.4829,
+                "p90": 3.8392,
+                "trimmedMean": 3.5041
+              },
+              "e2e-8t-clean/e2e-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1.7164,
+                "max": 2.4448,
+                "p50": 2.0796,
+                "p90": 2.2056,
+                "trimmedMean": 2.0355
+              }
+            },
+            "gc": {
+              "baseline-1t-nop": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 0.0,
+                "p50": 0.0,
+                "p90": 0.0,
+                "trimmedMean": 0.0
+              },
+              "e2e-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 7.8262,
+                "p50": 0.0,
+                "p90": 5.316,
+                "trimmedMean": 1.3976
+              },
+              "e2e-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.9639,
+                "max": 3.1229,
+                "p50": 1.8723,
+                "p90": 2.5437,
+                "trimmedMean": 1.7708
+              },
+              "e2e-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 3.4595,
+                "p50": 1.9275,
+                "p90": 2.6201,
+                "trimmedMean": 1.5994
+              },
+              "isolated-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 4.7879,
+                "p50": 1.1935,
+                "p90": 4.2493,
+                "trimmedMean": 1.8219
+              },
+              "isolated-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1.1924,
+                "max": 4.3641,
+                "p50": 2.2653,
+                "p90": 3.9179,
+                "trimmedMean": 2.5145
+              },
+              "isolated-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 6.8656,
+                "p50": 2.6478,
+                "p90": 4.0455,
+                "trimmedMean": 2.1043
+              }
+            }
+          }
+        }
+      },
+      "jdk17": {
+        "_meta": {
+          "updatedAt": "2026-03-07T14:48:05Z",
+          "updatedBy": "Mora-na",
+          "profile": "github-ubuntu-latest",
+          "jdk": "17.0.18",
+          "jdkKey": "jdk17",
+          "javaHome": "/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.18-8/x64",
+          "os": "Linux 6.14.0-1017-azure",
+          "cpu": "x86_64",
+          "sampleRuns": 20,
+          "sampleMinPerMetric": 5,
+          "sampleTrimCountEachSide": 1,
+          "note": "CI stress baseline from 20 smoke runs (github-ubuntu-latest)",
+          "frameworkVersion": "2.2.3",
+          "commitHash": "e6cafe16fd88",
+          "refreshDate": "2026-03-07",
+          "runs": 20,
+          "buildStrategy": "per-jdk",
+          "jvmOpts": "-Xms512m -Xmx512m -XX:+UseG1GC",
+          "springProfiles": "stress",
+          "maxThreadCap": 128,
+          "taskTimeoutSeconds": 60,
+          "runnerMemoryMb": 15989,
+          "githubRunId": 22800990875,
+          "githubRunNumber": 7,
+          "githubRunAttempt": 1,
+          "githubSha": "e6cafe16fd88e12e89b7b647727beceb0474de3e",
+          "githubRefName": "main",
+          "githubWorkflow": "Refresh Stress CI Baseline",
+          "githubRepository": "Mora-na/LogCollect"
+        },
+        "stressGate": {
+          "aggregation": {
+            "runs": 5,
+            "trimCountEachSide": 1,
+            "minSamplesAfterFilter": 3
+          },
+          "throughputMinMultiplier": 0.8,
+          "ratioMinMultiplier": 0.75,
+          "gcMaxMultiplier": 4.0,
+          "gcAbsoluteMinPercent": 2.0,
+          "gcAbsoluteMaxPercent": 5.0,
+          "throughputBaselines": {
+            "baseline-1t-nop": 3093881.5,
+            "e2e-1t-clean": 1358698.4,
+            "e2e-8t-clean": 1966878.3,
+            "e2e-8t-sensitive": 2062724.7,
+            "isolated-1t-clean": 745683.1,
+            "isolated-8t-clean": 2526951.9,
+            "isolated-8t-sensitive": 2694368.8
+          },
+          "ratioBaselines": {
+            "isolated-8t-clean/isolated-1t-clean": 3.393,
+            "e2e-8t-clean/e2e-1t-clean": 1.5
+          },
+          "gcBaselines": {
+            "baseline-1t-nop": 0.0,
+            "e2e-1t-clean": 1.49,
+            "e2e-8t-clean": 2.62,
+            "e2e-8t-sensitive": 1.43,
+            "isolated-1t-clean": 1.95,
+            "isolated-8t-clean": 2.94,
+            "isolated-8t-sensitive": 3.58
+          },
+          "stats": {
+            "throughput": {
+              "baseline-1t-nop": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1793300.14,
+                "max": 4318300.74,
+                "p50": 2920245.15,
+                "p90": 4025768.41,
+                "trimmedMean": 3093881.49
+              },
+              "e2e-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 918112.38,
+                "max": 1594896.89,
+                "p50": 1469229.12,
+                "p90": 1575524.48,
+                "trimmedMean": 1358698.38
+              },
+              "e2e-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1785328.21,
+                "max": 2084893.76,
+                "p50": 1985163.19,
+                "p90": 2054988.74,
+                "trimmedMean": 1966878.27
+              },
+              "e2e-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1843208.42,
+                "max": 2228871.04,
+                "p50": 2080258.3,
+                "p90": 2174334.78,
+                "trimmedMean": 2062724.74
+              },
+              "isolated-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 667141.52,
+                "max": 846392.54,
+                "p50": 756150.89,
+                "p90": 782161.09,
+                "trimmedMean": 745683.11
+              },
+              "isolated-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 2150951.38,
+                "max": 2875975.4,
+                "p50": 2504413.91,
+                "p90": 2663612.14,
+                "trimmedMean": 2526951.88
+              },
+              "isolated-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 2143688.81,
+                "max": 3017076.3,
+                "p50": 2753900.78,
+                "p90": 2950731.18,
+                "trimmedMean": 2694368.78
+              }
+            },
+            "ratio": {
+              "isolated-8t-clean/isolated-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 2.8303,
+                "max": 3.9744,
+                "p50": 3.397,
+                "p90": 3.7612,
+                "trimmedMean": 3.3925
+              },
+              "e2e-8t-clean/e2e-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1.1935,
+                "max": 2.1146,
+                "p50": 1.3791,
+                "p90": 2.0291,
+                "trimmedMean": 1.4996
+              }
+            },
+            "gc": {
+              "baseline-1t-nop": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 0.0,
+                "p50": 0.0,
+                "p90": 0.0,
+                "trimmedMean": 0.0
+              },
+              "e2e-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 8.4994,
+                "p50": 0.0,
+                "p90": 7.1294,
+                "trimmedMean": 1.4852
+              },
+              "e2e-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1.225,
+                "max": 3.388,
+                "p50": 2.7079,
+                "p90": 3.1045,
+                "trimmedMean": 2.616
+              },
+              "e2e-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 3.6864,
+                "p50": 1.1569,
+                "p90": 3.1441,
+                "trimmedMean": 1.4269
+              },
+              "isolated-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 6.1797,
+                "p50": 0.0,
+                "p90": 5.5664,
+                "trimmedMean": 1.9548
+              },
+              "isolated-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1.5597,
+                "max": 4.0361,
+                "p50": 3.062,
+                "p90": 3.9677,
+                "trimmedMean": 2.9425
+              },
+              "isolated-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 7.1901,
+                "p50": 4.4835,
+                "p90": 5.981,
+                "trimmedMean": 3.5827
+              }
+            }
+          }
+        }
+      },
+      "jdk21": {
+        "_meta": {
+          "updatedAt": "2026-03-07T14:50:48Z",
+          "updatedBy": "Mora-na",
+          "profile": "github-ubuntu-latest",
+          "jdk": "21.0.10",
+          "jdkKey": "jdk21",
+          "javaHome": "/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.10-7/x64",
+          "os": "Linux 6.14.0-1017-azure",
+          "cpu": "x86_64",
+          "sampleRuns": 20,
+          "sampleMinPerMetric": 5,
+          "sampleTrimCountEachSide": 1,
+          "note": "CI stress baseline from 20 smoke runs (github-ubuntu-latest)",
+          "frameworkVersion": "2.2.3",
+          "commitHash": "e6cafe16fd88",
+          "refreshDate": "2026-03-07",
+          "runs": 20,
+          "buildStrategy": "per-jdk",
+          "jvmOpts": "-Xms512m -Xmx512m -XX:+UseG1GC",
+          "springProfiles": "stress",
+          "maxThreadCap": 128,
+          "taskTimeoutSeconds": 60,
+          "runnerMemoryMb": 15989,
+          "githubRunId": 22800990875,
+          "githubRunNumber": 7,
+          "githubRunAttempt": 1,
+          "githubSha": "e6cafe16fd88e12e89b7b647727beceb0474de3e",
+          "githubRefName": "main",
+          "githubWorkflow": "Refresh Stress CI Baseline",
+          "githubRepository": "Mora-na/LogCollect"
+        },
+        "stressGate": {
+          "aggregation": {
+            "runs": 5,
+            "trimCountEachSide": 1,
+            "minSamplesAfterFilter": 3
+          },
+          "throughputMinMultiplier": 0.8,
+          "ratioMinMultiplier": 0.75,
+          "gcMaxMultiplier": 4.0,
+          "gcAbsoluteMinPercent": 2.0,
+          "gcAbsoluteMaxPercent": 5.0,
+          "throughputBaselines": {
+            "baseline-1t-nop": 3219679.0,
+            "e2e-1t-clean": 1221413.4,
+            "e2e-8t-clean": 1984079.5,
+            "e2e-8t-sensitive": 1969420.8,
+            "isolated-1t-clean": 740567.9,
+            "isolated-8t-clean": 2818709.6,
+            "isolated-8t-sensitive": 2935657.1
+          },
+          "ratioBaselines": {
+            "isolated-8t-clean/isolated-1t-clean": 3.802,
+            "e2e-8t-clean/e2e-1t-clean": 1.677
+          },
+          "gcBaselines": {
+            "baseline-1t-nop": 0.0,
+            "e2e-1t-clean": 2.87,
+            "e2e-8t-clean": 2.29,
+            "e2e-8t-sensitive": 1.84,
+            "isolated-1t-clean": 1.79,
+            "isolated-8t-clean": 4.23,
+            "isolated-8t-sensitive": 2.97
+          },
+          "stats": {
+            "throughput": {
+              "baseline-1t-nop": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 2666241.28,
+                "max": 4056426.19,
+                "p50": 2996436.13,
+                "p90": 3780087.47,
+                "trimmedMean": 3219678.97
+              },
+              "e2e-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 971226.84,
+                "max": 1769134.65,
+                "p50": 1202021.5,
+                "p90": 1505604.78,
+                "trimmedMean": 1221413.37
+              },
+              "e2e-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1874874.89,
+                "max": 2260262.62,
+                "p50": 1976457.53,
+                "p90": 2104018.91,
+                "trimmedMean": 1984079.49
+              },
+              "e2e-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1755129.31,
+                "max": 2129051.01,
+                "p50": 1978820.7,
+                "p90": 2070934.16,
+                "trimmedMean": 1969420.75
+              },
+              "isolated-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 596066.12,
+                "max": 807953.43,
+                "p50": 745116.42,
+                "p90": 777364.25,
+                "trimmedMean": 740567.91
+              },
+              "isolated-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1954240.29,
+                "max": 3263688.43,
+                "p50": 2773433.95,
+                "p90": 3197425.33,
+                "trimmedMean": 2818709.64
+              },
+              "isolated-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 2285294.21,
+                "max": 3403949.46,
+                "p50": 2934945.66,
+                "p90": 3206375.89,
+                "trimmedMean": 2935657.11
+              }
+            },
+            "ratio": {
+              "isolated-8t-clean/isolated-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 2.6344,
+                "max": 5.4754,
+                "p50": 3.8238,
+                "p90": 4.349,
+                "trimmedMean": 3.8017
+              },
+              "e2e-8t-clean/e2e-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1.0671,
+                "max": 2.0278,
+                "p50": 1.7513,
+                "p90": 1.99,
+                "trimmedMean": 1.6769
+              }
+            },
+            "gc": {
+              "baseline-1t-nop": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 0.0,
+                "p50": 0.0,
+                "p90": 0.0,
+                "trimmedMean": 0.0
+              },
+              "e2e-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 11.715,
+                "p50": 0.0,
+                "p90": 9.8533,
+                "trimmedMean": 2.8688
+              },
+              "e2e-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1.1811,
+                "max": 3.4186,
+                "p50": 2.1715,
+                "p90": 3.2256,
+                "trimmedMean": 2.293
+              },
+              "e2e-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 2.9318,
+                "p50": 2.3123,
+                "p90": 2.7661,
+                "trimmedMean": 1.8438
+              },
+              "isolated-1t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 8.2285,
+                "p50": 0.0,
+                "p90": 6.8917,
+                "trimmedMean": 1.7946
+              },
+              "isolated-8t-clean": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 1.9542,
+                "max": 5.7115,
+                "p50": 4.5917,
+                "p90": 5.5799,
+                "trimmedMean": 4.2257
+              },
+              "isolated-8t-sensitive": {
+                "runs": 20,
+                "kept": 18,
+                "trimCountEachSide": 1,
+                "min": 0.0,
+                "max": 6.3826,
+                "p50": 4.4195,
+                "p90": 5.3676,
+                "trimmedMean": 2.9665
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }
