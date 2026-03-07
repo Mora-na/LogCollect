@@ -16,7 +16,9 @@ Environment:
 
 Notes:
   - Maven itself must run on JDK 17+ because Spring Boot 3.x Maven plugins are loaded in the Maven JVM.
-  - Sample Boot 2.7 modules use Maven Toolchains to select JDK 8 during the same reactor build.
+  - By default this script builds the root project's default reactor only.
+  - Add `-Pwith-samples` if you explicitly want to include `logcollect-samples`.
+  - When `-Pwith-samples` is enabled, Boot 2.7 sample modules use Maven Toolchains to select JDK 8.
 USAGE
 }
 

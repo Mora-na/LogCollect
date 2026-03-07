@@ -104,6 +104,22 @@ def find_log(root: Path, module: str, suffix: str) -> Optional[Path]:
     return matches[0] if matches else None
 
 
+def find_app_log(root: Path, module: str) -> Optional[Path]:
+    direct = find_log(root, module, ".log")
+    if direct is not None:
+        return direct
+
+    candidates = []
+    for path in root.rglob("*.log"):
+        if path.name.endswith(".console.log"):
+            continue
+        if module not in path.parts:
+            continue
+        candidates.append(path)
+
+    return sorted(candidates)[0] if candidates else None
+
+
 def count_markers(path: Optional[Path], marker: str) -> int:
     if path is None or not path.exists():
         return 0
@@ -162,7 +178,7 @@ def collect_reports(input_root: Path) -> Dict[str, ModuleReport]:
 
     for module, report in reports.items():
         console_path = find_log(input_root, module, ".console.log")
-        app_path = find_log(input_root, module, ".log")
+        app_path = find_app_log(input_root, module)
 
         if console_path is not None:
             report.console_log = str(console_path)

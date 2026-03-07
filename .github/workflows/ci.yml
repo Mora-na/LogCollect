@@ -46,14 +46,14 @@ jobs:
           mvn -B clean verify \
             -Dspring-boot.version=${{ matrix.spring-boot }} \
             -Dlog-framework=${{ matrix.log-framework }} \
-            -pl '!logcollect-samples,!logcollect-benchmark' \
+            -pl '!logcollect-benchmark' \
             -Dgpg.skip=true \
             -DskipPublishing=true \
             -DskipDeploy=true \
             -Djacoco.skip=true
 
   full-build-with-toolchains:
-    name: Full Build / All Modules
+    name: Default Reactor / Toolchains
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -75,7 +75,7 @@ jobs:
           key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             ${{ runner.os }}-maven-
-      - name: Full reactor verify with toolchains
+      - name: Default reactor verify with toolchains
         run: |
           export JAVA8_HOME="${JAVA_HOME_8_X64}"
           export JAVA17_HOME="${JAVA_HOME_17_X64}"
@@ -142,7 +142,7 @@ jobs:
           retention-days: 30
           path: |
             logs/logcollect-samples/${{ matrix.module }}.console.log
-            logs/logcollect-samples/${{ matrix.module }}.log
+            logcollect-samples/${{ matrix.module }}/logs/logcollect-samples/*.log
             logs/logcollect-samples/sample-batch-summary.txt
             logs/logcollect-samples/sample-matrix-report.md
             logs/logcollect-samples/sample-matrix-report.json
@@ -231,7 +231,7 @@ jobs:
           EOF
       - name: Checkstyle Quality Gate
         run: |
-          mvn -B -pl '!logcollect-samples,!logcollect-benchmark' -am \
+          mvn -B -pl '!logcollect-benchmark' -am \
             org.apache.maven.plugins:maven-checkstyle-plugin:3.3.1:check \
             -Dcheckstyle.config.location=.github/checkstyle/checkstyle.xml \
             -Dcheckstyle.failOnViolation=true \
@@ -277,7 +277,7 @@ jobs:
             SONAR_ARGS+=("-Dsonar.organization=${{ steps.sonar.outputs.organization }}")
           fi
 
-          mvn -B -pl '!logcollect-samples,!logcollect-benchmark' -am \
+          mvn -B -pl '!logcollect-benchmark' -am \
             org.sonarsource.scanner.maven:sonar-maven-plugin:3.11.0.3922:sonar \
             "${SONAR_ARGS[@]}" \
             -DskipTests=true \
