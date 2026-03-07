@@ -104,4 +104,47 @@ class LogLinePatternParserTest {
                 .contains("req-raw-1")
                 .contains("raw-msg");
     }
+
+    @Test
+    void format_longNamedTokensPreferFullMatchOverAliases() {
+        LogEntry entry = LogEntry.builder()
+                .traceId("trace-2")
+                .content("payload")
+                .level("INFO")
+                .timestamp(1706745600000L)
+                .threadName("worker-1")
+                .loggerName("com.example.AsyncLogHandler")
+                .build();
+
+        String result = LogLinePatternParser.format(
+                entry,
+                "[%thread] %loggerFull - %msg");
+
+        assertThat(result).isEqualTo("[worker-1] com.example.AsyncLogHandler - payload");
+    }
+
+    @Test
+    void formatRaw_cleanedConsolePattern_doesNotLeakAliasSuffixes() {
+        Map<String, String> mdc = new HashMap<String, String>();
+        mdc.put("traceId", "trace-raw-2");
+
+        String result = LogLinePatternParser.formatRaw(
+                "trace-raw-2",
+                "inCollectContext=true",
+                "INFO",
+                1706745600000L,
+                "DemoQuartzScheduler_Worker-1",
+                "com.example.AsyncLogHandler",
+                null,
+                mdc,
+                "[%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %X{traceId} [%thread] %loggerFull - %msg%n]");
+
+        assertThat(result)
+                .matches("\\[\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3} INFO\\s+trace-raw-2 "
+                        + "\\[DemoQuartzScheduler_Worker-1] com\\.example\\.AsyncLogHandler - "
+                        + "inCollectContext=true\\R]")
+                .doesNotContain("hread")
+                .doesNotContain("truesg")
+                .doesNotContain("HandlerFull");
+    }
 }

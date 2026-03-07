@@ -21,7 +21,7 @@ public final class LogLinePatternParser {
 
     private static final Pattern TOKEN_PATTERN = Pattern.compile(
             "%(-)?(\\d+)?(?:\\.(\\d+))?"
-                    + "(d|p|level|t|thread|c|logger|C|loggerFull|m|msg|ex|throwable|wEx|n|X)"
+                    + "(loggerFull|throwable|thread|level|logger|msg|wEx|d|p|t|c|C|m|ex|n|X)"
                     + "(?:\\{([^}]*)\\})?");
 
     private static final ConcurrentMap<String, List<PatternToken>> CACHE =
