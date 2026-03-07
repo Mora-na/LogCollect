@@ -27,6 +27,7 @@ public class LogCollectRunnableWrapper implements Runnable {
      */
     @Override
     public void run() {
+        LogCollectContextSnapshot previous = LogCollectContextUtils.captureCurrentSnapshot();
         LogCollectContextManager.restoreSnapshot(snapshot);
         try {
             delegate.run();
@@ -35,7 +36,7 @@ public class LogCollectRunnableWrapper implements Runnable {
         } catch (Error e) {
             throw e;
         } finally {
-            LogCollectContextManager.clearSnapshotContext();
+            LogCollectContextUtils.restorePreviousSnapshot(previous);
         }
     }
 }

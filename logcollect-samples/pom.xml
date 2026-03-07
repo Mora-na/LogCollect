@@ -8,19 +8,145 @@
         <!--<groupId>org.dpdns.mora</groupId>-->
         <groupId>io.github.mora-na</groupId>
         <artifactId>logcollect-parent</artifactId>
-        <version>2.2.2</version>
+        <version>2.2.3</version>
     </parent>
 
     <artifactId>logcollect-samples</artifactId>
     <packaging>pom</packaging>
     <name>logcollect-samples</name>
 
+    <properties>
+        <sample.shared.variant.java.dir></sample.shared.variant.java.dir>
+        <sample.shared.variant.resources.dir></sample.shared.variant.resources.dir>
+        <toolchain.jdk.version>[1.8,1.9)</toolchain.jdk.version>
+        <toolchain.jdk.mode>IfMatch</toolchain.jdk.mode>
+        <toolchain.jdk.discover>true</toolchain.jdk.discover>
+        <toolchain.jdk.comparator>lts,current,env,version,vendor</toolchain.jdk.comparator>
+    </properties>
+
     <modules>
         <module>logcollect-sample-boot27-logback</module>
         <module>logcollect-sample-boot27-log4j2</module>
-        <module>logcollect-sample-boot3</module>
-        <module>logcollect-sample-webflux</module>
-        <module>logcollect-sample-all-async</module>
-        <module>logcollect-sample-nacos</module>
+        <module>logcollect-sample-boot30-logback</module>
+        <module>logcollect-sample-boot30-log4j2</module>
+        <module>logcollect-sample-boot32-logback</module>
+        <module>logcollect-sample-boot32-log4j2</module>
+        <module>logcollect-sample-boot34-logback</module>
+        <module>logcollect-sample-boot34-log4j2</module>
     </modules>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.github.mora-na</groupId>
+                <artifactId>logcollect-bom</artifactId>
+                <version>${project.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.github.mora-na</groupId>
+            <artifactId>logcollect-spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-webflux</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>build-helper-maven-plugin</artifactId>
+                    <version>3.6.0</version>
+                    <executions>
+                        <execution>
+                            <id>add-shared-sources</id>
+                            <phase>generate-sources</phase>
+                            <goals>
+                                <goal>add-source</goal>
+                            </goals>
+                            <configuration>
+                                <sources>
+                                    <source>${project.parent.basedir}/src/shared/common/java</source>
+                                    <source>${project.parent.basedir}/${sample.shared.variant.java.dir}</source>
+                                </sources>
+                            </configuration>
+                        </execution>
+                        <execution>
+                            <id>add-shared-resources</id>
+                            <phase>generate-resources</phase>
+                            <goals>
+                                <goal>add-resource</goal>
+                            </goals>
+                            <configuration>
+                                <resources>
+                                    <resource>
+                                        <directory>${project.parent.basedir}/src/shared/common/resources</directory>
+                                    </resource>
+                                    <resource>
+                                        <directory>${project.parent.basedir}/${sample.shared.variant.resources.dir}</directory>
+                                    </resource>
+                                </resources>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                    <version>${spring-boot.version}</version>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>repackage</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-toolchains-plugin</artifactId>
+                    <version>3.2.0</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-toolchains-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>select-jdk-toolchain</id>
+                        <goals>
+                            <goal>select-jdk-toolchain</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <version>${toolchain.jdk.version}</version>
+                    <useJdk>${toolchain.jdk.mode}</useJdk>
+                    <discoverToolchains>${toolchain.jdk.discover}</discoverToolchains>
+                    <comparator>${toolchain.jdk.comparator}</comparator>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

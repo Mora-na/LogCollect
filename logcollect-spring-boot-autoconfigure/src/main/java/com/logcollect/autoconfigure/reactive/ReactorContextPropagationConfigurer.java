@@ -2,6 +2,7 @@ package com.logcollect.autoconfigure.reactive;
 
 import com.logcollect.api.model.LogCollectContextSnapshot;
 import com.logcollect.core.context.LogCollectContextManager;
+import com.logcollect.core.context.LogCollectContextUtils;
 import com.logcollect.core.internal.LogCollectInternalLogger;
 import org.reactivestreams.Subscription;
 import org.springframework.beans.factory.DisposableBean;
@@ -11,12 +12,14 @@ import org.springframework.context.annotation.Configuration;
 import reactor.core.CoreSubscriber;
 import reactor.core.publisher.Hooks;
 import reactor.core.publisher.Operators;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.context.Context;
 
 @Configuration
 @ConditionalOnClass(name = "reactor.core.publisher.Hooks")
 public class ReactorContextPropagationConfigurer implements InitializingBean, DisposableBean {
     private static final String HOOK_KEY = "logcollect-context-propagation";
+    private static final String CONTEXT_KEY = HOOK_KEY + ".snapshot";
 
     @Override
     public void afterPropertiesSet() {
@@ -36,6 +39,14 @@ public class ReactorContextPropagationConfigurer implements InitializingBean, Di
     public void destroy() {
         try {
             Hooks.resetOnEachOperator(HOOK_KEY);
+        } catch (Throwable ignore) {
+        }
+        try {
+            Schedulers.resetOnScheduleHook(HOOK_KEY);
+        } catch (Throwable ignore) {
+        }
+        try {
+            Schedulers.removeExecutorServiceDecorator(HOOK_KEY);
         } catch (Throwable ignore) {
         }
     }
@@ -64,14 +75,32 @@ public class ReactorContextPropagationConfigurer implements InitializingBean, Di
     private void installManualPropagationHook() {
         Hooks.onEachOperator(HOOK_KEY,
                 Operators.lift((scannable, subscriber) -> {
-                    if (LogCollectContextManager.current() == null) {
+                    LogCollectContextSnapshot snapshot = resolveSnapshot(subscriber.currentContext());
+                    if (snapshot == null || snapshot.isEmpty()) {
                         return subscriber;
                     }
-                    LogCollectContextSnapshot snapshot = LogCollectContextManager.captureSnapshot();
                     return new LogCollectCoreSubscriber<Object>(subscriber, snapshot);
                 }));
+        Schedulers.onScheduleHook(HOOK_KEY, runnable -> LogCollectContextUtils.wrapRunnable(runnable));
+        Schedulers.setExecutorServiceDecorator(HOOK_KEY,
+                (scheduler, executor) -> LogCollectContextUtils.wrapScheduledExecutorService(executor));
+        Schedulers.resetFactory();
         LogCollectInternalLogger.info(
                 "Reactor 3.4.x detected: manual context propagation hook installed");
+    }
+
+    private LogCollectContextSnapshot resolveSnapshot(Context context) {
+        if (context != null) {
+            Object existing = context.getOrDefault(CONTEXT_KEY, null);
+            if (existing instanceof LogCollectContextSnapshot) {
+                LogCollectContextSnapshot snapshot = (LogCollectContextSnapshot) existing;
+                if (!snapshot.isEmpty()) {
+                    return snapshot;
+                }
+            }
+        }
+        LogCollectContextSnapshot currentSnapshot = LogCollectContextManager.captureSnapshot();
+        return currentSnapshot.isEmpty() ? null : currentSnapshot;
     }
 
     static class LogCollectCoreSubscriber<T> implements CoreSubscriber<T> {
@@ -105,15 +134,16 @@ public class ReactorContextPropagationConfigurer implements InitializingBean, Di
 
         @Override
         public Context currentContext() {
-            return delegate.currentContext();
+            return delegate.currentContext().put(CONTEXT_KEY, snapshot);
         }
 
         private void restoreAndRun(Runnable action) {
+            LogCollectContextSnapshot previous = LogCollectContextManager.captureSnapshot();
             LogCollectContextManager.restoreSnapshot(snapshot);
             try {
                 action.run();
             } finally {
-                LogCollectContextManager.clearSnapshotContext();
+                LogCollectContextManager.restoreSnapshot(previous);
             }
         }
     }

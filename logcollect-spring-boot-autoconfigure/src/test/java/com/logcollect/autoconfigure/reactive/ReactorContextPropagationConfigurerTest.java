@@ -6,8 +6,16 @@ import com.logcollect.core.context.LogCollectContextManager;
 import org.junit.jupiter.api.Test;
 import org.reactivestreams.Subscription;
 import reactor.core.CoreSubscriber;
+import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.context.Context;
 
+import java.lang.reflect.Method;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -64,6 +72,77 @@ class ReactorContextPropagationConfigurerTest {
         try {
             configurer.destroy();
         } finally {
+            LogCollectContextManager.clear();
+        }
+    }
+
+    @Test
+    void manualHook_shouldPropagateContextToScheduledTasks() throws Exception {
+        ReactorContextPropagationConfigurer configurer = new ReactorContextPropagationConfigurer();
+        Method method = ReactorContextPropagationConfigurer.class.getDeclaredMethod("installManualPropagationHook");
+        method.setAccessible(true);
+
+        Scheduler scheduler = Schedulers.newSingle("reactive-hook-test");
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<String> seenTraceId = new AtomicReference<String>();
+
+        LogCollectContextManager.push(newContext("trace-reactor-scheduler"));
+        try {
+            method.invoke(configurer);
+            Disposable disposable = scheduler.schedule(() -> {
+                LogCollectContext current = LogCollectContextManager.current();
+                seenTraceId.set(current == null ? null : current.getTraceId());
+                latch.countDown();
+            });
+            assertThat(disposable.isDisposed()).isFalse();
+            assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(seenTraceId.get()).isEqualTo("trace-reactor-scheduler");
+        } finally {
+            scheduler.dispose();
+            configurer.destroy();
+            LogCollectContextManager.clear();
+        }
+    }
+
+    @Test
+    void manualHook_shouldPropagateContextAcrossPublishOnPipelines() throws Exception {
+        ReactorContextPropagationConfigurer configurer = new ReactorContextPropagationConfigurer();
+        Method method = ReactorContextPropagationConfigurer.class.getDeclaredMethod("installManualPropagationHook");
+        method.setAccessible(true);
+
+        AtomicReference<String> monoTraceId = new AtomicReference<String>();
+        AtomicReference<String> fluxTraceId = new AtomicReference<String>();
+
+        LogCollectContextManager.push(newContext("trace-reactor-publishOn"));
+        try {
+            method.invoke(configurer);
+
+            String monoValue = Mono.just("mono")
+                    .publishOn(Schedulers.boundedElastic())
+                    .map(value -> {
+                        LogCollectContext current = LogCollectContextManager.current();
+                        monoTraceId.set(current == null ? null : current.getTraceId());
+                        return value;
+                    })
+                    .block();
+
+            Integer fluxCount = Flux.just(1, 2, 3)
+                    .publishOn(Schedulers.parallel())
+                    .map(value -> {
+                        LogCollectContext current = LogCollectContextManager.current();
+                        fluxTraceId.compareAndSet(null, current == null ? null : current.getTraceId());
+                        return value;
+                    })
+                    .count()
+                    .map(Long::intValue)
+                    .block();
+
+            assertThat(monoValue).isEqualTo("mono");
+            assertThat(fluxCount).isEqualTo(3);
+            assertThat(monoTraceId.get()).isEqualTo("trace-reactor-publishOn");
+            assertThat(fluxTraceId.get()).isEqualTo("trace-reactor-publishOn");
+        } finally {
+            configurer.destroy();
             LogCollectContextManager.clear();
         }
     }

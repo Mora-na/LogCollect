@@ -3,6 +3,7 @@ package com.logcollect.autoconfigure.servlet;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.boot.web.servlet.RegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
@@ -14,7 +15,7 @@ public class LogCollectServletAutoConfiguration {
     @Bean
     @ConditionalOnClass(name = "javax.servlet.AsyncContext")
     @ConditionalOnMissingClass("jakarta.servlet.AsyncContext")
-    public Object javaxLogCollectAsyncContextFilterRegistration() {
+    public RegistrationBean javaxLogCollectAsyncContextFilterRegistration() {
         try {
             Class<?> registrationClass = Class.forName("org.springframework.boot.web.servlet.FilterRegistrationBean");
             Class<?> javaxFilterClass = Class.forName("javax.servlet.Filter");
@@ -28,7 +29,7 @@ public class LogCollectServletAutoConfiguration {
                     .invoke(registration, new Object[]{new String[]{"/*"}});
             registrationClass.getMethod("setOrder", int.class)
                     .invoke(registration, Ordered.HIGHEST_PRECEDENCE + 10);
-            return registration;
+            return (RegistrationBean) registration;
         } catch (Throwable t) {
             throw new IllegalStateException("Register javax AsyncContext filter failed", t);
         }
@@ -36,7 +37,7 @@ public class LogCollectServletAutoConfiguration {
 
     @Bean
     @ConditionalOnClass(name = "jakarta.servlet.AsyncContext")
-    public Object jakartaLogCollectAsyncContextFilterRegistration() {
+    public RegistrationBean jakartaLogCollectAsyncContextFilterRegistration() {
         try {
             Class<?> registrationClass = Class.forName("org.springframework.boot.web.servlet.FilterRegistrationBean");
             Class<?> jakartaFilterClass = Class.forName("jakarta.servlet.Filter");
@@ -50,7 +51,7 @@ public class LogCollectServletAutoConfiguration {
                     .invoke(registration, new Object[]{new String[]{"/*"}});
             registrationClass.getMethod("setOrder", int.class)
                     .invoke(registration, Ordered.HIGHEST_PRECEDENCE + 10);
-            return registration;
+            return (RegistrationBean) registration;
         } catch (Throwable t) {
             throw new IllegalStateException("Register jakarta AsyncContext filter failed", t);
         }

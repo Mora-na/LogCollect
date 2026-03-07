@@ -1,11 +1,9 @@
 package com.logcollect.autoconfigure.servlet;
 
-import com.logcollect.api.model.LogCollectContext;
-import com.logcollect.core.context.LogCollectContextManager;
 import jakarta.servlet.*;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.io.IOException;
-import java.util.Deque;
 
 public class JakartaLogCollectAsyncContextFilter implements Filter {
 
@@ -17,15 +15,16 @@ public class JakartaLogCollectAsyncContextFilter implements Filter {
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
             throws IOException, ServletException {
-        chain.doFilter(request, response);
-        if (!request.isAsyncStarted()) {
-            return;
+        ServletRequest requestToUse = request;
+        if (request instanceof HttpServletRequest) {
+            requestToUse = new JakartaLogCollectHttpServletRequestWrapper((HttpServletRequest) request);
         }
-        Deque<LogCollectContext> snapshot = LogCollectContextManager.snapshot();
-        if (snapshot == null || snapshot.isEmpty()) {
-            return;
+        LogCollectServletAsyncSupport.bindCurrentRequest(requestToUse);
+        try {
+            chain.doFilter(requestToUse, response);
+        } finally {
+            LogCollectServletAsyncSupport.clearCurrentRequest();
         }
-        request.getAsyncContext().addListener(new JakartaLogCollectAsyncListener(snapshot));
     }
 
     @Override

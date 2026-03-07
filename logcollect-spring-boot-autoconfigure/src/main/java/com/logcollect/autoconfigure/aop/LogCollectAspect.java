@@ -15,6 +15,8 @@ import com.logcollect.api.transaction.TransactionExecutor;
 import com.logcollect.autoconfigure.circuitbreaker.CircuitBreakerRegistry;
 import com.logcollect.autoconfigure.jdbc.TransactionalLogCollectHandlerWrapper;
 import com.logcollect.autoconfigure.metrics.LogCollectMetrics;
+import com.logcollect.autoconfigure.servlet.LogCollectServletAsyncFinalizer;
+import com.logcollect.autoconfigure.servlet.LogCollectServletAsyncSupport;
 import com.logcollect.core.buffer.*;
 import com.logcollect.core.circuitbreaker.LogCollectCircuitBreaker;
 import com.logcollect.core.config.LogCollectConfigResolver;
@@ -184,38 +186,13 @@ public class LogCollectAspect {
                 ctx.setReturnValue(result);
             }
 
+            boolean deferredServletAsyncCompletion = false;
             try {
-                if (ctx != null) {
-                    if (config.isTransactionIsolation() && txWrapper != null) {
-                        final LogCollectContext flushCtx = ctx;
-                        txWrapper.executeInNewTransaction(() -> {
-                            closeBuffer(flushCtx);
-                            return null;
-                        });
-                    } else {
-                        closeBuffer(ctx);
-                    }
+                if (ctx != null && bizError == null) {
+                    deferredServletAsyncCompletion = deferServletAsyncFinalizationIfNeeded(ctx, handler);
                 }
-                final LogCollectContext finalCtx = ctx;
-                final LogCollectHandler finalHandler = handler;
-                long afterStart = System.currentTimeMillis();
-                safeInvoke(new Callable<Object>() {
-                    @Override
-                    public Object call() {
-                        finalHandler.after(finalCtx);
-                        return null;
-                    }
-                }, config.getHandlerTimeoutMs(), config.isTransactionIsolation(), finalCtx, "after");
-                if (metrics != null && config.isEnableMetrics()) {
-                    metrics.recordHandlerDuration(methodKey, "after", System.currentTimeMillis() - afterStart);
-                }
-            } catch (Exception e) {
-                forceOpenIfError(breaker, e);
-                LogCollectInternalLogger.error("LogCollect after phase error", e);
-                frameworkWarn("Failed to flush, data may be lost", e);
-                notifyHandlerError(ctx, e, "after");
-                if (shouldPropagateDegradeException(ctx, e)) {
-                    throw e;
+                if (!deferredServletAsyncCompletion) {
+                    finishCollection(ctx, handler, true);
                 }
             } finally {
                 try {
@@ -224,7 +201,7 @@ public class LogCollectAspect {
                     LogCollectInternalLogger.error("Context cleanup error", e);
                     MDCAdapter.remove("_logCollect_traceId");
                 } finally {
-                    if (metrics != null && config.isEnableMetrics()) {
+                    if (!deferredServletAsyncCompletion && metrics != null && config.isEnableMetrics()) {
                         metrics.recordActiveCollectionEnd();
                     }
                 }
@@ -578,6 +555,90 @@ public class LogCollectAspect {
         }
     }
 
+    private boolean deferServletAsyncFinalizationIfNeeded(LogCollectContext ctx, LogCollectHandler handler) {
+        Object request = LogCollectServletAsyncSupport.currentRequest();
+        if (request == null || !LogCollectServletAsyncSupport.isAsyncStarted(request)) {
+            return false;
+        }
+        LogCollectServletAsyncSupport.AsyncState asyncState = LogCollectServletAsyncSupport.getAsyncState(request);
+        if (asyncState == null) {
+            return false;
+        }
+        LogCollectContextManager.retain(ctx);
+        asyncState.registerFinalizer(new ServletAsyncCompletion(ctx, handler));
+        return true;
+    }
+
+    private void finishCollection(LogCollectContext ctx,
+                                  LogCollectHandler handler,
+                                  boolean propagateDegradeException) {
+        if (ctx == null) {
+            return;
+        }
+        try {
+            closeBufferWithIsolation(ctx);
+            invokeAfterHandler(ctx, handler);
+        } catch (Exception e) {
+            forceOpenIfError(resolveBreaker(ctx), e);
+            LogCollectInternalLogger.error("LogCollect after phase error", e);
+            frameworkWarn("Failed to flush, data may be lost", e);
+            notifyHandlerError(ctx, e, "after");
+            if (propagateDegradeException && shouldPropagateDegradeException(ctx, e)) {
+                if (e instanceof RuntimeException) {
+                    throw (RuntimeException) e;
+                }
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    private void closeBufferWithIsolation(LogCollectContext ctx) throws Exception {
+        if (ctx == null) {
+            return;
+        }
+        LogCollectConfig config = ctx.getConfig();
+        if (config != null && config.isTransactionIsolation() && txWrapper != null) {
+            final LogCollectContext flushCtx = ctx;
+            txWrapper.executeInNewTransaction(() -> {
+                closeBuffer(flushCtx);
+                return null;
+            });
+            return;
+        }
+        closeBuffer(ctx);
+    }
+
+    private void invokeAfterHandler(LogCollectContext ctx, LogCollectHandler handler) {
+        if (ctx == null || handler == null) {
+            return;
+        }
+        LogCollectConfig config = ctx.getConfig();
+        long afterStart = System.currentTimeMillis();
+        final LogCollectContext finalCtx = ctx;
+        final LogCollectHandler finalHandler = handler;
+        safeInvoke(new Callable<Object>() {
+            @Override
+            public Object call() {
+                finalHandler.after(finalCtx);
+                return null;
+            }
+        }, config == null ? 0 : config.getHandlerTimeoutMs(),
+                config != null && config.isTransactionIsolation(),
+                finalCtx,
+                "after");
+        if (metrics != null && config != null && config.isEnableMetrics()) {
+            metrics.recordHandlerDuration(ctx.getMethodSignature(), "after", System.currentTimeMillis() - afterStart);
+        }
+    }
+
+    private LogCollectCircuitBreaker resolveBreaker(LogCollectContext ctx) {
+        if (ctx == null) {
+            return null;
+        }
+        Object breaker = ctx.getCircuitBreaker();
+        return breaker instanceof LogCollectCircuitBreaker ? (LogCollectCircuitBreaker) breaker : null;
+    }
+
     private <T> T safeInvoke(Callable<T> callable, int timeoutMs, boolean transactionIsolation,
                              LogCollectContext context, String phase) {
         boolean interruptedBefore = Thread.currentThread().isInterrupted();
@@ -756,6 +817,39 @@ public class LogCollectAspect {
             return;
         }
         breaker.forceOpen();
+    }
+
+    private final class ServletAsyncCompletion implements LogCollectServletAsyncFinalizer {
+        private final LogCollectContext context;
+        private final LogCollectHandler handler;
+        private final AtomicBoolean finished = new AtomicBoolean(false);
+
+        private ServletAsyncCompletion(LogCollectContext context, LogCollectHandler handler) {
+            this.context = context;
+            this.handler = handler;
+        }
+
+        @Override
+        public void finish(Throwable error) {
+            if (!finished.compareAndSet(false, true)) {
+                return;
+            }
+            if (context != null && context.getError() == null && error != null) {
+                context.setError(error);
+            }
+            try {
+                finishCollection(context, handler, false);
+            } finally {
+                try {
+                    LogCollectContextManager.release(context);
+                } finally {
+                    LogCollectConfig config = context == null ? null : context.getConfig();
+                    if (metrics != null && config != null && config.isEnableMetrics()) {
+                        metrics.recordActiveCollectionEnd();
+                    }
+                }
+            }
+        }
     }
 
     private void forceOpenIfError(LogCollectContext context, Throwable throwable) {

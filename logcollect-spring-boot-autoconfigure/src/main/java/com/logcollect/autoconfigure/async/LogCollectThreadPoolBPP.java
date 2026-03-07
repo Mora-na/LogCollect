@@ -3,6 +3,9 @@ package com.logcollect.autoconfigure.async;
 import com.logcollect.core.context.LogCollectContextUtils;
 import com.logcollect.core.context.LogCollectWrappedExecutor;
 import com.logcollect.core.internal.LogCollectInternalLogger;
+import org.aopalliance.intercept.MethodInterceptor;
+import org.aopalliance.intercept.MethodInvocation;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.core.Ordered;
@@ -13,6 +16,11 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Component;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 
@@ -47,6 +55,12 @@ public class LogCollectThreadPoolBPP implements BeanPostProcessor {
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
+        if (bean instanceof ThreadPoolTaskExecutor) {
+            return wrapThreadPoolExecutorBean((ThreadPoolTaskExecutor) bean, beanName);
+        }
+        if (bean instanceof ThreadPoolTaskScheduler) {
+            return wrapThreadPoolSchedulerBean((ThreadPoolTaskScheduler) bean, beanName);
+        }
         if (!isEligibleForWrapping(bean, beanName)) {
             return bean;
         }
@@ -63,6 +77,20 @@ public class LogCollectThreadPoolBPP implements BeanPostProcessor {
             throw e;
         }
         return bean;
+    }
+
+    private Object wrapThreadPoolExecutorBean(ThreadPoolTaskExecutor executor, String beanName) {
+        if (!isInitialized(executor)) {
+            return executor;
+        }
+        return createTaskSubmissionProxy(executor, beanName);
+    }
+
+    private Object wrapThreadPoolSchedulerBean(ThreadPoolTaskScheduler scheduler, String beanName) {
+        if (!isInitialized(scheduler)) {
+            return scheduler;
+        }
+        return createTaskSubmissionProxy(scheduler, beanName);
     }
 
     /**
@@ -215,5 +243,94 @@ public class LogCollectThreadPoolBPP implements BeanPostProcessor {
             return false;
         }
         return beanName == null || !beanName.startsWith("logCollect");
+    }
+
+    private Object createTaskSubmissionProxy(Object bean, String beanName) {
+        try {
+            ProxyFactory factory = new ProxyFactory(bean);
+            factory.setProxyTargetClass(true);
+            factory.addInterface(LogCollectWrappedExecutor.class);
+            factory.addAdvice(new MethodInterceptor() {
+                @Override
+                public Object invoke(MethodInvocation invocation) throws Throwable {
+                    Method method = invocation.getMethod();
+                    if (isObjectMethod(method)) {
+                        return invocation.proceed();
+                    }
+                    Object[] originalArguments = invocation.getArguments();
+                    Object[] wrappedArguments = wrapTaskArguments(originalArguments);
+                    if (wrappedArguments == originalArguments) {
+                        return invocation.proceed();
+                    }
+                    return invokeMethod(bean, method, wrappedArguments);
+                }
+            });
+            return factory.getProxy();
+        } catch (Throwable t) {
+            LogCollectInternalLogger.warn("Failed to create thread-pool proxy: {}", beanName, t);
+            return bean;
+        }
+    }
+
+    private Object[] wrapTaskArguments(Object[] arguments) {
+        if (arguments == null || arguments.length == 0) {
+            return arguments;
+        }
+        Object[] wrapped = null;
+        for (int i = 0; i < arguments.length; i++) {
+            Object candidate = arguments[i];
+            Object replacement = wrapTaskArgument(candidate);
+            if (replacement == candidate) {
+                continue;
+            }
+            if (wrapped == null) {
+                wrapped = arguments.clone();
+            }
+            wrapped[i] = replacement;
+        }
+        return wrapped == null ? arguments : wrapped;
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Object wrapTaskArgument(Object candidate) {
+        if (candidate instanceof Runnable) {
+            return LogCollectContextUtils.wrapRunnable((Runnable) candidate);
+        }
+        if (candidate instanceof Callable) {
+            return LogCollectContextUtils.wrapCallable((Callable) candidate);
+        }
+        if (candidate instanceof Collection) {
+            Collection<?> tasks = (Collection<?>) candidate;
+            if (tasks.isEmpty()) {
+                return candidate;
+            }
+            boolean callableCollection = true;
+            for (Object task : tasks) {
+                if (!(task instanceof Callable)) {
+                    callableCollection = false;
+                    break;
+                }
+            }
+            if (callableCollection) {
+                Collection<Callable<Object>> wrappedTasks = new ArrayList<Callable<Object>>(tasks.size());
+                for (Object task : tasks) {
+                    wrappedTasks.add(LogCollectContextUtils.wrapCallable((Callable<Object>) task));
+                }
+                return wrappedTasks;
+            }
+        }
+        return candidate;
+    }
+
+    private Object invokeMethod(Object target, Method method, Object[] arguments) throws Throwable {
+        try {
+            return method.invoke(target, arguments);
+        } catch (InvocationTargetException ex) {
+            throw ex.getTargetException();
+        }
+    }
+
+    private boolean isObjectMethod(Method method) {
+        return method != null && method.getDeclaringClass() == Object.class;
     }
 }

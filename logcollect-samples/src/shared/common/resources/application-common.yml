@@ -1,0 +1,21 @@
+server:
+  port: 0
+
+spring:
+  mvc:
+    async:
+      request-timeout: 30s
+
+logging:
+  level:
+    root: INFO
+    com.logcollect: INFO
+    com.logcollect.samples: INFO
+
+sample:
+  auto-run: true
+  exit-after-run: false
+
+logcollect:
+  global:
+    enabled: true

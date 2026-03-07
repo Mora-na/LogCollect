@@ -34,6 +34,7 @@ public class LogCollectCallableWrapper<V> implements Callable<V> {
      */
     @Override
     public V call() throws Exception {
+        LogCollectContextSnapshot previous = LogCollectContextUtils.captureCurrentSnapshot();
         LogCollectContextManager.restoreSnapshot(snapshot);
         try {
             return delegate.call();
@@ -42,7 +43,7 @@ public class LogCollectCallableWrapper<V> implements Callable<V> {
         } catch (Error e) {
             throw e;
         } finally {
-            LogCollectContextManager.clearSnapshotContext();
+            LogCollectContextUtils.restorePreviousSnapshot(previous);
         }
     }
 }

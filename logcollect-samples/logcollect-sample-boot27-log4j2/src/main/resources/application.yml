@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: logcollect-sample-boot27-log4j2
+  config:
+    import: "classpath:application-common.yml"
+
+sample:
+  module-id: logcollect-sample-boot27-log4j2
+  boot-version: 2.7.18
+  logging-framework: log4j2
+
+logcollect:
+  global:
+    log-framework: LOG4J2

@@ -14,7 +14,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LogCollectThreadPoolBPPTest {
 
@@ -67,14 +68,19 @@ class LogCollectThreadPoolBPPTest {
     }
 
     @Test
-    void shouldNotAffectExecutorInitializedBeforeWrapping() throws Exception {
-        ThreadPoolTaskExecutor executor = newExecutor("bpp-too-late-");
-        executor.initialize();
+    void shouldWrapInitializedThreadPoolTaskExecutorAfterInitialization() throws Exception {
+        ThreadPoolTaskExecutor rawExecutor = newExecutor("bpp-too-late-");
+        rawExecutor.initialize();
+        ThreadPoolTaskExecutor executor = rawExecutor;
         try {
-            bpp.postProcessBeforeInitialization(executor, "jobAsyncExecutor");
+            Object bean = bpp.postProcessAfterInitialization(rawExecutor, "jobAsyncExecutor");
+            assertTrue(bean instanceof ThreadPoolTaskExecutor);
+            executor = (ThreadPoolTaskExecutor) bean;
+            assertNotSame(rawExecutor, executor);
+
             LogCollectContextManager.push(new LogCollectContext("trace-late", null, null, null, null, null, null, null));
             Future<Boolean> future = executor.submit(LogCollectContextUtils::isInLogCollectContext);
-            assertFalse(future.get(5, TimeUnit.SECONDS));
+            assertTrue(future.get(5, TimeUnit.SECONDS));
         } finally {
             LogCollectContextManager.clear();
             executor.shutdown();

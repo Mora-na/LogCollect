@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: logcollect-sample-boot27-logback
+  config:
+    import: "classpath:application-common.yml"
+
+sample:
+  module-id: logcollect-sample-boot27-logback
+  boot-version: 2.7.18
+  logging-framework: logback

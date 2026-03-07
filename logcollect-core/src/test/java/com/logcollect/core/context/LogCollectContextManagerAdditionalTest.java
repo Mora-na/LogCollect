@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Deque;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -104,7 +105,6 @@ class LogCollectContextManagerAdditionalTest extends CoreUnitTestBase {
         LogCollectContext ctx = createTestContext();
         LogCollectContextManager.push(ctx);
         LogCollectContextSnapshot snapshot = LogCollectContextManager.captureSnapshot();
-        LogCollectContextManager.clear();
 
         AtomicReference<String> traceId = new AtomicReference<String>();
         AtomicReference<Boolean> leaked = new AtomicReference<Boolean>(Boolean.TRUE);
@@ -121,5 +121,75 @@ class LogCollectContextManagerAdditionalTest extends CoreUnitTestBase {
 
         assertThat(traceId.get()).isEqualTo(ctx.getTraceId());
         assertThat(leaked.get()).isFalse();
+        assertThat(LogCollectContextManager.get(ctx.getTraceId())).isSameAs(ctx);
+        LogCollectContextManager.clear();
+    }
+
+    @Test
+    void childThreadCleanup_shouldNotRemoveParentActiveContext() throws Exception {
+        LogCollectContext ctx = createTestContext();
+        LogCollectContextManager.push(ctx);
+        LogCollectContextSnapshot snapshot = LogCollectContextManager.captureSnapshot();
+
+        AtomicReference<LogCollectContext> childContext = new AtomicReference<LogCollectContext>();
+        Thread thread = new Thread(() -> {
+            LogCollectContextManager.restoreSnapshot(snapshot);
+            childContext.set(LogCollectContextManager.current());
+            LogCollectContextManager.clearSnapshotContext();
+        });
+        thread.start();
+        thread.join(3000);
+
+        assertThat(childContext.get()).isSameAs(ctx);
+        assertThat(LogCollectContextManager.current()).isSameAs(ctx);
+        assertThat(LogCollectContextManager.get(ctx.getTraceId())).isSameAs(ctx);
+        LogCollectContextManager.pop();
+        assertThat(LogCollectContextManager.get(ctx.getTraceId())).isNull();
+    }
+
+    @Test
+    void retainAndRelease_shouldKeepContextActiveOutsideThreadBinding() {
+        LogCollectContext ctx = createTestContext();
+        LogCollectContextManager.push(ctx);
+
+        LogCollectContextManager.retain(ctx);
+        LogCollectContextManager.pop();
+        assertThat(LogCollectContextManager.current()).isNull();
+        assertThat(LogCollectContextManager.get(ctx.getTraceId())).isSameAs(ctx);
+
+        LogCollectContextManager.release(ctx);
+        assertThat(LogCollectContextManager.get(ctx.getTraceId())).isNull();
+    }
+
+    @Test
+    void wrappedConsumer_inlineExecution_shouldRestoreCallerContext() {
+        LogCollectContext ctx = createTestContext();
+        LogCollectContextManager.push(ctx);
+
+        Consumer<String> wrapped = LogCollectContextUtils.wrapConsumer(value -> {
+            assertThat(LogCollectContextManager.current()).isSameAs(ctx);
+            assertThat(LogCollectContextManager.get(ctx.getTraceId())).isSameAs(ctx);
+        });
+
+        wrapped.accept("payload");
+
+        assertThat(LogCollectContextManager.current()).isSameAs(ctx);
+        assertThat(LogCollectContextManager.get(ctx.getTraceId())).isSameAs(ctx);
+    }
+
+    @Test
+    void wrappedRunnable_inlineExecution_shouldRestoreCallerContext() {
+        LogCollectContext ctx = createTestContext();
+        LogCollectContextManager.push(ctx);
+
+        Runnable wrapped = LogCollectContextUtils.wrapRunnable(() -> {
+            assertThat(LogCollectContextManager.current()).isSameAs(ctx);
+            assertThat(LogCollectContextManager.get(ctx.getTraceId())).isSameAs(ctx);
+        });
+
+        wrapped.run();
+
+        assertThat(LogCollectContextManager.current()).isSameAs(ctx);
+        assertThat(LogCollectContextManager.get(ctx.getTraceId())).isSameAs(ctx);
     }
 }

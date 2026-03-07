@@ -1,11 +1,9 @@
 package com.logcollect.core.context;
 
-import com.logcollect.api.model.LogCollectContext;
+import com.logcollect.api.model.LogCollectContextSnapshot;
 
-import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
@@ -33,21 +31,11 @@ public final class LogCollectContextUtils {
         if (runnable instanceof LogCollectRunnableWrapper) {
             return runnable;
         }
-        final List<WeakReference<LogCollectContext>> weakSnapshot = captureWeakSnapshot();
-        if (weakSnapshot.isEmpty()) {
+        LogCollectContextSnapshot snapshot = captureSnapshot();
+        if (snapshot.isEmpty()) {
             return runnable;
         }
-        return () -> {
-            if (!restoreWeakSnapshot(weakSnapshot)) {
-                runnable.run();
-                return;
-            }
-            try {
-                runnable.run();
-            } finally {
-                LogCollectContextManager.clear();
-            }
-        };
+        return new LogCollectRunnableWrapper(runnable, snapshot);
     }
 
     /**
@@ -64,20 +52,11 @@ public final class LogCollectContextUtils {
         if (callable instanceof LogCollectCallableWrapper) {
             return callable;
         }
-        final List<WeakReference<LogCollectContext>> weakSnapshot = captureWeakSnapshot();
-        if (weakSnapshot.isEmpty()) {
+        LogCollectContextSnapshot snapshot = captureSnapshot();
+        if (snapshot.isEmpty()) {
             return callable;
         }
-        return () -> {
-            if (!restoreWeakSnapshot(weakSnapshot)) {
-                return callable.call();
-            }
-            try {
-                return callable.call();
-            } finally {
-                LogCollectContextManager.clear();
-            }
-        };
+        return new LogCollectCallableWrapper<V>(callable, snapshot);
     }
 
     /**
@@ -91,21 +70,19 @@ public final class LogCollectContextUtils {
         if (consumer == null) {
             return null;
         }
-        final List<WeakReference<LogCollectContext>> weakSnapshot = captureWeakSnapshot();
-        if (weakSnapshot.isEmpty()) {
+        LogCollectContextSnapshot snapshot = captureSnapshot();
+        if (snapshot.isEmpty()) {
             return consumer;
         }
         return new Consumer<T>() {
             @Override
             public void accept(T t) {
-                if (!restoreWeakSnapshot(weakSnapshot)) {
-                    consumer.accept(t);
-                    return;
-                }
+                LogCollectContextSnapshot previous = captureCurrentSnapshot();
+                LogCollectContextManager.restoreSnapshot(snapshot);
                 try {
                     consumer.accept(t);
                 } finally {
-                    LogCollectContextManager.clear();
+                    restorePreviousSnapshot(previous);
                 }
             }
         };
@@ -263,20 +240,19 @@ public final class LogCollectContextUtils {
         if (supplier == null) {
             return null;
         }
-        final List<WeakReference<LogCollectContext>> weakSnapshot = captureWeakSnapshot();
-        if (weakSnapshot.isEmpty()) {
+        LogCollectContextSnapshot snapshot = captureSnapshot();
+        if (snapshot.isEmpty()) {
             return supplier;
         }
         return new Supplier<U>() {
             @Override
             public U get() {
-                if (!restoreWeakSnapshot(weakSnapshot)) {
-                    return supplier.get();
-                }
+                LogCollectContextSnapshot previous = captureCurrentSnapshot();
+                LogCollectContextManager.restoreSnapshot(snapshot);
                 try {
                     return supplier.get();
                 } finally {
-                    LogCollectContextManager.clear();
+                    restorePreviousSnapshot(previous);
                 }
             }
         };
@@ -300,38 +276,19 @@ public final class LogCollectContextUtils {
         return wrapped;
     }
 
-    private static List<WeakReference<LogCollectContext>> captureWeakSnapshot() {
-        Deque<LogCollectContext> snapshot = LogCollectContextManager.snapshot();
-        if (snapshot == null || snapshot.isEmpty()) {
-            return java.util.Collections.emptyList();
-        }
-        List<WeakReference<LogCollectContext>> weakSnapshot =
-                new ArrayList<WeakReference<LogCollectContext>>(snapshot.size());
-        for (LogCollectContext context : snapshot) {
-            weakSnapshot.add(new WeakReference<LogCollectContext>(context));
-        }
-        return weakSnapshot;
+    static LogCollectContextSnapshot captureCurrentSnapshot() {
+        return LogCollectContextManager.captureSnapshot();
     }
 
-    private static boolean restoreWeakSnapshot(List<WeakReference<LogCollectContext>> weakSnapshot) {
-        if (weakSnapshot == null || weakSnapshot.isEmpty()) {
-            LogCollectContextManager.clear();
-            return false;
+    static void restorePreviousSnapshot(LogCollectContextSnapshot previous) {
+        if (previous == null || previous.isEmpty()) {
+            LogCollectContextManager.clearSnapshotContext();
+            return;
         }
-        Deque<LogCollectContext> restored = new java.util.ArrayDeque<LogCollectContext>(weakSnapshot.size());
-        for (WeakReference<LogCollectContext> reference : weakSnapshot) {
-            LogCollectContext context = reference == null ? null : reference.get();
-            if (context == null) {
-                LogCollectContextManager.clear();
-                return false;
-            }
-            restored.addLast(context);
-        }
-        if (restored.isEmpty()) {
-            LogCollectContextManager.clear();
-            return false;
-        }
-        LogCollectContextManager.restore(restored);
-        return true;
+        LogCollectContextManager.restoreSnapshot(previous);
+    }
+
+    private static LogCollectContextSnapshot captureSnapshot() {
+        return LogCollectContextManager.captureSnapshot();
     }
 }

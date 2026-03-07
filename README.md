@@ -137,7 +137,7 @@
         <dependency>
             <groupId>io.github.mora-na</groupId>
             <artifactId>logcollect-bom</artifactId>
-            <version>2.2.2</version>
+            <version>2.2.3</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -2546,6 +2546,9 @@ logcollect-parent/
 mvn clean install -DskipTests              # 快速构建
 mvn clean verify                            # 完整测试
 mvn clean verify -Dspring-boot.version=3.2.5  # 指定 Boot 版本
+
+# 全仓一把构建（含 Boot 2.7 / 3.x samples，自动接 Maven Toolchains）
+bash scripts/build-all-with-toolchains.sh
 
 # 性能门禁
 mvn test -pl logcollect-benchmark -Pbenchmark-ci -Dtest=JmhCIGateTest -Djmh.mode=ci

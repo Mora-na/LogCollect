@@ -15,8 +15,35 @@ public final class LogCollectContextManager {
 
     private static final ThreadLocal<Deque<LogCollectContext>> CONTEXT_STACK =
             ThreadLocal.withInitial(ArrayDeque::new);
-    private static final Map<String, LogCollectContext> ACTIVE_CONTEXTS =
-            new ConcurrentHashMap<String, LogCollectContext>();
+    private static final Map<String, ActiveContextRef> ACTIVE_CONTEXTS =
+            new ConcurrentHashMap<String, ActiveContextRef>();
+
+    private static final class ActiveContextRef {
+        private final LogCollectContext context;
+        private int references;
+
+        private ActiveContextRef(LogCollectContext context) {
+            this.context = context;
+            this.references = 1;
+        }
+
+        private LogCollectContext getContext() {
+            return context;
+        }
+
+        private void retain() {
+            references++;
+        }
+
+        private int release() {
+            references--;
+            return references;
+        }
+
+        private boolean matches(LogCollectContext candidate) {
+            return context == candidate;
+        }
+    }
 
     private LogCollectContextManager() {
     }
@@ -26,8 +53,8 @@ public final class LogCollectContextManager {
             return;
         }
         CONTEXT_STACK.get().push(context);
+        retainContext(context);
         if (context.getTraceId() != null) {
-            ACTIVE_CONTEXTS.put(context.getTraceId(), context);
             MDCAdapter.put(TRACE_ID_KEY, context.getTraceId());
         }
     }
@@ -35,9 +62,7 @@ public final class LogCollectContextManager {
     public static LogCollectContext pop() {
         Deque<LogCollectContext> stack = CONTEXT_STACK.get();
         LogCollectContext popped = stack.poll();
-        if (popped != null && popped.getTraceId() != null) {
-            ACTIVE_CONTEXTS.remove(popped.getTraceId(), popped);
-        }
+        releaseContext(popped);
         if (stack.isEmpty()) {
             CONTEXT_STACK.remove();
             MDCAdapter.remove(TRACE_ID_KEY);
@@ -59,7 +84,8 @@ public final class LogCollectContextManager {
         if (traceId == null || traceId.isEmpty()) {
             return null;
         }
-        return ACTIVE_CONTEXTS.get(traceId);
+        ActiveContextRef active = ACTIVE_CONTEXTS.get(traceId);
+        return active == null ? null : active.getContext();
     }
 
     public static int depth() {
@@ -76,15 +102,9 @@ public final class LogCollectContextManager {
             return;
         }
         Deque<LogCollectContext> existing = CONTEXT_STACK.get();
-        if (existing != null) {
-            for (LogCollectContext context : existing) {
-                if (context != null && context.getTraceId() != null) {
-                    ACTIVE_CONTEXTS.remove(context.getTraceId(), context);
-                }
-            }
-        }
+        releaseContexts(existing);
         CONTEXT_STACK.set(new ArrayDeque<LogCollectContext>(snapshot));
-        rebuildActiveContexts(snapshot);
+        retainContexts(snapshot);
         LogCollectContext current = current();
         if (current != null && current.getTraceId() != null) {
             MDCAdapter.put(TRACE_ID_KEY, current.getTraceId());
@@ -95,16 +115,18 @@ public final class LogCollectContextManager {
 
     public static void clear() {
         Deque<LogCollectContext> existing = CONTEXT_STACK.get();
-        if (existing != null) {
-            for (LogCollectContext context : existing) {
-                if (context != null && context.getTraceId() != null) {
-                    ACTIVE_CONTEXTS.remove(context.getTraceId(), context);
-                }
-            }
-        }
+        releaseContexts(existing);
         CONTEXT_STACK.remove();
         MDCAdapter.remove(TRACE_ID_KEY);
         LogCollectIgnoreManager.clear();
+    }
+
+    public static void retain(LogCollectContext context) {
+        retainContext(context);
+    }
+
+    public static void release(LogCollectContext context) {
+        releaseContext(context);
     }
 
     public static LogCollectContextSnapshot captureSnapshot() {
@@ -124,15 +146,46 @@ public final class LogCollectContextManager {
         clear();
     }
 
-    private static void rebuildActiveContexts(Deque<LogCollectContext> snapshot) {
+    private static void retainContexts(Deque<LogCollectContext> snapshot) {
         if (snapshot == null || snapshot.isEmpty()) {
             return;
         }
         for (LogCollectContext context : snapshot) {
-            if (context == null || context.getTraceId() == null) {
-                continue;
-            }
-            ACTIVE_CONTEXTS.put(context.getTraceId(), context);
+            retainContext(context);
         }
+    }
+
+    private static void releaseContexts(Deque<LogCollectContext> snapshot) {
+        if (snapshot == null || snapshot.isEmpty()) {
+            return;
+        }
+        for (LogCollectContext context : snapshot) {
+            releaseContext(context);
+        }
+    }
+
+    private static void retainContext(LogCollectContext context) {
+        if (context == null || context.getTraceId() == null) {
+            return;
+        }
+        ACTIVE_CONTEXTS.compute(context.getTraceId(), (traceId, existing) -> {
+            if (existing == null || !existing.matches(context)) {
+                return new ActiveContextRef(context);
+            }
+            existing.retain();
+            return existing;
+        });
+    }
+
+    private static void releaseContext(LogCollectContext context) {
+        if (context == null || context.getTraceId() == null) {
+            return;
+        }
+        ACTIVE_CONTEXTS.computeIfPresent(context.getTraceId(), (traceId, existing) -> {
+            if (!existing.matches(context)) {
+                return existing;
+            }
+            return existing.release() <= 0 ? null : existing;
+        });
     }
 }
