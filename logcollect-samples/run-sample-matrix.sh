@@ -23,6 +23,7 @@ SAMPLES=(
 SELECTED_MODULE=""
 LIST_ONLY="false"
 FAILURES=()
+BOOTSTRAP_DONE="false"
 
 usage() {
   cat <<'USAGE'
@@ -141,10 +142,77 @@ EOF_ENTRY
   return 1
 }
 
+resolve_bootstrap_java_home() {
+  local java_home=""
+
+  java_home="$(resolve_java_home 17 2>/dev/null || true)"
+  if [ -n "${java_home}" ]; then
+    printf '%s\n' "${java_home}"
+    return 0
+  fi
+
+  java_home="$(resolve_java_home 8 2>/dev/null || true)"
+  if [ -n "${java_home}" ]; then
+    printf '%s\n' "${java_home}"
+    return 0
+  fi
+
+  return 1
+}
+
+install_workspace_artifacts() {
+  local java_home="$1"
+
+  if [ "${BOOTSTRAP_DONE}" = "true" ]; then
+    return 0
+  fi
+
+  echo "[BOOTSTRAP] Installing current workspace artifacts for sample dependencies" | tee -a "${SUMMARY_FILE}"
+  if (
+    export JAVA_HOME="${java_home}"
+    export PATH="${JAVA_HOME}/bin:${PATH}"
+    cd "${REPO_ROOT}"
+    mvn -B \
+      -pl "logcollect-spring-boot-starter" \
+      -am \
+      -DskipTests \
+      -Dgpg.skip=true \
+      -DskipPublishing=true \
+      -DskipDeploy=true \
+      -Djacoco.skip=true \
+      install
+  ); then
+    BOOTSTRAP_DONE="true"
+    echo "[BOOTSTRAP] Workspace artifacts are ready." | tee -a "${SUMMARY_FILE}"
+    echo | tee -a "${SUMMARY_FILE}"
+    return 0
+  fi
+
+  echo "[BOOTSTRAP] Failed to install current workspace artifacts." | tee -a "${SUMMARY_FILE}"
+  FAILURES+=("sample-bootstrap")
+  return 1
+}
+
+resolve_app_log() {
+  local module="$1"
+  local module_log_dir="${REPO_ROOT}/logcollect-samples/${module}/logs/logcollect-samples"
+
+  if [ ! -d "${module_log_dir}" ]; then
+    return 1
+  fi
+
+  if [ -f "${module_log_dir}/${module}.log" ]; then
+    printf '%s\n' "${module_log_dir}/${module}.log"
+    return 0
+  fi
+
+  find "${module_log_dir}" -maxdepth 1 -type f -name '*.log' | sort | tail -n 1
+}
+
 run_sample() {
   local entry="$1"
   local module java_version boot_version log_framework
-  local java_home module_pom console_log app_log status_line
+  local java_home module_pom console_log app_log status_line module_log_dir
 
   IFS='|' read -r module java_version boot_version log_framework <<EOF_ENTRY
 ${entry}
@@ -159,9 +227,10 @@ EOF_ENTRY
 
   module_pom="${REPO_ROOT}/logcollect-samples/${module}/pom.xml"
   console_log="${LOG_DIR}/${module}.console.log"
-  app_log="${LOG_DIR}/${module}.log"
+  module_log_dir="${REPO_ROOT}/logcollect-samples/${module}/logs/logcollect-samples"
 
-  rm -f "${console_log}" "${app_log}"
+  rm -f "${console_log}"
+  find "${module_log_dir}" -maxdepth 1 -type f -name '*.log' -delete 2>/dev/null || true
 
   status_line="[$(date '+%Y-%m-%d %H:%M:%S')] START ${module} | JDK ${java_version} | Boot ${boot_version} | ${log_framework}"
   echo "${status_line}" | tee -a "${SUMMARY_FILE}"
@@ -170,16 +239,6 @@ EOF_ENTRY
     export JAVA_HOME="${java_home}"
     export PATH="${JAVA_HOME}/bin:${PATH}"
     cd "${REPO_ROOT}"
-    echo "[BOOTSTRAP] Installing current reactor artifacts for ${module}"
-    mvn -B \
-      -pl "logcollect-samples/${module}" \
-      -am \
-      -DskipTests \
-      -Dgpg.skip=true \
-      -DskipPublishing=true \
-      -DskipDeploy=true \
-      -Djacoco.skip=true \
-      install
     echo "[RUN] Starting sample module ${module}"
     mvn -B \
       -f "${module_pom}" \
@@ -192,7 +251,12 @@ EOF_ENTRY
       "org.springframework.boot:spring-boot-maven-plugin:${boot_version}:run" \
       -Dspring-boot.run.arguments=--sample.exit-after-run=true
   ) 2>&1 | tee "${console_log}"; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS ${module} | console=${console_log} | app=${app_log}" | tee -a "${SUMMARY_FILE}"
+    app_log="$(resolve_app_log "${module}" || true)"
+    if [ -n "${app_log}" ]; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS ${module} | console=${console_log} | app=${app_log}" | tee -a "${SUMMARY_FILE}"
+    else
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS ${module} | console=${console_log} | app=missing" | tee -a "${SUMMARY_FILE}"
+    fi
   else
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAILURE ${module} | console=${console_log}" | tee -a "${SUMMARY_FILE}"
     FAILURES+=("${module}")
@@ -254,6 +318,16 @@ mkdir -p "${LOG_DIR}"
 echo "Sample batch started at $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "${SUMMARY_FILE}"
 echo "Logs directory: ${LOG_DIR}" | tee -a "${SUMMARY_FILE}"
 echo | tee -a "${SUMMARY_FILE}"
+
+if ! BOOTSTRAP_JAVA_HOME="$(resolve_bootstrap_java_home)"; then
+  echo "[ERROR] Unable to resolve a JDK for workspace bootstrap." | tee -a "${SUMMARY_FILE}"
+  echo "[ERROR] Install JDK 8 or JDK 17, or set JAVA_8_HOME / JAVA_17_HOME before retrying." | tee -a "${SUMMARY_FILE}"
+  exit 1
+fi
+
+if ! install_workspace_artifacts "${BOOTSTRAP_JAVA_HOME}"; then
+  exit 1
+fi
 
 if [ -n "${SELECTED_MODULE}" ]; then
   if ! ENTRY="$(find_entry_by_module "${SELECTED_MODULE}")"; then

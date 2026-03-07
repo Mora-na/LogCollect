@@ -13,7 +13,6 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 import reactor.util.context.Context;
 
-import java.lang.reflect.Method;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -79,8 +78,6 @@ class ReactorContextPropagationConfigurerTest {
     @Test
     void manualHook_shouldPropagateContextToScheduledTasks() throws Exception {
         ReactorContextPropagationConfigurer configurer = new ReactorContextPropagationConfigurer();
-        Method method = ReactorContextPropagationConfigurer.class.getDeclaredMethod("installManualPropagationHook");
-        method.setAccessible(true);
 
         Scheduler scheduler = Schedulers.newSingle("reactive-hook-test");
         CountDownLatch latch = new CountDownLatch(1);
@@ -88,7 +85,7 @@ class ReactorContextPropagationConfigurerTest {
 
         LogCollectContextManager.push(newContext("trace-reactor-scheduler"));
         try {
-            method.invoke(configurer);
+            configurer.registerPropagation(ReactorContextPropagationConfigurer.PropagationMode.MANUAL);
             Disposable disposable = scheduler.schedule(() -> {
                 LogCollectContext current = LogCollectContextManager.current();
                 seenTraceId.set(current == null ? null : current.getTraceId());
@@ -107,15 +104,13 @@ class ReactorContextPropagationConfigurerTest {
     @Test
     void manualHook_shouldPropagateContextAcrossPublishOnPipelines() throws Exception {
         ReactorContextPropagationConfigurer configurer = new ReactorContextPropagationConfigurer();
-        Method method = ReactorContextPropagationConfigurer.class.getDeclaredMethod("installManualPropagationHook");
-        method.setAccessible(true);
 
         AtomicReference<String> monoTraceId = new AtomicReference<String>();
         AtomicReference<String> fluxTraceId = new AtomicReference<String>();
 
         LogCollectContextManager.push(newContext("trace-reactor-publishOn"));
         try {
-            method.invoke(configurer);
+            configurer.registerPropagation(ReactorContextPropagationConfigurer.PropagationMode.MANUAL);
 
             String monoValue = Mono.just("mono")
                     .publishOn(Schedulers.boundedElastic())
@@ -143,6 +138,36 @@ class ReactorContextPropagationConfigurerTest {
             assertThat(fluxTraceId.get()).isEqualTo("trace-reactor-publishOn");
         } finally {
             configurer.destroy();
+            LogCollectContextManager.clear();
+        }
+    }
+
+    @Test
+    void destroyingOneConfigurer_shouldNotRemoveSharedPropagation() {
+        ReactorContextPropagationConfigurer first = new ReactorContextPropagationConfigurer();
+        ReactorContextPropagationConfigurer second = new ReactorContextPropagationConfigurer();
+        AtomicReference<String> seenTraceId = new AtomicReference<String>();
+
+        first.registerPropagation(ReactorContextPropagationConfigurer.PropagationMode.MANUAL);
+        second.registerPropagation(ReactorContextPropagationConfigurer.PropagationMode.MANUAL);
+        second.destroy();
+
+        LogCollectContextManager.push(newContext("trace-reactor-shared"));
+        try {
+            String value = Mono.just("mono")
+                    .publishOn(Schedulers.boundedElastic())
+                    .map(payload -> {
+                        LogCollectContext current = LogCollectContextManager.current();
+                        seenTraceId.set(current == null ? null : current.getTraceId());
+                        return payload;
+                    })
+                    .block();
+
+            assertThat(value).isEqualTo("mono");
+            assertThat(seenTraceId.get()).isEqualTo("trace-reactor-shared");
+        } finally {
+            first.destroy();
+            second.destroy();
             LogCollectContextManager.clear();
         }
     }

@@ -20,15 +20,23 @@ import reactor.util.context.Context;
 public class ReactorContextPropagationConfigurer implements InitializingBean, DisposableBean {
     private static final String HOOK_KEY = "logcollect-context-propagation";
     private static final String CONTEXT_KEY = HOOK_KEY + ".snapshot";
+    private static final Object LIFECYCLE_LOCK = new Object();
+
+    private static int activeRegistrations;
+    private static PropagationMode installedMode = PropagationMode.NONE;
+
+    private PropagationMode registeredMode = PropagationMode.NONE;
+
+    enum PropagationMode {
+        NONE,
+        MANUAL,
+        AUTOMATIC
+    }
 
     @Override
     public void afterPropertiesSet() {
         try {
-            if (hasAutomaticPropagation()) {
-                enableAutomaticPropagation();
-            } else {
-                installManualPropagationHook();
-            }
+            registerPropagation(hasAutomaticPropagation() ? PropagationMode.AUTOMATIC : PropagationMode.MANUAL);
         } catch (Throwable t) {
             LogCollectInternalLogger.warn(
                     "Reactor context propagation setup failed, WebFlux context propagation may not work", t);
@@ -37,18 +45,7 @@ public class ReactorContextPropagationConfigurer implements InitializingBean, Di
 
     @Override
     public void destroy() {
-        try {
-            Hooks.resetOnEachOperator(HOOK_KEY);
-        } catch (Throwable ignore) {
-        }
-        try {
-            Schedulers.resetOnScheduleHook(HOOK_KEY);
-        } catch (Throwable ignore) {
-        }
-        try {
-            Schedulers.removeExecutorServiceDecorator(HOOK_KEY);
-        } catch (Throwable ignore) {
-        }
+        unregisterPropagation();
     }
 
     private boolean hasAutomaticPropagation() {
@@ -60,15 +57,78 @@ public class ReactorContextPropagationConfigurer implements InitializingBean, Di
         }
     }
 
-    private void enableAutomaticPropagation() {
+    void registerPropagation(PropagationMode desiredMode) {
+        if (desiredMode == null || desiredMode == PropagationMode.NONE) {
+            return;
+        }
+
+        synchronized (LIFECYCLE_LOCK) {
+            if (registeredMode != PropagationMode.NONE) {
+                return;
+            }
+
+            if (activeRegistrations == 0) {
+                installedMode = installGlobalPropagation(desiredMode);
+            }
+
+            activeRegistrations++;
+            registeredMode = installedMode;
+        }
+    }
+
+    void unregisterPropagation() {
+        synchronized (LIFECYCLE_LOCK) {
+            if (registeredMode == PropagationMode.NONE) {
+                return;
+            }
+
+            activeRegistrations--;
+            if (activeRegistrations <= 0) {
+                activeRegistrations = 0;
+                resetGlobalPropagation(installedMode);
+                installedMode = PropagationMode.NONE;
+            }
+
+            registeredMode = PropagationMode.NONE;
+        }
+    }
+
+    private PropagationMode installGlobalPropagation(PropagationMode desiredMode) {
+        if (desiredMode == PropagationMode.AUTOMATIC) {
+            try {
+                enableAutomaticPropagation();
+                return PropagationMode.AUTOMATIC;
+            } catch (Throwable t) {
+                LogCollectInternalLogger.warn(
+                        "Failed to enable automatic propagation, falling back to manual hook", t);
+            }
+        }
+
+        installManualPropagationHook();
+        return PropagationMode.MANUAL;
+    }
+
+    private void resetGlobalPropagation(PropagationMode mode) {
+        if (mode == PropagationMode.MANUAL) {
+            resetManualPropagationHook();
+            return;
+        }
+        if (mode == PropagationMode.AUTOMATIC) {
+            disableAutomaticPropagation();
+        }
+    }
+
+    private void enableAutomaticPropagation() throws Exception {
         try {
             Hooks.class.getMethod("enableAutomaticContextPropagation").invoke(null);
             LogCollectInternalLogger.info(
                     "Reactor 3.5.3+ detected: automatic context propagation enabled");
-        } catch (Throwable t) {
-            LogCollectInternalLogger.warn(
-                    "Failed to enable automatic propagation, falling back to manual hook", t);
-            installManualPropagationHook();
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            Throwable target = e.getTargetException() == null ? e : e.getTargetException();
+            if (target instanceof Exception) {
+                throw (Exception) target;
+            }
+            throw e;
         }
     }
 
@@ -87,6 +147,34 @@ public class ReactorContextPropagationConfigurer implements InitializingBean, Di
         Schedulers.resetFactory();
         LogCollectInternalLogger.info(
                 "Reactor 3.4.x detected: manual context propagation hook installed");
+    }
+
+    private void resetManualPropagationHook() {
+        try {
+            Hooks.resetOnEachOperator(HOOK_KEY);
+        } catch (Throwable ignore) {
+        }
+        try {
+            Schedulers.resetOnScheduleHook(HOOK_KEY);
+        } catch (Throwable ignore) {
+        }
+        try {
+            Schedulers.removeExecutorServiceDecorator(HOOK_KEY);
+        } catch (Throwable ignore) {
+        }
+        try {
+            Schedulers.resetFactory();
+        } catch (Throwable ignore) {
+        }
+    }
+
+    private void disableAutomaticPropagation() {
+        try {
+            Hooks.class.getMethod("disableAutomaticContextPropagation").invoke(null);
+        } catch (NoSuchMethodException ignore) {
+        } catch (Throwable t) {
+            LogCollectInternalLogger.warn("Failed to disable automatic Reactor context propagation", t);
+        }
     }
 
     private LogCollectContextSnapshot resolveSnapshot(Context context) {

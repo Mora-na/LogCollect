@@ -52,6 +52,7 @@ bash logcollect-samples/run-sample-matrix.sh --module logcollect-sample-boot34-l
 ```
 
 脚本在 macOS 下会优先通过 `/usr/libexec/java_home` 自动切换 JDK。
+批量运行前会先安装当前工作区的 `starter/core/autoconfigure/adapter` 产物，确保样例使用的是最新源码而不是本地仓库里的旧版本。
 如果是在 Linux 或需要显式指定本地 JDK，请先设置：
 
 ```bash
@@ -88,7 +89,8 @@ mvn -f logcollect-samples/logcollect-sample-boot34-log4j2/pom.xml \
 
 - 控制台会输出每个场景的业务日志和 `LogCollect` 聚合结果
 - 批量脚本会额外输出 `logs/logcollect-samples/<module>.console.log`
-- 应用文件日志输出到 `logs/logcollect-samples/<spring.application.name>.log`
+- 应用文件日志默认输出到各样例模块目录下的 `logs/logcollect-samples/<spring.application.name>.log`
+- 批量执行摘要会打印每个模块对应的实际 app log 路径
 - 批量执行摘要输出到 `logs/logcollect-samples/sample-batch-summary.txt`
 - 批量执行 Markdown 报告输出到 `logs/logcollect-samples/sample-matrix-report.md`
 - 批量执行 JSON 报告输出到 `logs/logcollect-samples/sample-matrix-report.json`

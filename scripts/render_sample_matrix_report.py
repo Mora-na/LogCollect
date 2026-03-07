@@ -175,7 +175,10 @@ def collect_reports(input_root: Path) -> Dict[str, ModuleReport]:
 
         if app_path is not None:
             report.app_log = str(app_path)
-        elif not report.app_log:
+        elif report.app_log:
+            if not Path(report.app_log).exists():
+                report.notes.append("app log missing")
+        else:
             report.notes.append("app log missing")
 
         if report.status != "SUCCESS":

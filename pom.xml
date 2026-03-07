@@ -65,10 +65,15 @@
         <module>logcollect-config-spring-cloud</module>
         <module>logcollect-test-support</module>
         <module>logcollect-benchmark</module>
-        <module>logcollect-samples</module>
     </modules>
 
     <profiles>
+        <profile>
+            <id>with-samples</id>
+            <modules>
+                <module>logcollect-samples</module>
+            </modules>
+        </profile>
         <profile>
             <id>release-publish</id>
             <properties>
@@ -269,6 +274,8 @@
                             <goal>jar</goal>
                         </goals>
                         <configuration>
+                            <!-- 某些 reactor 模块没有源码，不会生成可链接的 apidocs 目录 -->
+                            <detectOfflineLinks>false</detectOfflineLinks>
                             <!-- 避免 Javadoc 校验失败导致构建中断 -->
                             <additionalJOption>-Xdoclint:none</additionalJOption>
                         </configuration>
