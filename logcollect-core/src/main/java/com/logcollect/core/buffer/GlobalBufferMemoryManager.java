@@ -64,6 +64,17 @@ public class GlobalBufferMemoryManager {
         updateMetrics();
     }
 
+    public static double getDefaultHardCeilingRatio() {
+        return DEFAULT_HARD_CEILING_RATIO;
+    }
+
+    public static long deriveHardCeilingBytes(long softBytes) {
+        if (softBytes <= 0) {
+            return 0L;
+        }
+        return (long) (softBytes * DEFAULT_HARD_CEILING_RATIO);
+    }
+
     public boolean tryAllocate(long bytes) {
         if (bytes <= 0) {
             return true;
@@ -248,10 +259,7 @@ public class GlobalBufferMemoryManager {
         if (explicitHard > 0) {
             return explicitHard;
         }
-        if (soft <= 0) {
-            return 0L;
-        }
-        return (long) (soft * DEFAULT_HARD_CEILING_RATIO);
+        return deriveHardCeilingBytes(soft);
     }
 
     private String formatBytes(long bytes) {

@@ -1,11 +1,18 @@
 package com.logcollect.core.config;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.logcollect.api.annotation.LogCollect;
 import com.logcollect.api.config.LogCollectConfigSource;
 import com.logcollect.api.model.LogCollectConfig;
+import com.logcollect.core.buffer.GlobalBufferMemoryManager;
+import com.logcollect.core.internal.LogCollectInternalLogger;
 import com.logcollect.core.util.MethodKeyResolver;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Method;
 import java.nio.file.Path;
@@ -18,6 +25,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class LogCollectConfigResolverAdditionalTest {
+    private static final long MB = 1024L * 1024L;
 
     @TempDir
     Path tempDir;
@@ -124,6 +132,61 @@ class LogCollectConfigResolverAdditionalTest {
 
         assertThat(resolver.getCachedConfig("com.example.Unknown#method()")).isNull();
         resolver.saveToLocalCache();
+    }
+
+    @Test
+    void constructor_derivesRuntimeHardCeilingWhenOnlySoftLimitIsConfigured() {
+        MetricsStub metrics = new MetricsStub();
+        GlobalBufferMemoryManager manager = new GlobalBufferMemoryManager(100L * MB);
+
+        new LogCollectConfigResolver(
+                Collections.singletonList(new InMemorySource(
+                        mapOf("buffer.total-max-bytes", "200MB"),
+                        Collections.emptyMap(),
+                        100)),
+                null,
+                null,
+                metrics,
+                manager);
+
+        assertThat(manager.getMaxTotalBytes()).isEqualTo(200L * MB);
+        assertThat(manager.getHardCeilingBytes()).isEqualTo(300L * MB);
+        assertThat(metrics.refreshSource).isEqualTo("buffer_limits");
+    }
+
+    @Test
+    void constructor_logsDerivedRuntimeHardCeilingWhenOnlySoftLimitIsConfigured() {
+        Logger logger = (Logger) LoggerFactory.getLogger("com.logcollect.internal");
+        Level previousLevel = logger.getLevel();
+        ListAppender<ILoggingEvent> appender = new ListAppender<ILoggingEvent>();
+        appender.start();
+        logger.setLevel(Level.INFO);
+        logger.addAppender(appender);
+        LogCollectInternalLogger.setLevel(LogCollectInternalLogger.Level.INFO);
+        try {
+            new LogCollectConfigResolver(
+                    Collections.singletonList(new InMemorySource(
+                            mapOf("buffer.total-max-bytes", "200MB"),
+                            Collections.emptyMap(),
+                            100)),
+                    null,
+                    null,
+                    null,
+                    new GlobalBufferMemoryManager(100L * MB));
+
+            assertThat(appender.list)
+                    .extracting(ILoggingEvent::getFormattedMessage)
+                    .anySatisfy(message -> assertThat(message)
+                            .contains("buffer.hard-ceiling-bytes not configured")
+                            .contains("total-max-bytes=200MB")
+                            .contains("314572800 bytes")
+                            .contains("soft * 1.5")
+                            .contains("source=startup"));
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(previousLevel);
+            appender.stop();
+        }
     }
 
     @LogCollect(minLevel = "DEBUG", maxBufferSize = 123)

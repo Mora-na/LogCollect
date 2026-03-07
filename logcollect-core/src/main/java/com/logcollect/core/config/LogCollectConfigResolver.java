@@ -776,7 +776,9 @@ public class LogCollectConfigResolver {
         long currentHard = globalBufferMemoryManager.getHardCeilingBytes();
         long newSoft = currentSoft;
         long newHard = currentHard;
-        if (globals.containsKey("buffer.total-max-bytes")) {
+        boolean softConfigured = globals.containsKey("buffer.total-max-bytes");
+        boolean hardConfigured = globals.containsKey("buffer.hard-ceiling-bytes");
+        if (softConfigured) {
             try {
                 newSoft = DataSizeParser.parseToBytes(globals.get("buffer.total-max-bytes"));
             } catch (Exception ignored) {
@@ -784,13 +786,25 @@ public class LogCollectConfigResolver {
                         globals.get("buffer.total-max-bytes"));
             }
         }
-        if (globals.containsKey("buffer.hard-ceiling-bytes")) {
+        if (hardConfigured) {
             try {
                 newHard = DataSizeParser.parseToBytes(globals.get("buffer.hard-ceiling-bytes"));
             } catch (Exception ignored) {
                 LogCollectInternalLogger.warn("Ignored invalid buffer.hard-ceiling-bytes: {}",
                         globals.get("buffer.hard-ceiling-bytes"));
             }
+        }
+        if (!hardConfigured && (softInterested || hardInterested)) {
+            long derivedHard = GlobalBufferMemoryManager.deriveHardCeilingBytes(newSoft);
+            if (derivedHard != currentHard || newSoft != currentSoft) {
+                LogCollectInternalLogger.info(
+                        "buffer.hard-ceiling-bytes not configured; derived runtime hard ceiling from total-max-bytes={} to {} bytes using soft * {} (source={}).",
+                        softConfigured ? globals.get("buffer.total-max-bytes") : String.valueOf(newSoft),
+                        derivedHard,
+                        GlobalBufferMemoryManager.getDefaultHardCeilingRatio(),
+                        source == null ? "unknown" : source);
+            }
+            newHard = derivedHard;
         }
 
         if (newHard > 0 && newSoft > 0 && newHard < newSoft) {
