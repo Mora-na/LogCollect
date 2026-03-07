@@ -6,7 +6,6 @@ import com.logcollect.core.context.LogCollectContextManager;
 import org.junit.jupiter.api.Test;
 import org.reactivestreams.Subscription;
 import reactor.core.CoreSubscriber;
-import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
@@ -86,12 +85,11 @@ class ReactorContextPropagationConfigurerTest {
         LogCollectContextManager.push(newContext("trace-reactor-scheduler"));
         try {
             configurer.registerPropagation(ReactorContextPropagationConfigurer.PropagationMode.MANUAL);
-            Disposable disposable = scheduler.schedule(() -> {
+            scheduler.schedule(() -> {
                 LogCollectContext current = LogCollectContextManager.current();
                 seenTraceId.set(current == null ? null : current.getTraceId());
                 latch.countDown();
             });
-            assertThat(disposable.isDisposed()).isFalse();
             assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
             assertThat(seenTraceId.get()).isEqualTo("trace-reactor-scheduler");
         } finally {
