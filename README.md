@@ -2547,8 +2547,11 @@ mvn clean install -DskipTests              # 快速构建
 mvn clean verify                            # 完整测试
 mvn clean verify -Dspring-boot.version=3.2.5  # 指定 Boot 版本
 
-# 全仓一把构建（含 Boot 2.7 / 3.x samples，自动接 Maven Toolchains）
+# 默认 reactor 一把构建（自动接 Maven Toolchains）
 bash scripts/build-all-with-toolchains.sh
+
+# 显式带上 samples
+bash scripts/build-all-with-toolchains.sh clean verify -Pwith-samples
 
 # 性能门禁
 mvn test -pl logcollect-benchmark -Pbenchmark-ci -Dtest=JmhCIGateTest -Djmh.mode=ci

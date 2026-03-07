@@ -33,7 +33,7 @@
 
 ## 运行
 
-全仓一把构建（Maven 运行在 JDK 17+，Boot 2.7 sample 通过 Toolchains 选 JDK 8）：
+全仓默认 reactor 一把构建（Maven 运行在 JDK 17+；如需包含 samples，请显式加 `-Pwith-samples`）：
 
 ```bash
 bash scripts/build-all-with-toolchains.sh
@@ -52,7 +52,7 @@ bash logcollect-samples/run-sample-matrix.sh --module logcollect-sample-boot34-l
 ```
 
 脚本在 macOS 下会优先通过 `/usr/libexec/java_home` 自动切换 JDK。
-批量运行前会先安装当前工作区的 `starter/core/autoconfigure/adapter` 产物，确保样例使用的是最新源码而不是本地仓库里的旧版本。
+批量运行前会先安装当前工作区的 `bom/starter/core/autoconfigure/adapter` 产物，确保样例使用的是最新源码而不是本地仓库里的旧版本。
 如果是在 Linux 或需要显式指定本地 JDK，请先设置：
 
 ```bash

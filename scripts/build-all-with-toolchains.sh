@@ -8,6 +8,7 @@ usage() {
   cat <<'USAGE'
 Usage:
   bash scripts/build-all-with-toolchains.sh
+  bash scripts/build-all-with-toolchains.sh -Pwith-samples -DskipTests
   bash scripts/build-all-with-toolchains.sh clean verify -DskipTests
 
 Environment:
@@ -19,7 +20,32 @@ Notes:
   - By default this script builds the root project's default reactor only.
   - Add `-Pwith-samples` if you explicitly want to include `logcollect-samples`.
   - When `-Pwith-samples` is enabled, Boot 2.7 sample modules use Maven Toolchains to select JDK 8.
+  - When only Maven options are provided, the script appends them to the default `clean verify` command.
 USAGE
+}
+
+has_explicit_maven_goal() {
+  local arg
+  local skip_next="false"
+
+  for arg in "$@"; do
+    if [ "${skip_next}" = "true" ]; then
+      skip_next="false"
+      continue
+    fi
+
+    case "${arg}" in
+      -pl|--projects|-P|--activate-profiles|-f|--file|-rf|--resume-from|-s|--settings|-gs|--global-settings|-t|--toolchains|-l|--log-file|-T|--threads)
+        skip_next="true"
+        ;;
+      -*) ;;
+      *)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
 }
 
 java_major_from_home() {
@@ -144,10 +170,12 @@ DEFAULT_ARGS=(
   -DskipDeploy=true
 )
 
-if [ "$#" -gt 0 ]; then
+if [ "$#" -eq 0 ]; then
+  MVN_ARGS=("${DEFAULT_ARGS[@]}")
+elif has_explicit_maven_goal "$@"; then
   MVN_ARGS=("$@")
 else
-  MVN_ARGS=("${DEFAULT_ARGS[@]}")
+  MVN_ARGS=("${DEFAULT_ARGS[@]}" "$@")
 fi
 
 echo "Using Maven runtime JAVA_HOME=${JAVA_HOME}"

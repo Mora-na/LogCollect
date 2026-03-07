@@ -167,19 +167,22 @@ install_workspace_artifacts() {
     return 0
   fi
 
-  echo "[BOOTSTRAP] Installing current workspace artifacts for sample dependencies" | tee -a "${SUMMARY_FILE}"
+  echo "[BOOTSTRAP] Installing current workspace BOM and starter artifacts for sample dependencies" | tee -a "${SUMMARY_FILE}"
   if (
     export JAVA_HOME="${java_home}"
     export PATH="${JAVA_HOME}/bin:${PATH}"
     cd "${REPO_ROOT}"
     mvn -B \
-      -pl "logcollect-spring-boot-starter" \
+      -pl "logcollect-bom,logcollect-spring-boot-starter" \
       -am \
+      clean \
       -DskipTests \
       -Dgpg.skip=true \
       -DskipPublishing=true \
       -DskipDeploy=true \
       -Djacoco.skip=true \
+      -Dmaven.javadoc.skip=true \
+      -Dmaven.source.skip=true \
       install
   ); then
     BOOTSTRAP_DONE="true"

@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -80,8 +81,11 @@ jobs:
           export JAVA8_HOME="${JAVA_HOME_8_X64}"
           export JAVA17_HOME="${JAVA_HOME_17_X64}"
           bash scripts/build-all-with-toolchains.sh \
+            clean verify \
             -DskipTests \
-            -Djacoco.skip=true
+            -Djacoco.skip=true \
+            -Dmaven.javadoc.skip=true \
+            -Dmaven.source.skip=true
 
   sample-matrix:
     name: Samples / ${{ matrix.module }}
