@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.*;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -81,6 +82,36 @@ public final class LogCollectContextUtils {
                 LogCollectContextManager.restoreSnapshot(snapshot);
                 try {
                     consumer.accept(t);
+                } finally {
+                    restorePreviousSnapshot(previous);
+                }
+            }
+        };
+    }
+
+    /**
+     * 包装 BiConsumer，使其在执行时自动恢复父线程上下文。
+     *
+     * @param consumer 原始双参消费函数
+     * @param <T>      第一个入参类型
+     * @param <U>      第二个入参类型
+     * @return 包装后的 BiConsumer；若无活跃上下文则返回原 BiConsumer；入参为 null 返回 null
+     */
+    public static <T, U> BiConsumer<T, U> wrapBiConsumer(BiConsumer<T, U> consumer) {
+        if (consumer == null) {
+            return null;
+        }
+        LogCollectContextSnapshot snapshot = captureSnapshot();
+        if (snapshot.isEmpty()) {
+            return consumer;
+        }
+        return new BiConsumer<T, U>() {
+            @Override
+            public void accept(T t, U u) {
+                LogCollectContextSnapshot previous = captureCurrentSnapshot();
+                LogCollectContextManager.restoreSnapshot(snapshot);
+                try {
+                    consumer.accept(t, u);
                 } finally {
                     restorePreviousSnapshot(previous);
                 }

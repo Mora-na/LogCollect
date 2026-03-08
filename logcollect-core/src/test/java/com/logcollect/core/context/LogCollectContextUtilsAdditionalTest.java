@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Collections;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -238,6 +239,7 @@ class LogCollectContextUtilsAdditionalTest extends CoreUnitTestBase {
         assertThat(LogCollectContextUtils.wrapScheduledExecutorService(null)).isNull();
         assertThat(LogCollectContextUtils.wrapExecutor(null)).isNull();
         assertThat(LogCollectContextUtils.wrapThreadFactory(null)).isNull();
+        assertThat(LogCollectContextUtils.wrapBiConsumer((BiConsumer<Object, Object>) null)).isNull();
         assertDoesNotThrow(() -> LogCollectContextUtils.newThread(() -> { }, "n"));
     }
 

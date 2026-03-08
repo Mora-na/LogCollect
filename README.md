@@ -1180,7 +1180,9 @@ public void createOrder(OrderRequest req) {
 | Spring `@Async`（默认 AsyncConfigurer） | ✅ 自动 | ✅ 自动 | 无需操作 |
 | Spring `@Async`（自定义 AsyncConfigurer） | ⚠️ 需确认 | ⚠️ 需确认 | 确认 TaskDecorator 透传 |
 | Spring `ThreadPoolTaskExecutor` | ✅ 自动 | ✅ 自动 | 无需操作 |
-| `CompletableFuture` + Spring 池 | ✅ 自动 | ✅ 自动 | 无需操作 |
+| `CompletableFuture` + Spring 池（任务体） | ✅ 自动 | ✅ 自动 | 无需操作 |
+| `CompletableFuture.whenComplete` 回调 | ⚠️ 一行 | ⚠️ 一行 | `wrapBiConsumer()` |
+| `ListenableFuture.addCallback` 回调 | ⚠️ 一行 | ⚠️ 一行 | `LogCollectSpringCallbackUtils.wrapListenableFutureCallback()` |
 | WebFlux `Mono`/`Flux` | ✅ 自动* | ✅ 自动 | 无需操作 |
 | Spring Bean `ExecutorService` | ✅ 自动 | ✅ 自动 | BPP 自动包装 |
 | 手动 `ExecutorService` | ⚠️ 一行 | ⚠️ 一行 | 工具类包装 |
@@ -1192,7 +1194,15 @@ public void createOrder(OrderRequest req) {
 
 > **\***：Boot 2.7 + Reactor 3.4.x 由框架自动 Hook 处理；Reactor 3.5.3+ 全自动。
 
-### 6.2 典型示例
+> 说明：表格中的 `CompletableFuture + Spring 池` 指任务体运行在线程池中的自动传播；不等同于回调链全部自动。若回调执行线程不受框架控制，请在注册点一行包装回调。
+
+### 6.2 接入方式分层
+
+- **全自动**：同步方法、默认 `@Async`、Spring `ThreadPoolTaskExecutor`、`CompletableFuture` + Spring 池任务体、WebFlux `Mono/Flux`、Spring Bean `ExecutorService`、嵌套 `@LogCollect`、Servlet `AsyncContext`
+- **配置层一行接入**：自定义 `AsyncConfigurer`，显式透传 `TaskDecorator`
+- **调用点一行接入**：`CompletableFuture.whenComplete`、`ListenableFuture.addCallback`、手动 `ExecutorService`、`new Thread()`、第三方库回调、`ForkJoinPool` / `parallelStream`
+
+### 6.3 典型示例
 
 **Spring @Async**
 
@@ -1205,7 +1215,7 @@ public void batchProcess() {
 }
 ```
 
-**CompletableFuture + Spring 线程池**
+**CompletableFuture + Spring 线程池（任务体自动）**
 
 ```java
 @LogCollect
@@ -1221,6 +1231,44 @@ public void analyze() {
     }, springManagedExecutor);
 
     CompletableFuture.allOf(f1, f2).join();
+}
+```
+
+**CompletableFuture.whenComplete（一行包装）**
+
+```java
+@LogCollect
+public void analyzeWithCallback() {
+    CompletableFuture.supplyAsync(() -> {
+        log.info("异步执行体");      // ✅ 自动传播
+        return "OK";
+    }, springManagedExecutor).whenComplete(
+        LogCollectContextUtils.wrapBiConsumer((result, error) -> {
+            log.info("完成回调 result={}, error={}", result, error);  // ✅ 一行传播
+        })
+    ).join();
+}
+```
+
+**ListenableFuture.addCallback（一行包装）**
+
+```java
+@LogCollect
+public void submitLegacyTask() {
+    ListenableFuture<Order> future = legacyAsyncClient.submit(request);
+    future.addCallback(
+        LogCollectSpringCallbackUtils.wrapListenableFutureCallback(new ListenableFutureCallback<Order>() {
+            @Override
+            public void onSuccess(Order result) {
+                log.info("旧接口成功: {}", result.getId());   // ✅ 一行传播
+            }
+
+            @Override
+            public void onFailure(Throwable ex) {
+                log.error("旧接口失败", ex);               // ✅ 一行传播
+            }
+        })
+    );
 }
 ```
 
@@ -1289,24 +1337,28 @@ public void riskCheck(OrderRequest req) {
 }
 ```
 
-### 6.3 工具类 API 速查
+### 6.4 工具类 API 速查
 
 | 方法 | 适用场景 |
 |------|---------|
-| `wrapRunnable(Runnable)` | `new Thread()` / 回调 |
+| `wrapRunnable(Runnable)` | `new Thread()` / 简单回调 |
+| `wrapBiConsumer(BiConsumer<T, U>)` | `CompletableFuture.whenComplete` |
 | `wrapCallable(Callable<V>)` | `ExecutorService.submit(Callable)` |
 | `wrapConsumer(Consumer<T>)` | 三方消息回调 |
+| `LogCollectSpringCallbackUtils.wrapListenableFutureCallback(ListenableFutureCallback<T>)` | `ListenableFuture.addCallback` |
+| `LogCollectSpringCallbackUtils.wrapSuccessCallback(SuccessCallback<T>)` / `LogCollectSpringCallbackUtils.wrapFailureCallback(FailureCallback)` | `ListenableFuture.addCallback(success, failure)` |
 | `wrapExecutorService(ExecutorService)` | 手动创建的线程池 |
 | `wrapScheduledExecutorService(ScheduledExecutorService)` | 定时任务线程池 |
 | `wrapExecutor(Executor)` | 通用 Executor |
 | `newThread(Runnable, String)` | 创建线程 |
 | `newDaemonThread(Runnable, String)` | 创建守护线程 |
 | `threadFactory(String)` / `wrapThreadFactory(ThreadFactory)` | 线程工厂 |
-| `supplyAsync(Supplier<U>)` / `runAsync(Runnable)` | CompletableFuture 增强 |
+| `supplyAsync(Supplier<U>)` / `runAsync(Runnable)` | CompletableFuture 执行体增强 |
 | `isInLogCollectContext()` / `diagnosticInfo()` | 诊断 |
 
 **内存安全保障**：`wrap*` 方法使用弱引用捕获上下文，子线程 `finally` 强制清理 `ThreadLocal`。外层方法已结束且上下文被回收时，延迟任务安全降级为"无上下文执行"。
 
+> `LogCollectSpringCallbackUtils` 仅覆盖 Spring `ListenableFuture` 回调；纯 `logcollect-core` 使用者无需引入这组 Spring 专属 API。
 > `wrapThreadFactory` 仅接收 `java.util.concurrent.ThreadFactory`。`ForkJoinWorkerThreadFactory` 不是其子类型，请优先包装提交任务（`wrapRunnable`）。`wrapExecutorService` 传入 `ScheduledExecutorService` 时保留调度语义，返回值可安全强转。
 
 ---
@@ -2357,7 +2409,7 @@ Spring AOP 固有限制。将需要独立收集的方法放到不同 Bean 中。
 log.info("诊断: {}", LogCollectContextUtils.diagnosticInfo());
 ```
 
-检查：Spring 管理线程池 → 自动；手动线程池 → `wrapExecutorService()`；`new Thread()` → `wrapRunnable()`。将 `logcollect.internal.log-level` 设为 `DEBUG` 查看传播日志。
+检查：Spring 管理线程池 → 自动；`CompletableFuture.whenComplete` → `wrapBiConsumer()`；`ListenableFuture.addCallback` → `LogCollectSpringCallbackUtils.wrapListenableFutureCallback()`；手动线程池 → `wrapExecutorService()`；`new Thread()` → `wrapRunnable()`。将 `logcollect.internal.log-level` 设为 `DEBUG` 查看传播日志。
 
 **Q7: 线程安全如何保障？**
 
