@@ -1172,35 +1172,60 @@ public void createOrder(OrderRequest req) {
 
 ## 6 全异步场景覆盖
 
+基于 `logcollect 2.2.4` 的 `AsyncLogTestJobHandler` 探针，当前版本在 `baseline` 与 `branches` 两种模式下结论一致：两种模式均收集正常、无遗漏；`CompletableFuture.whenComplete(...)` 已统一切到 `wrapBiConsumer(...)`，成功/异常两条回调链路均已验证通过。整体上可归纳为：Spring 托管异步大多自动收集，非 Spring 托管线程入口通常需要调用点一行包装，自定义 `AsyncConfigurer` 属于配置层一行接入。
+
 ### 6.1 场景覆盖总表
 
-| 场景 | Boot 2.7 | Boot 3.x | 接入方式 |
-|------|----------|----------|---------|
-| 同步方法 | ✅ 自动 | ✅ 自动 | 无需操作 |
-| Spring `@Async`（默认 AsyncConfigurer） | ✅ 自动 | ✅ 自动 | 无需操作 |
-| Spring `@Async`（自定义 AsyncConfigurer） | ⚠️ 需确认 | ⚠️ 需确认 | 确认 TaskDecorator 透传 |
-| Spring `ThreadPoolTaskExecutor` | ✅ 自动 | ✅ 自动 | 无需操作 |
-| `CompletableFuture` + Spring 池（任务体） | ✅ 自动 | ✅ 自动 | 无需操作 |
-| `CompletableFuture.whenComplete` 回调 | ⚠️ 一行 | ⚠️ 一行 | `wrapBiConsumer()` |
-| `ListenableFuture.addCallback` 回调 | ⚠️ 一行 | ⚠️ 一行 | `LogCollectSpringCallbackUtils.wrapListenableFutureCallback()` |
-| WebFlux `Mono`/`Flux` | ✅ 自动* | ✅ 自动 | 无需操作 |
-| Spring Bean `ExecutorService` | ✅ 自动 | ✅ 自动 | BPP 自动包装 |
-| 手动 `ExecutorService` | ⚠️ 一行 | ⚠️ 一行 | 工具类包装 |
-| `new Thread()` | ⚠️ 一行 | ⚠️ 一行 | 工具类包装 |
-| 第三方库回调 | ⚠️ 一行 | ⚠️ 一行 | 工具类包装 |
-| `ForkJoinPool` / `parallelStream` | ⚠️ 一行 | ⚠️ 一行 | 工具类包装 |
-| 嵌套 `@LogCollect` | ✅ 自动 | ✅ 自动 | 栈式隔离 |
-| Servlet `AsyncContext` | ✅ 自动 | ✅ 自动 | 无需操作 |
+本节表格基于 `logcollect 2.2.4` 当前探针验证结果，不再按 Boot 版本拆分；版本差异请参见 [版本兼容矩阵](#版本兼容矩阵)。
 
-> **\***：Boot 2.7 + Reactor 3.4.x 由框架自动 Hook 处理；Reactor 3.5.3+ 全自动。
+| 编号 | 场景 | 当前处理方式 | 是否需要手动接入 | 当前版本结论 | 验证结果 |
+|------|------|--------------|------------------|--------------|----------|
+| 6.1.1-A | 同步 `@LogCollect` | 框架自动 | 否 | 全自动 | 正常 |
+| 6.1.2-A | `@Async` 默认执行器 | 框架默认 `AsyncConfigurer` | 否 | 全自动 | 正常 |
+| 6.1.2-S | 默认 `@Async` 被自定义 `AsyncConfigurer` 覆盖 | 框架按预期跳过默认路径 | 否 | 行为正常 | 正常 |
+| 6.1.3-A | `@Async` + 自定义 `AsyncConfigurer` | 自定义执行器配置 `TaskDecorator(LogCollectContextUtils::wrapRunnable)` | 是，配置层一行 | 配置层一行接入 | 正常 |
+| 6.1.3-S | 未启用 `job-async-custom` | 按预期输出 `skip` | 否 | 行为正常 | 正常 |
+| 6.1.4-A | `@Async("jobAsyncExecutor")` | Spring Bean 线程池自动增强 | 否 | 全自动 | 正常 |
+| 6.1.4-B | `ThreadPoolTaskExecutor.submitListenable(...)` 任务体 | Spring 线程池自动增强 | 否 | 全自动 | 正常 |
+| 6.1.4-C | `ListenableFuture.addCallback(success)` | `wrapRunnable` 包装成功回调 | 是，调用点一行 | 调用点一行接入 | 正常 |
+| 6.1.4-D | `ListenableFuture.addCallback(failure)` | `wrapRunnable` 包装失败回调 | 是，调用点一行 | 调用点一行接入 | 正常 |
+| 6.1.5-A | `CompletableFuture.runAsync(..., jobAsyncExecutor)` 任务体 | Spring Bean 线程池自动增强 | 否 | 全自动 | 正常 |
+| 6.1.5-B | `CompletableFuture.whenComplete(success)` | `wrapBiConsumer` 包装回调 | 是，调用点一行 | 调用点一行接入，且已验证新方法有效 | 正常 |
+| 6.1.5-C | `CompletableFuture.whenComplete(error)` | `wrapBiConsumer` 包装回调 | 是，调用点一行 | 调用点一行接入，且已验证新方法有效 | 正常 |
+| 6.1.6-A | Reactor `Mono.publishOn(...)` | 框架 Reactor Hook | 否 | 全自动 | 正常 |
+| 6.1.6-B | Reactor `Flux.publishOn(...)` | 框架 Reactor Hook | 否 | 全自动 | 正常 |
+| 6.1.6-E | Reactor setup error 分支 | 故障探针 | 否 | 异常分支日志可被收集 | 正常 |
+| 6.1.6-N | Reactor 版本说明 | Boot 2.7.12 + Reactor 3.4.x 依赖框架 Hook | 否 | 当前运行时行为正常 | 正常 |
+| 6.1.7-A | Spring Bean `ExecutorService` | `BeanPostProcessor` 自动包装 | 否 | 全自动 | 正常 |
+| 6.1.8-A | 手动 `ExecutorService` | `wrapExecutorService(...)` | 是，调用点一行 | 调用点一行接入 | 正常 |
+| 6.1.9-A | `new Thread()` | `newDaemonThread(...)` | 是，调用点一行 | 调用点一行接入 | 正常 |
+| 6.1.10-A | 第三方库回调 | `wrapRunnable(...)` | 是，调用点一行 | 调用点一行接入 | 正常 |
+| 6.1.11-A | `ForkJoinPool.commonPool()` | `wrapRunnable(...)` | 是，调用点一行 | 调用点一行接入 | 正常 |
+| 6.1.11-B | `parallelStream()` | `wrapConsumer(...)` | 是，调用点一行 | 调用点一行接入 | 正常 |
+| 6.1.12-A | 嵌套 `@LogCollect` | 框架自动维护上下文栈 | 否 | 全自动 | 正常 |
+| 6.1.12-S | `jobContext=null` 的嵌套探针跳过 | 按预期输出 `skip` | 否 | 行为正常 | 正常 |
+| 6.1.13-A | Servlet Async / `WebAsyncTask` | 框架 Servlet Async 支持 | 否 | 全自动 | 正常 |
+| 6.1.13-S | 非 `servlet-async` 入口 | 按预期输出 `skip` | 否 | 行为正常 | 正常 |
 
-> 说明：表格中的 `CompletableFuture + Spring 池` 指任务体运行在线程池中的自动传播；不等同于回调链全部自动。若回调执行线程不受框架控制，请在注册点一行包装回调。
+> 说明：以上场景均已在 `AsyncLogTestJobHandler` 探针下完成 `baseline` / `branches` 双模式验证。表格中的“任务体自动增强”仅指异步执行体本身；若回调链路执行线程不受 Spring 管理，仍需在注册点一行包装回调。
 
 ### 6.2 接入方式分层
 
-- **全自动**：同步方法、默认 `@Async`、Spring `ThreadPoolTaskExecutor`、`CompletableFuture` + Spring 池任务体、WebFlux `Mono/Flux`、Spring Bean `ExecutorService`、嵌套 `@LogCollect`、Servlet `AsyncContext`
-- **配置层一行接入**：自定义 `AsyncConfigurer`，显式透传 `TaskDecorator`
-- **调用点一行接入**：`CompletableFuture.whenComplete`、`ListenableFuture.addCallback`、手动 `ExecutorService`、`new Thread()`、第三方库回调、`ForkJoinPool` / `parallelStream`
+| 类别 | 包含场景 | 最终结论 |
+|------|----------|----------|
+| 全自动 | 同步 `@LogCollect`、默认 `@Async`、`@Async("jobAsyncExecutor")`、Spring 线程池任务体、Spring Bean `ExecutorService`、Reactor、嵌套 `@LogCollect`、Servlet Async | 框架自动收集，当前验证全部正常 |
+| 配置层一行接入 | 自定义 `AsyncConfigurer` | 需要在执行器配置上挂 `TaskDecorator`，当前验证正常 |
+| 调用点一行接入 | `CompletableFuture.whenComplete`、`ListenableFuture.addCallback`、手动线程池、`new Thread()`、第三方回调、`ForkJoinPool`、`parallelStream` | 需要显式包装，当前验证全部正常 |
+
+**业务代码里真实存在的 `BiConsumer` 场景**
+
+| 位置 | 场景 | 当前处理 | 结论 |
+|------|------|----------|------|
+| `AsyncLogTestJobHandler.java` | `CompletableFuture.whenComplete` 测试探针 | 已改为 `wrapBiConsumer` | 更简洁，已验证正常 |
+| `DynamicDispatcherController.java` | 动态接口异步执行完成回调 | 已改为 `wrapBiConsumer` | 更合适 |
+| `DynamicApiExecutor.java` | 动态接口超时清理 `whenComplete` | 已改为 `wrapBiConsumer` | 更一致 |
+
+**一句话版**：现在的最终版本可以定性为：收集无遗漏，全正常；`whenComplete` 场景改用 `wrapBiConsumer` 后更简洁，且成功/失败两条链路均已验证通过。
 
 ### 6.3 典型示例
 
@@ -1313,10 +1338,9 @@ public void importData(List<DataRecord> records) {
 ```java
 @LogCollect
 public void legacyProcess() {
-    Thread t = new Thread(
-        LogCollectContextUtils.wrapRunnable(() -> {
-            log.info("线程 1");   // ✅
-        }), "worker-1");
+    Thread t = LogCollectContextUtils.newDaemonThread(() -> {
+        log.info("线程 1");   // ✅
+    }, "worker-1");
     t.start();
 }
 ```
@@ -2409,7 +2433,7 @@ Spring AOP 固有限制。将需要独立收集的方法放到不同 Bean 中。
 log.info("诊断: {}", LogCollectContextUtils.diagnosticInfo());
 ```
 
-检查：Spring 管理线程池 → 自动；`CompletableFuture.whenComplete` → `wrapBiConsumer()`；`ListenableFuture.addCallback` → `LogCollectSpringCallbackUtils.wrapListenableFutureCallback()`；手动线程池 → `wrapExecutorService()`；`new Thread()` → `wrapRunnable()`。将 `logcollect.internal.log-level` 设为 `DEBUG` 查看传播日志。
+检查：Spring 管理线程池 → 自动；`CompletableFuture.whenComplete` → `wrapBiConsumer()`；`ListenableFuture.addCallback` → `LogCollectSpringCallbackUtils.wrapListenableFutureCallback()`；手动线程池 → `wrapExecutorService()`；线程入口优先用 `newThread()` / `newDaemonThread()`，直接传原生 `new Thread()` 时再配合 `wrapRunnable()`。将 `logcollect.internal.log-level` 设为 `DEBUG` 查看传播日志。
 
 **Q7: 线程安全如何保障？**
 
